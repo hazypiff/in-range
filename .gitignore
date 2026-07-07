@@ -1,0 +1,51 @@
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+*.dart_tool
+.fvm/
+coverage/
+lcov.info
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.DS_Store
+
+# Flutter platform folders (generated via `flutter create .` later)
+android/
+ios/
+linux/
+macos/
+windows/
+web/
+
+# Generated files
+*.g.dart
+*.freezed.dart
+*.mocks.dart
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+*.keystore
+*.jks
+key.properties
+
+# Supabase local
+supabase/.branches/
+supabase/.temp/
+
+# Shorebird
+.shorebird/
+
+# Misc
+*.log

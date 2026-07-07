@@ -1,0 +1,47 @@
+name: in_range
+description: "In Range - Real Encounters. Real Connections. (Flutter + Supabase)"
+publish_to: 'none'
+
+version: 0.1.0+1
+
+environment:
+  sdk: '>=3.6.0 <4.0.0'
+  flutter: ">=3.27.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Backend & State (core to Phase 0)
+  supabase_flutter: ^2.8.0
+  riverpod: ^2.6.1
+  riverpod_annotation: ^2.6.1
+  freezed_annotation: ^2.4.4
+
+  # BLE + Location (per 2026 research - flutter_blue_plus preferred)
+  flutter_blue_plus: ^2.3.10
+  flutter_ble_peripheral: ^0.1.4   # For advertising ephemeral tokens
+  geolocator: ^13.0.2
+  permission_handler: ^11.3.1
+
+  # Utils
+  uuid: ^4.5.1
+  intl: ^0.19.0
+  collection: ^1.18.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+  # Code generation
+  build_runner: ^2.4.15
+  riverpod_generator: ^2.6.1
+  freezed: ^2.5.7
+  json_serializable: ^6.8.0   # If using json models
+
+flutter:
+  uses-material-design: true
+
+  # assets:
+  #   - assets/images/
