@@ -106,17 +106,26 @@ class LocalEncounter {
 }
 
 class LocalEncounterStore extends StateNotifier<Map<String, LocalEncounter>> {
-  LocalEncounterStore(this._db) : super(const {}) {
-    _hydrate();
+  LocalEncounterStore(this._db, {bool hydrate = true}) : super(const {}) {
+    if (hydrate) {
+      _hydrate();
+    }
   }
 
-  final LocalDb _db;
+  /// Empty store for widget tests (no SQLite / platform plugins).
+  LocalEncounterStore.empty()
+      : _db = null,
+        super(const {});
+
+  final LocalDb? _db;
   Map<String, String> _aliases = {};
 
   Future<void> _hydrate() async {
+    final db = _db;
+    if (db == null) return;
     try {
-      _aliases = await _db.allAliases();
-      final rows = await _db.allSightings();
+      _aliases = await db.allAliases();
+      final rows = await db.allSightings();
       final map = <String, LocalEncounter>{};
       for (final r in rows) {
         final id = r['correlation_id']! as String;
@@ -135,7 +144,7 @@ class LocalEncounterStore extends StateNotifier<Map<String, LocalEncounter>> {
         if (!enc.isExpired) {
           map[id] = enc;
         } else {
-          await _db.deleteSighting(id);
+          await db.deleteSighting(id);
         }
       }
       state = map;
@@ -177,7 +186,7 @@ class LocalEncounterStore extends StateNotifier<Map<String, LocalEncounter>> {
       );
     }
     state = {...state, correlationId: next};
-    await _db.upsertSighting(
+    await _db?.upsertSighting(
       correlationId: next.correlationId,
       firstSeenMs: next.firstSeenAt.millisecondsSinceEpoch,
       lastSeenMs: next.lastSeenAt.millisecondsSinceEpoch,
@@ -187,8 +196,13 @@ class LocalEncounterStore extends StateNotifier<Map<String, LocalEncounter>> {
   }
 
   Future<void> setAlias(String correlationId, String alias) async {
-    await _db.setAlias(correlationId, alias);
-    _aliases = await _db.allAliases();
+    final db = _db;
+    if (db == null) {
+      _aliases = {..._aliases, correlationId: alias};
+    } else {
+      await db.setAlias(correlationId, alias);
+      _aliases = await db.allAliases();
+    }
     final e = state[correlationId];
     if (e != null) {
       state = {
@@ -222,7 +236,7 @@ class LocalEncounterStore extends StateNotifier<Map<String, LocalEncounter>> {
   }
 
   Future<void> clear() async {
-    await _db.clearSightings();
+    await _db?.clearSightings();
     state = const {};
   }
 }

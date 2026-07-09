@@ -6,32 +6,44 @@ class LocalDb {
   LocalDb._(this.db);
   final Database db;
 
+  static Future<void> _onCreate(Database db, int version) async {
+    await db.execute('''
+      CREATE TABLE sightings (
+        correlation_id TEXT PRIMARY KEY NOT NULL,
+        first_seen_ms INTEGER NOT NULL,
+        last_seen_ms INTEGER NOT NULL,
+        best_rssi INTEGER NOT NULL,
+        range_type TEXT NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE aliases (
+        correlation_id TEXT PRIMARY KEY NOT NULL,
+        alias TEXT NOT NULL
+      )
+    ''');
+    await db.execute(
+      'CREATE INDEX idx_sightings_last ON sightings(last_seen_ms DESC)',
+    );
+  }
+
   static Future<LocalDb> open() async {
     final dir = await getDatabasesPath();
     final path = p.join(dir, 'in_range_local.db');
     final database = await openDatabase(
       path,
       version: 1,
-      onCreate: (db, version) async {
-        await db.execute('''
-          CREATE TABLE sightings (
-            correlation_id TEXT PRIMARY KEY NOT NULL,
-            first_seen_ms INTEGER NOT NULL,
-            last_seen_ms INTEGER NOT NULL,
-            best_rssi INTEGER NOT NULL,
-            range_type TEXT NOT NULL
-          )
-        ''');
-        await db.execute('''
-          CREATE TABLE aliases (
-            correlation_id TEXT PRIMARY KEY NOT NULL,
-            alias TEXT NOT NULL
-          )
-        ''');
-        await db.execute(
-          'CREATE INDEX idx_sightings_last ON sightings(last_seen_ms DESC)',
-        );
-      },
+      onCreate: _onCreate,
+    );
+    return LocalDb._(database);
+  }
+
+  /// In-memory DB for widget/unit tests (set `databaseFactory` first if needed).
+  static Future<LocalDb> openInMemory() async {
+    final database = await openDatabase(
+      inMemoryDatabasePath,
+      version: 1,
+      onCreate: _onCreate,
     );
     return LocalDb._(database);
   }

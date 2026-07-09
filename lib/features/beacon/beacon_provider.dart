@@ -61,10 +61,13 @@ class BeaconState {
 }
 
 class BeaconController extends StateNotifier<BeaconState> {
-  BeaconController(this._service, this._ref) : super(const BeaconState());
+  /// Lazy: BeaconService (BLE plugins) is only created when [toggle] turns ON.
+  /// Keeps widget tests / cold UI free of platform BLE init side-effects.
+  BeaconController(this._ref) : super(const BeaconState());
 
-  final BeaconService _service;
   final Ref _ref;
+
+  BeaconService get _service => _ref.read(beaconServiceProvider);
 
   Future<void> toggle() async {
     if (state.isOn) {
@@ -94,5 +97,5 @@ class BeaconController extends StateNotifier<BeaconState> {
 
 final beaconControllerProvider =
     StateNotifierProvider<BeaconController, BeaconState>((ref) {
-  return BeaconController(ref.watch(beaconServiceProvider), ref);
+  return BeaconController(ref);
 });
