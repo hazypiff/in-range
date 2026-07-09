@@ -1,28 +1,35 @@
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-/// Requests the runtime permissions needed for BLE advertising + scanning
-/// on Android 10 (API 29):
-///   1. locationWhenInUse (runtime, required for BLE scan on API 29)
-///   2. locationAlways (runtime, required for background BLE)
+/// Requests runtime permissions needed for BLE advertising + scanning.
 ///
-/// On Android 10, BLUETOOTH / BLUETOOTH_ADMIN are normal permissions
-/// (granted at install) so we do not request them at runtime.
-/// BLUETOOTH_SCAN / BLUETOOTH_ADVERTISE / BLUETOOTH_CONNECT are Android 12+
-/// only — they do not exist on API 29.
+/// Permission pyramid (API level dependent):
+///   - Android 10 (API 29): locationWhenInUse → locationAlways
+///   - Android 12+ (API 31): BLUETOOTH_SCAN / BLUETOOTH_ADVERTISE / BLUETOOTH_CONNECT
+///                            are "nearby devices" permissions; location is not required
+///                            for BLE on API 31+ but we still ask for coarse location
+///                            (approximate) so the miles feed can work.
 ///
-/// IMPORTANT: per permission_handler docs, on Android 10+ the user MUST grant
-/// locationWhenInUse before locationAlways can be requested. We follow that
-/// sequence here. If the user denies the second prompt, background BLE is
-/// unavailable and we degrade gracefully (foreground-only).
+/// We request the superset and degrade gracefully — whatever the OS grants
+/// determines which features are available.
 class PermissionService {
-  /// Returns true if all permissions needed for foreground BLE are granted.
+  /// Returns true if the caller has enough to run BLE in the foreground.
   static Future<bool> requestForegroundBle() async {
-    // Step 1: foreground location (prerequisite for background on API 29+)
+    // Location is prerequisite for BLE on API 29. On API 31+ it is not
+    // required for scanning but needed for GPS (miles feed). Request it first.
     final foreground = await Permission.locationWhenInUse.request();
     if (!foreground.isGranted) {
       return false;
     }
+
+    // Android 12+ BLE "nearby devices" permissions (no-op below API 31).
+    // These are required for BLE scanning on modern Android.
+    await Future.wait([
+      Permission.bluetoothScan.request(),
+      Permission.bluetoothAdvertise.request(),
+      Permission.bluetoothConnect.request(),
+    ]);
+
     return true;
   }
 

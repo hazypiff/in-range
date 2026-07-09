@@ -149,6 +149,27 @@ Deno.serve(async (req) => {
     const results: Array<Record<string, unknown>> = [];
 
     for (const row of (rows ?? []) as OutboxRow[]) {
+      // If the notification was triggered by another user (match, message),
+      // skip delivery when the pair is blocked. Payload carries sender_id.
+      const senderId = (row.payload as Record<string, unknown> | null)?.sender_id as string | undefined;
+      if (senderId && typeof senderId === "string") {
+        const { data: blockedCheck } = await supabase
+          .rpc("is_blocked_pair", { a: senderId, b: row.user_id });
+        if (blockedCheck === true) {
+          await supabase
+            .from("notification_outbox")
+            .update({
+              status: "skipped",
+              last_error: "blocked_pair",
+              attempts: row.attempts + 1,
+              sent_at: new Date().toISOString(),
+            })
+            .eq("id", row.id);
+          results.push({ id: row.id, status: "skipped", reason: "blocked" });
+          continue;
+        }
+      }
+
       const { data: tokens } = await supabase
         .from("device_push_tokens")
         .select("token,platform")

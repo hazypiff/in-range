@@ -42,9 +42,7 @@ Deno.serve(async (req) => {
     if (single?.user_id) {
       // Service-role insert of a synthetic ping then batch correlate
       const range = single.range ?? "miles_10";
-      const hood =
-        single.neighborhood ??
-        `Area ${Number(single.lat).toFixed(2)}, ${Number(single.lon).toFixed(2)}`;
+      const hood = single.neighborhood ?? "Nearby";
 
       // Use RPC batch; for single user we still run full batch (idempotent)
       const { error: insertErr } = await supabase.rpc("record_location_ping", {

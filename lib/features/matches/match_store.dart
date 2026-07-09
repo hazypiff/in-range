@@ -39,7 +39,9 @@ class MatchRecord {
 
   bool get isExpiredNoMessage {
     if (hasUserMessage) return false;
-    return DateTime.now().isAfter(matchedAt.add(noMessageExpiry));
+    // Normalize both sides to UTC so timezone offset doesn't bias the
+    // comparison (matchedAt is parsed from ISO and may be stored as UTC).
+    return DateTime.now().toUtc().isAfter(matchedAt.toUtc().add(noMessageExpiry));
   }
 
   Map<String, dynamic> toJson() => {

@@ -90,7 +90,7 @@ BEGIN
 
   v_hood := COALESCE(
     NULLIF(trim(p_neighborhood), ''),
-    'Area ' || round(p_lat::numeric, 2)::text || ', ' || round(p_lon::numeric, 2)::text
+    'Nearby'  -- Never leak lat/lon into a human-visible neighborhood label.
   );
 
   INSERT INTO public.location_pings (user_id, geo, range_type, neighborhood)
@@ -492,6 +492,14 @@ BEGIN
           lp2.geo,
           ST_SetSRID(ST_MakePoint(r.lon, r.lat), 4326)::geography,
           public.range_radius_meters(r.range_type)
+        )
+        AND EXISTS (
+          SELECT 1 FROM public.profiles pr
+          WHERE pr.id = lp2.user_id
+            AND pr.is_active
+            AND NOT pr.is_paused
+            AND pr.deleted_at IS NULL
+            AND NOT pr.is_incognito
         )
       ORDER BY lp2.user_id, lp2.created_at DESC
     ) o

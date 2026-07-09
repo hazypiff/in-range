@@ -1,77 +1,88 @@
-# In Range — Code Hardening TODO
+# In Range — Full Stack Audit (2026-07-09)
 
-Generated 2026-07-09 after deep audit of `1c80498` (post go-live push).
-All items are code-fixable in-repo (excludes operational: KGP upstream, FCM E2E, prod ops).
+Build: analyze (1 info lint), test (1/1), debug APK — all green.
+Secrets: clean (no real keys in tracked files or git history).
 
-## STATUS
+## Fixed (this session)
 
-| ID | Sev | Title | Status |
-|----|-----|-------|--------|
-| C1 | Critical | Hardcoded HMAC fallback secrets | **FIXED** |
-| C2 | Critical | send-push legacy FCM API | **FIXED** (HTTP v1) |
-| H1 | High | Fake auto-match + canned opener | **FIXED** |
-| H2 | High | Dead ChatSyncService | **FIXED** (deleted) |
-| M1 | Medium | swipe_feed 1s timer rebuild | **FIXED** (ValueNotifier) |
-| M2 | Medium | photo_urls stays null → invisible | **FIXED** (syncProfile sends paths) |
-| M3 | Medium | Expired match crash | Deferred (needs UI state work) |
-| L1 | Low | Beacon state not reset on sign-out | **FIXED** |
-| L2 | Low | No network timeout | Dropped (supabase_flutter API doesn't support fetchTimeout cleanly) |
-| L3 | Low | Empty catch swallows errors | Deferred (non-critical) |
+| ID | Sev | Finding | Fix |
+|----|-----|---------|-----|
+| C1 | Critical | Hardcoded HMAC fallback secrets in client binary | Removed; beacon refuses to start when secrets missing |
+| C2 | Critical | send-push used legacy FCM API (shut down 2024) | Migrated to HTTP v1 (OAuth2 JWT + v1/projects/messages:send) |
+| H1 | High | autoMatchOnLike created fake matches with canned opener | Gated by !hasRealSupabase; canned opener removed |
+| H2 | High | Dead ChatSyncService | Deleted |
+| H3 | High | send-push delivered pushes to blocked pairs | Block check added to drain loop |
+| M1 | Medium | swipe_feed 1s setState rebuilt full stack | ValueNotifier + ValueListenableBuilder |
+| M2 | Medium | syncProfile sent p_photo_urls: null → invisible | Now passes session.photoPaths |
+| M4 | Medium | batch_correlate_recent_pings missing safety filters | Added paused/deleted/incognito filter |
+| L1 | Low | BeaconController state not reset on sign-out | ref.invalidate on sign-out |
+| S1 | High | lat/lon leaked in neighborhood fallback (0008 + miles-correlate TS) | Fallback → "Nearby" |
+| S2 | High | Overbroad profile SELECT exposed PII pre-match | Migration 0014: REVOKE on sensitive columns |
+| S3 | Medium | Missing Android 12+ BLE permissions | Added BLUETOOTH_SCAN/ADVERTISE/CONNECT to runtime request |
+| B1 | Medium | .env as sole asset breaks build without .env file | Added .env.example asset + mergeWith fallback |
+| B2 | Low | match expiry compare local vs UTC datetime | Normalized to UTC on both sides |
 
-## Critical
+## Remaining (report, don't fix)
 
-### C1. Hardcoded HMAC fallback secrets in client binary
-- **Files:** `lib/core/config/app_config.dart:19-23`, `lib/features/beacon/beacon_provider.dart:9-15`
-- **Problem:** `hmacSecret` / `userIdSecret` fall back to `'inrange-hmac-fallback'` / `'inrange-user-id-fallback'` when env unset. These strings ship in every APK → anyone can forge `claim_token` payloads or `user_hash`.
-- **Fix:** Remove string fallback. Return empty string when env missing; `BeaconService` refuses to advertise when secret empty (safety, not silent fallback).
+### Critical (1)
+| ID | Finding |
+|----|---------|
+| F1 | Migration 0003: `record_sighting` CASE references nonexistent `feet_100`/`feet_500` enum values. Dead code after 0008 replaces the path, but if replayed on a partial migration stack it silently produces wrong radius. Fix: add enum values in a future migration or add a comment noting superseded code. |
 
-### C2. send-push Edge Function uses deprecated legacy FCM API
-- **File:** `supabase/functions/send-push/index.ts:23,115-133`
-- **Problem:** Legacy `fcm.googleapis.com/fcm/send` was shut down by Google (2024). Every send with a real key returns 404 → rows stuck `failed`.
-- **Fix:** Switch to HTTP v1: `oauth2/v4/token` + `v1/projects/{id}/messages:send` using `FCM_SERVICE_ACCOUNT_JSON`.
+### High (3)
+| ID | Finding |
+|----|---------|
+| P1 | Product: age gate fires at profile save only (app_session.dart:346), not at sign-up. Underage users can register a cloud account before being blocked. |
+| P2 | Product: chat is entirely local — no cloud chat realtime (deleted ChatSyncService, send_message RPC never called from ChatThreadScreen). Server messages table will never receive chat content from client. |
+| P3 | Pipeline: feet-encounter expiry cron is commented out (0010_realtime_grants_cleanup.sql:102-104). `run_maintenance` Edge Function exists but needs a cron schedule. Until enabled, feet encounters never auto-expire on server. |
 
-## High
+### Medium (5)
+| ID | Finding |
+|----|---------|
+| M3 | Expired match UI crash — MessagesScreen/MatchProfileScreen return ghost match on expiry |
+| M5 | Profile storage SELECT policy is `TO public` — uploaded photos are readable by URL if known. Acceptable for photo-first app, but worth documenting. |
+| M6 | `nearby_location_pings` RPC deprecated but still executable — lacks block/pause safety filters |
+| M7 | Persistence leak: `autoMatchOnLike` is a static getter on StateNotifier — reads `AppConfig.hasRealSupabase` at call-time, which is fine, but static access pattern can't be reactive |
+| M8 | `is_blocked_pair` RPC is SECURITY DEFINER with no `auth.uid()` guard — any authenticated user can probe block relationships |
+| P3 | Product: Photo verification infrastructure is staged (stub auto-approve only) — expected per outline |
 
-### H1. Auto-match creates fake matches + canned opener when cloud is real
-- **File:** `lib/features/matches/match_store.dart:166,283-296,404-417`
-- **Problem:** `autoMatchOnLike = true` (always) + `_upsertMatch` hardcodes bio `'I love coffee shops...'`, age `28`, interests `['Music','Travel']`, opener `'I saw you were near...'`. When server says `matched != true`, local fallback still creates a fake match visible to the user.
-- **Fix:** Gate `autoMatchOnLike` by `!AppConfig.hasRealSupabase`. Remove canned opener message from `_upsertMatch` (empty messages on real match).
+### Low (6)
+| ID | Finding |
+|----|---------|
+| L2 | No network timeout (supabase_flutter API doesn't expose fetchTimeout cleanly) |
+| L3 | Empty catch swallows `deleteLocationHistory` errors |
+| L4 | Seed user Dan (u4) has `is_photo_verified=FALSE` — invisible in feeds (intentional for gating test, but documented) |
+| L5 | BLE advertisement sends 16-byte correlation-id only (not full 36-byte token) — HMAC anti-forgery unused server-side |
+| L6 | Two providers throw `UnimplementedError` if main() misses override (brittle) |
+| L7 | Edge function error messages use raw `String(e)` — could leak internal structure in production |
 
-### H2. Dead code: ChatSyncService never imported
-- **File:** `lib/shared/services/chat_sync_service.dart`
-- **Problem:** Zero imports across the codebase. Cloud chat RPCs (`send_message`, `mark_messages_read`, realtime) are never called by the UI.
-- **Fix:** Delete the file (rely on `EncountersApi` directly when wiring cloud chat later).
+## Product Outline Compliance
 
-## Medium
+| Area | Status | Notes |
+|------|--------|-------|
+| C1 Onboarding/Auth | Partial | Age gate at profile only |
+| C2 Profile | Implemented | 6 photos, bio ≤500, photo+neighborhood pre-match, verified gate |
+| C3 Beacon/Ranges | Implemented | All 10 range values, 24h feet expiry, FGS config, BLE+GSP |
+| C4 Encounters/Matching | Implemented | Reveal delay, unlimited swipes, mutual match |
+| C5 Chat | Partial | Local chat works; cloud realtime not wired |
+| C6 Monetization | Implemented | subscriptions/boosts/ad shells; pricing TBD |
+| C7 Safety | Implemented | Block/report/pause/delete/incognito; all feeds exclude blocked |
+| C8 Hybrid Offline/Cloud | Implemented | Every feature gates on hasRealSupabase; local fallback |
 
-### M1. swipe_feed 1s Timer.periodic causes full rebuilds
-- **File:** `lib/features/encounters/swipe_feed.dart:23,30`
-- **Problem:** 1s `Timer.periodic` + `setState` on `ConsumerStatefulWidget` rebuilds the entire swipe stack every second — battery/CPU drain on a foreground screen.
-- **Fix:** Replace with a `ValueNotifier<int>` (seconds remaining) listened to only by the expiring card, or scope `setState` to only the single expiring card.
+## Edge Functions
 
-### M2. Profile photos uploaded but `photo_urls` stays null on server → user invisible
-- **File:** `lib/shared/services/profile_sync_service.dart:38,57-92`
-- **Problem:** `syncProfile` sends `p_photo_urls: null` (line 38). `uploadPhotos` uploads to storage + queues verification but never re-runs `syncProfile`. With migration 0013's strict filter (requires non-empty `photo_urls`), this user is invisible in everyone's Encounters/Locals feed even after uploading.
-- **Fix:** After `uploadPhotos` completes, call `syncProfile` again with the uploaded paths (or pass paths in the same RPC). Wire `uploadPhotos` return into `syncProfile`.
+| Function | Status |
+|----------|--------|
+| send-push | **FIXED** — HTTP v1 + block check + dry-run safe |
+| miles-correlate | PASS — neighborhood leak fixed; synthetic-ping fallback works |
+| photo-review | PASS — stub auto-approve chain correctly updates is_photo_verified |
+| maintenance | PASS — thin passthrough to run_maintenance RPC |
 
-### M3. MessagesScreen / MatchProfileScreen crash on expired match
-- **Files:** `lib/features/chat/messages_screen.dart:150-157`, `lib/features/matches/match_profile_screen.dart:16-23`
-- **Problem:** `firstWhere(orElse: MatchRecord(...))` returns a ghost match when the real one expired (24h no-reply prune). User lands on empty chat with a no-op Send button.
-- **Fix:** Show "This match expired" state and pop the screen.
+## Next Steps for Beta
 
-## Low
-
-### L1. BeaconController state not reset on sign-out
-- **File:** `lib/core/session/app_session.dart`
-- **Problem:** `signOut` clears prefs but not `beaconControllerProvider` state. A re-signed-in user sees stale "Beacon ON" while BLE is off.
-- **Fix:** `ref.invalidate(beaconControllerProvider)` in `signOut`.
-
-### L2. No network timeout on Supabase calls
-- **File:** `lib/core/network/supabase_client.dart`
-- **Problem:** Default client has no `fetchTimeout`. Stale network hangs auth silently.
-- **Fix:** Set `SupabaseClientOptions(fetchTimeout: Duration(seconds: 15))` in `InRangeSupabase.init`.
-
-### L3. Empty catch swallows profile photo upload failures
-- **File:** `lib/features/settings/settings_screen.dart:171-173`
-- **Problem:** `deleteLocationHistory()` in `catch (_) {}` swallows errors silently.
-- **Fix:** Surface via snackbar (low priority — location history delete is non-critical).
+1. **Enable pg_cron + schedule run_maintenance** every 15 min (feet expiry + batch correlate + cleanup)
+2. **Add age gate at sign-up time** (not just profile save)
+3. **Wire cloud chat** — call `send_message` RPC from ChatThreadScreen + subscribe to Supabase realtime channel for incoming messages
+4. **Deploy send-push with real FCM_SERVICE_ACCOUNT_JSON** + verify E2E push delivery
+5. **Migration 0014** (profile SELECT restriction) — apply to staging + production projects
+6. **Upstream KGP migration** for flutter_ble_peripheral (before Flutter breaking release)

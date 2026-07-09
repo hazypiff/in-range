@@ -15,7 +15,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await dotenv.load(fileName: '.env');
+  // Load .env (with secrets) atop .env.example (with placeholders).
+// If .env is missing or doesn't ship in the asset bundle, the example
+// fallback keeps the app alive in offline/local mode without crashing.
+await dotenv.load(
+  fileName: '.env',
+  mergeWith: {'fileName': '.env.example'},
+);
   final prefs = await SharedPreferences.getInstance();
   final localDb = await LocalDb.open();
   await LocalNotify.instance.init();
