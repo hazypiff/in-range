@@ -34,17 +34,86 @@ function publicError(e: unknown): string {
   return "internal_error";
 }
 
+function newRunKey(source: string): string {
+  return `${source}:${Date.now()}:${crypto.randomUUID()}`;
+}
+
+async function logRun(supabase: ReturnType<typeof createClient>, runKey: string, metadata: Record<string, unknown>) {
+  try {
+    const { data, error } = await supabase.rpc("log_ai_run", {
+      p_run_key: runKey,
+      p_source: "photo-review",
+      p_actor_type: "edge_function",
+      p_actor_id: "photo-review",
+      p_model_name: "stub-photo-review",
+      p_model_version: "heuristic-v1",
+      p_decision_config_version: "photo-review-v1",
+      p_code_version: Deno.env.get("FUNCTION_VERSION") ?? null,
+      p_input_schema_version: "photo_verifications.v1",
+      p_output_schema_version: "photo_review.v1",
+      p_status: "started",
+      p_metadata: metadata,
+    });
+    if (error) console.error("log_ai_run", error);
+    return data as string | null;
+  } catch (e) {
+    console.error("log_ai_run", e);
+    return null;
+  }
+}
+
+async function logEvent(
+  supabase: ReturnType<typeof createClient>,
+  runId: string | null,
+  params: Record<string, unknown>,
+) {
+  if (!runId) return;
+  try {
+    const { error } = await supabase.rpc("log_ai_event", {
+      p_run_id: runId,
+      ...params,
+    });
+    if (error) console.error("log_ai_event", error);
+  } catch (e) {
+    console.error("log_ai_event", e);
+  }
+}
+
+async function completeRun(
+  supabase: ReturnType<typeof createClient>,
+  runId: string | null,
+  status: string,
+  metadata: Record<string, unknown>,
+  errorPublic: string | null = null,
+) {
+  if (!runId) return;
+  try {
+    const { error } = await supabase.rpc("complete_ai_run", {
+      p_run_id: runId,
+      p_status: status,
+      p_error_public: errorPublic,
+      p_metadata_patch: metadata,
+    });
+    if (error) console.error("complete_ai_run", error);
+  } catch (e) {
+    console.error("complete_ai_run", e);
+  }
+}
+
 
 
 
 Deno.serve(async (req) => {
+  let supabase: ReturnType<typeof createClient> | null = null;
+  let runId: string | null = null;
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const autoApprove =
       (Deno.env.get("STUB_AUTO_APPROVE") ?? "true").toLowerCase() === "true";
 
-    const supabase = createClient(supabaseUrl, serviceKey);
+    supabase = createClient(supabaseUrl, serviceKey);
+    const runKey = newRunKey("photo-review");
 
     let onlyId: string | null = null;
     if (req.method === "POST") {
@@ -55,6 +124,10 @@ Deno.serve(async (req) => {
         /* */
       }
     }
+    runId = await logRun(supabase, runKey, {
+      auto_approve: autoApprove,
+      targeted: Boolean(onlyId),
+    });
 
     let query = supabase
       .from("photo_verifications")
@@ -72,9 +145,14 @@ Deno.serve(async (req) => {
     }
 
     const { data: rows, error } = await query;
-    if (error) return json({ ok: false, error: publicError(error) }, 500);
+    if (error) {
+      const err = publicError(error);
+      await completeRun(supabase, runId, "failed", { phase: "load_queue" }, err);
+      return json({ ok: false, error: err }, 500);
+    }
 
     const results: Array<Record<string, unknown>> = [];
+    let failures = 0;
 
     for (const row of rows ?? []) {
       // Stub AI: pass if path looks like an image; score 0.85–0.99
@@ -88,7 +166,21 @@ Deno.serve(async (req) => {
       });
 
       if (aiErr) {
-        results.push({ id: row.id, error: publicError(aiErr) });
+        failures++;
+        const err = publicError(aiErr);
+        results.push({ id: row.id, error: err });
+        await logEvent(supabase, runId, {
+          p_event_type: "photo_review",
+          p_subject_table: "photo_verifications",
+          p_subject_id: String(row.id),
+          p_user_id: row.user_id,
+          p_decision: passed ? "passed" : "failed",
+          p_confidence: score,
+          p_status: "failed",
+          p_output: { passed },
+          p_error_public: err,
+          p_metadata: { auto_approve: autoApprove, stub: true },
+        });
         continue;
       }
 
@@ -104,6 +196,19 @@ Deno.serve(async (req) => {
           auto_approved: !decErr,
           error: decErr ? publicError(decErr) : undefined,
         });
+        if (decErr) failures++;
+        await logEvent(supabase, runId, {
+          p_event_type: "photo_review",
+          p_subject_table: "photo_verifications",
+          p_subject_id: String(row.id),
+          p_user_id: row.user_id,
+          p_decision: decErr ? "auto_approve_failed" : "auto_approved",
+          p_confidence: score,
+          p_status: decErr ? "failed" : "succeeded",
+          p_output: { passed, auto_approved: !decErr },
+          p_error_public: decErr ? publicError(decErr) : null,
+          p_metadata: { auto_approve: true, stub: true },
+        });
       } else {
         results.push({
           id: row.id,
@@ -112,8 +217,26 @@ Deno.serve(async (req) => {
           auto_approved: false,
           next: passed ? "manual_review" : "ai_failed",
         });
+        await logEvent(supabase, runId, {
+          p_event_type: "photo_review",
+          p_subject_table: "photo_verifications",
+          p_subject_id: String(row.id),
+          p_user_id: row.user_id,
+          p_decision: passed ? "manual_review" : "ai_failed",
+          p_confidence: score,
+          p_status: passed ? "requires_review" : "succeeded",
+          p_output: { passed, auto_approved: false },
+          p_metadata: { auto_approve: autoApprove, stub: true },
+        });
       }
     }
+
+    await completeRun(
+      supabase,
+      runId,
+      failures > 0 ? "partial" : "succeeded",
+      { processed: results.length, failures },
+    );
 
     return json({
       ok: true,
@@ -122,7 +245,9 @@ Deno.serve(async (req) => {
       results,
     });
   } catch (e) {
-    return json({ ok: false, error: publicError(e) }, 500);
+    const err = publicError(e);
+    if (supabase) await completeRun(supabase, runId, "failed", {}, err);
+    return json({ ok: false, error: err }, 500);
   }
 });
 

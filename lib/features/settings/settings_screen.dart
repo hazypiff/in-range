@@ -8,6 +8,7 @@ import 'package:in_range/features/beacon/beacon_provider.dart';
 import 'package:in_range/features/encounters/local_encounter_store.dart';
 import 'package:in_range/features/history/history_screen.dart';
 import 'package:in_range/features/matches/match_store.dart';
+import 'package:in_range/shared/services/ai_feedback_service.dart';
 import 'package:in_range/shared/services/profile_sync_service.dart';
 
 class SettingsScreen extends ConsumerWidget {
@@ -120,6 +121,18 @@ class SettingsScreen extends ConsumerWidget {
           ),
           const Divider(),
           ListTile(
+            leading: const Icon(Icons.feedback_outlined),
+            title: const Text('System feedback'),
+            subtitle: Text(
+              AppConfig.hasRealSupabase
+                  ? 'Send review notes to the cloud'
+                  : 'Cloud required',
+            ),
+            onTap: AppConfig.hasRealSupabase
+                ? () => _showSystemFeedbackDialog(context)
+                : null,
+          ),
+          ListTile(
             leading: const Icon(Icons.history),
             title: const Text('Encounter history & liked you'),
             onTap: () {
@@ -142,11 +155,11 @@ class SettingsScreen extends ConsumerWidget {
                   return ListView(
                     children: [
                       const ListTile(title: Text('Blocked')),
-                      if (ids.isEmpty)
-                        const ListTile(title: Text('None')),
+                      if (ids.isEmpty) const ListTile(title: Text('None')),
                       for (final id in ids)
                         ListTile(
-                          title: Text(id.length > 12 ? id.substring(0, 12) : id),
+                          title:
+                              Text(id.length > 12 ? id.substring(0, 12) : id),
                           trailing: TextButton(
                             onPressed: () {
                               ref
@@ -168,7 +181,9 @@ class SettingsScreen extends ConsumerWidget {
             title: const Text('Delete location / sighting history'),
             onTap: () async {
               await ref.read(localEncounterStoreProvider.notifier).clear();
-              await ref.read(safetyStoreProvider.notifier).clearLocationHistory();
+              await ref
+                  .read(safetyStoreProvider.notifier)
+                  .clearLocationHistory();
               String? cloudErr;
               try {
                 await ProfileSyncService().deleteLocationHistory();
@@ -200,9 +215,8 @@ class SettingsScreen extends ConsumerWidget {
             ),
             trailing: Switch(
               value: safety.subscriber,
-              onChanged: (v) => ref
-                  .read(safetyStoreProvider.notifier)
-                  .setSubscriberLocal(v),
+              onChanged: (v) =>
+                  ref.read(safetyStoreProvider.notifier).setSubscriberLocal(v),
             ),
           ),
           ListTile(
@@ -296,5 +310,103 @@ class SettingsScreen extends ConsumerWidget {
         ],
       ),
     );
+  }
+}
+
+Future<void> _showSystemFeedbackDialog(BuildContext context) async {
+  final notes = TextEditingController();
+  var feedbackType = 'quality';
+  var rating = 3;
+  try {
+    final sent = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          title: const Text('System feedback'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<String>(
+                initialValue: feedbackType,
+                decoration: const InputDecoration(labelText: 'Type'),
+                items: const [
+                  DropdownMenuItem(value: 'quality', child: Text('Quality')),
+                  DropdownMenuItem(value: 'bug', child: Text('Bug')),
+                  DropdownMenuItem(value: 'safety', child: Text('Safety')),
+                  DropdownMenuItem(value: 'other', child: Text('Other')),
+                ],
+                onChanged: (v) {
+                  if (v != null) setState(() => feedbackType = v);
+                },
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<int>(
+                initialValue: rating,
+                decoration: const InputDecoration(labelText: 'Rating'),
+                items: const [
+                  DropdownMenuItem(value: 1, child: Text('1')),
+                  DropdownMenuItem(value: 2, child: Text('2')),
+                  DropdownMenuItem(value: 3, child: Text('3')),
+                  DropdownMenuItem(value: 4, child: Text('4')),
+                  DropdownMenuItem(value: 5, child: Text('5')),
+                ],
+                onChanged: (v) {
+                  if (v != null) setState(() => rating = v);
+                },
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: notes,
+                maxLines: 4,
+                maxLength: 2000,
+                decoration: const InputDecoration(
+                  labelText: 'Notes',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                try {
+                  await AiFeedbackService().submitFeedback(
+                    feedbackType: feedbackType,
+                    rating: rating,
+                    notes: notes.text.trim().isEmpty ? null : notes.text.trim(),
+                    metadata: const {'surface': 'settings'},
+                  );
+                  if (ctx.mounted) Navigator.pop(ctx, true);
+                } catch (e) {
+                  if (ctx.mounted) {
+                    ScaffoldMessenger.of(ctx).showSnackBar(
+                      SnackBar(content: Text('Feedback failed: $e')),
+                    );
+                  }
+                }
+              },
+              child: const Text('Send'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (sent == true && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Feedback sent')),
+      );
+    }
+  } catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Feedback failed: $e')),
+      );
+    }
+  } finally {
+    notes.dispose();
   }
 }

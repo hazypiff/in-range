@@ -84,10 +84,10 @@ class ProfileSyncService {
           'p_slot_index': i,
         });
 
-        final publicUrl =
-            client.storage.from('profile_photos').getPublicUrl(storagePath);
-        uploaded.add(publicUrl);
-        debugPrint('Photo slot $i uploaded + verification queued');
+        // Store storage path only — bucket is private (migration 0017).
+        // Clients resolve display URLs via createSignedUrl.
+        uploaded.add(storagePath);
+        debugPrint('Photo slot $i uploaded + verification queued path=$storagePath');
       } catch (e) {
         debugPrint('Photo upload slot $i failed: $e');
         uploaded.add(path); // keep local path as fallback

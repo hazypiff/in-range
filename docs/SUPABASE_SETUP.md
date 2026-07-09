@@ -39,6 +39,8 @@ Dashboard → **SQL Editor** → paste & Run each file:
 | 13 | `supabase/migrations/0013_photo_verification_gating.sql` |
 | 14 | `supabase/migrations/0014_restrict_profile_read.sql` |
 | 15 | `supabase/migrations/0015_audit_remaining_fixes.sql` |
+| 16 | `supabase/migrations/0016_swipe_user_and_feed_wire.sql` |
+| 17 | `supabase/migrations/0017_ai_ops_metadata_feedback.sql` |
 
 Or CLI:
 
@@ -164,6 +166,7 @@ App logs after rebuild should show `supabase=true` / `Cloud connected`.
 | `upsert_my_profile` / `submit_photo_for_verification` | Profile |
 | `register_push_token` | FCM |
 | `block_user` / `report_user` | Safety |
+| `submit_ai_feedback` | System feedback |
 | `set_account_paused` / `request_account_deletion` | Account |
 
 ## 12. Pricing / IAP (structure only)

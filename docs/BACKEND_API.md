@@ -58,6 +58,15 @@ All RPCs are `SECURITY DEFINER` with `auth.uid()` checks unless noted.
 | `unregister_push_token` | token | void |
 | `is_subscriber` / `has_active_boost` | user? | bool |
 | `run_maintenance` | — | jsonb (service) |
+| `submit_ai_feedback` | event_id?, feedback_type?, rating?, label?, notes?, metadata? | feedback id |
+
+## AI / automation metadata
+
+| RPC | Args | Returns |
+|-----|------|---------|
+| `log_ai_run` | run_key, source, actor fields, versions, status, metadata | run uuid (service) |
+| `complete_ai_run` | run_id, status, error?, metadata_patch? | void (service) |
+| `log_ai_event` | run_id?, event type, subject, decision, confidence, status, metadata | event id (service) |
 
 ## Edge Functions
 
@@ -70,4 +79,4 @@ All RPCs are `SECURITY DEFINER` with `auth.uid()` checks unless noted.
 
 ## Tables (public)
 
-profiles, token_claims, sightings, location_pings, encounters, encounter_actions, matches, messages, blocks, reports, subscriptions, boosts, ad_impressions, device_push_tokens, notification_outbox, photo_verifications
+profiles, token_claims, sightings, location_pings, encounters, encounter_actions, matches, messages, blocks, reports, subscriptions, boosts, ad_impressions, device_push_tokens, notification_outbox, photo_verifications, ai_runs, ai_events, ai_feedback

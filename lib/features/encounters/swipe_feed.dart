@@ -13,6 +13,7 @@ import 'package:in_range/features/encounters/local_encounter_store.dart';
 import 'package:in_range/features/encounters/swipe_card.dart';
 import 'package:in_range/features/matches/match_store.dart';
 import 'package:in_range/features/widgets/ad_banner.dart';
+import 'package:in_range/shared/services/photo_url_service.dart';
 
 class SwipeFeed extends ConsumerStatefulWidget {
   const SwipeFeed({super.key});
@@ -100,7 +101,7 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
     );
   }
 
-  Future<void> _doPass(SwipeCard c) async {
+  Future<bool> _doPass(SwipeCard c) async {
     try {
       await ref.read(matchStoreProvider.notifier).pass(
             c.id,
@@ -110,16 +111,18 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
             range: c.rangeType,
           );
       await _showUndo();
+      return true;
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Pass failed: $e')),
         );
       }
+      return false;
     }
   }
 
-  Future<void> _doLike(SwipeCard c) async {
+  Future<bool> _doLike(SwipeCard c) async {
     final me = ref.read(sessionControllerProvider);
     try {
       await ref.read(matchStoreProvider.notifier).like(
@@ -143,12 +146,14 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
         );
         await _showUndo();
       }
+      return true;
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Like failed: $e')),
         );
       }
+      return false;
     }
   }
 
@@ -174,9 +179,7 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
       ),
     );
     if (name != null) {
-      await ref
-          .read(localEncounterStoreProvider.notifier)
-          .setAlias(corr, name);
+      await ref.read(localEncounterStoreProvider.notifier).setAlias(corr, name);
     }
   }
 
@@ -277,11 +280,9 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
                   confirmDismiss: (dir) async {
                     final e = cards.first;
                     if (dir == DismissDirection.startToEnd) {
-                      await _doPass(e);
-                    } else {
-                      await _doLike(e);
+                      return _doPass(e);
                     }
-                    return true;
+                    return _doLike(e);
                   },
                   child: _buildCard(cards.first),
                 ),
@@ -334,16 +335,32 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
 
     Widget photo;
     if (e.photoUrls.isNotEmpty) {
-      final url = e.photoUrls.first;
-      photo = url.startsWith('http')
-          ? Image.network(
-              url,
+      final raw = e.photoUrls.first;
+      if (raw.startsWith('http')) {
+        photo = Image.network(
+          raw,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => _letterAvatar(letter),
+        );
+      } else if (File(raw).existsSync()) {
+        photo = Image.file(File(raw), fit: BoxFit.cover);
+      } else {
+        // Private storage path — resolve signed URL
+        photo = FutureBuilder<String?>(
+          future: PhotoUrlService.resolve(raw),
+          builder: (context, snap) {
+            final u = snap.data;
+            if (u == null || !u.startsWith('http')) {
+              return _letterAvatar(letter);
+            }
+            return Image.network(
+              u,
               fit: BoxFit.cover,
               errorBuilder: (_, __, ___) => _letterAvatar(letter),
-            )
-          : (File(url).existsSync()
-              ? Image.file(File(url), fit: BoxFit.cover)
-              : _letterAvatar(letter));
+            );
+          },
+        );
+      }
     } else {
       photo = _letterAvatar(letter);
     }

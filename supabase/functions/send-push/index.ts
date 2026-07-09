@@ -38,6 +38,73 @@ function publicError(e: unknown): string {
   return "internal_error";
 }
 
+function newRunKey(source: string): string {
+  return `${source}:${Date.now()}:${crypto.randomUUID()}`;
+}
+
+async function logRun(
+  supabase: ReturnType<typeof createClient>,
+  source: string,
+  metadata: Record<string, unknown>,
+) {
+  try {
+    const { data, error } = await supabase.rpc("log_ai_run", {
+      p_run_key: newRunKey(source),
+      p_source: source,
+      p_actor_type: "edge_function",
+      p_actor_id: source,
+      p_code_version: Deno.env.get("FUNCTION_VERSION") ?? null,
+      p_input_schema_version: "notification_outbox.v1",
+      p_output_schema_version: "push_delivery.v1",
+      p_status: "started",
+      p_metadata: metadata,
+    });
+    if (error) console.error("log_ai_run", error);
+    return data as string | null;
+  } catch (e) {
+    console.error("log_ai_run", e);
+    return null;
+  }
+}
+
+async function logEvent(
+  supabase: ReturnType<typeof createClient>,
+  runId: string | null,
+  params: Record<string, unknown>,
+) {
+  if (!runId) return;
+  try {
+    const { error } = await supabase.rpc("log_ai_event", {
+      p_run_id: runId,
+      ...params,
+    });
+    if (error) console.error("log_ai_event", error);
+  } catch (e) {
+    console.error("log_ai_event", e);
+  }
+}
+
+async function completeRun(
+  supabase: ReturnType<typeof createClient>,
+  runId: string | null,
+  status: string,
+  metadata: Record<string, unknown>,
+  errorPublic: string | null = null,
+) {
+  if (!runId) return;
+  try {
+    const { error } = await supabase.rpc("complete_ai_run", {
+      p_run_id: runId,
+      p_status: status,
+      p_error_public: errorPublic,
+      p_metadata_patch: metadata,
+    });
+    if (error) console.error("complete_ai_run", error);
+  } catch (e) {
+    console.error("complete_ai_run", e);
+  }
+}
+
 
 
 
@@ -99,7 +166,8 @@ async function mintAccessToken(sa: ServiceAccount): Promise<string> {
     }),
   });
   if (!tokenRes.ok) {
-    throw new Error(`oauth_${tokenRes.status}: ${await tokenRes.text()}`);
+    await tokenRes.body?.cancel();
+    throw new Error(`oauth_${tokenRes.status}`);
   }
   const tokenJson = (await tokenRes.json()) as { access_token: string };
   return tokenJson.access_token;
@@ -116,6 +184,8 @@ interface OutboxRow {
 }
 
 Deno.serve(async (req) => {
+  let supabase: ReturnType<typeof createClient> | null = null;
+  let runId: string | null = null;
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -142,7 +212,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    const supabase = createClient(supabaseUrl, serviceKey);
+    supabase = createClient(supabaseUrl, serviceKey);
 
     let limit = 50;
     if (req.method === "POST") {
@@ -153,6 +223,11 @@ Deno.serve(async (req) => {
         /* empty body ok */
       }
     }
+    runId = await logRun(supabase, "send-push", {
+      dry_run: dryRun,
+      limit,
+      fcm_configured: !dryRun,
+    });
 
     const { data: rows, error } = await supabase
       .from("notification_outbox")
@@ -162,10 +237,15 @@ Deno.serve(async (req) => {
       .limit(limit);
 
     if (error) {
-      return json({ ok: false, error: publicError(error) }, 500);
+      const err = publicError(error);
+      await completeRun(supabase, runId, "failed", { phase: "load_outbox" }, err);
+      return json({ ok: false, error: err }, 500);
     }
 
     const results: Array<Record<string, unknown>> = [];
+    let failed = 0;
+    let skipped = 0;
+    let sent = 0;
 
     for (const row of (rows ?? []) as OutboxRow[]) {
       // If the notification was triggered by another user (match, message),
@@ -185,6 +265,16 @@ Deno.serve(async (req) => {
             })
             .eq("id", row.id);
           results.push({ id: row.id, status: "skipped", reason: "blocked" });
+          skipped++;
+          await logEvent(supabase, runId, {
+            p_event_type: "push_delivery",
+            p_subject_table: "notification_outbox",
+            p_subject_id: String(row.id),
+            p_user_id: row.user_id,
+            p_decision: "skipped_blocked",
+            p_status: "skipped",
+            p_metadata: { kind: row.kind },
+          });
           continue;
         }
       }
@@ -203,8 +293,18 @@ Deno.serve(async (req) => {
             attempts: row.attempts + 1,
             sent_at: new Date().toISOString(),
           })
-          .eq("id", row.id);
+            .eq("id", row.id);
         results.push({ id: row.id, status: "skipped", reason: "no_token" });
+        skipped++;
+        await logEvent(supabase, runId, {
+          p_event_type: "push_delivery",
+          p_subject_table: "notification_outbox",
+          p_subject_id: String(row.id),
+          p_user_id: row.user_id,
+          p_decision: "skipped_no_token",
+          p_status: "skipped",
+          p_metadata: { kind: row.kind },
+        });
         continue;
       }
 
@@ -222,7 +322,16 @@ Deno.serve(async (req) => {
           id: row.id,
           status: "dry_run",
           tokens: tokens.length,
-          title: row.title,
+        });
+        skipped++;
+        await logEvent(supabase, runId, {
+          p_event_type: "push_delivery",
+          p_subject_table: "notification_outbox",
+          p_subject_id: String(row.id),
+          p_user_id: row.user_id,
+          p_decision: "dry_run",
+          p_status: "skipped",
+          p_metadata: { kind: row.kind, token_count: tokens.length },
         });
         continue;
       }
@@ -246,6 +355,17 @@ Deno.serve(async (req) => {
           })
           .eq("id", row.id);
         results.push({ id: row.id, status: "failed", error: lastErr });
+        failed++;
+        await logEvent(supabase, runId, {
+          p_event_type: "push_delivery",
+          p_subject_table: "notification_outbox",
+          p_subject_id: String(row.id),
+          p_user_id: row.user_id,
+          p_decision: "oauth_failed",
+          p_status: "failed",
+          p_error_public: lastErr,
+          p_metadata: { kind: row.kind, token_count: tokens.length },
+        });
         continue;
       }
 
@@ -277,7 +397,8 @@ Deno.serve(async (req) => {
           });
           if (!res.ok) {
             allOk = false;
-            lastErr = `fcm_${res.status}: ${await res.text()}`;
+            lastErr = `fcm_${res.status}`;
+            await res.body?.cancel();
           }
         } catch (e) {
           allOk = false;
@@ -300,7 +421,30 @@ Deno.serve(async (req) => {
         status: allOk ? "sent" : "failed",
         error: lastErr,
       });
+      if (allOk) {
+        sent++;
+      } else {
+        failed++;
+      }
+      await logEvent(supabase, runId, {
+        p_event_type: "push_delivery",
+        p_subject_table: "notification_outbox",
+        p_subject_id: String(row.id),
+        p_user_id: row.user_id,
+        p_decision: allOk ? "sent" : "failed",
+        p_status: allOk ? "succeeded" : "failed",
+        p_error_public: lastErr,
+        p_metadata: { kind: row.kind, token_count: tokens.length, dry_run: false },
+      });
     }
+
+    await completeRun(supabase, runId, failed > 0 ? "partial" : "succeeded", {
+      processed: results.length,
+      sent,
+      skipped,
+      failed,
+      dry_run: dryRun,
+    });
 
     return json({
       ok: true,
@@ -309,7 +453,9 @@ Deno.serve(async (req) => {
       results,
     });
   } catch (e) {
-    return json({ ok: false, error: publicError(e) }, 500);
+    const err = publicError(e);
+    if (supabase) await completeRun(supabase, runId, "failed", {}, err);
+    return json({ ok: false, error: err }, 500);
   }
 });
 
