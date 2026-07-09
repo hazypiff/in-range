@@ -1,5 +1,5 @@
 -- =============================================================================
--- Migration 0017: Production readiness — photo bucket privacy + correlate safety
+-- Migration 0018: Production readiness — photo bucket privacy + correlate safety
 -- =============================================================================
 -- F1/F2 audit 2026-07-09:
 --   * profile_photos was public — anyone with a UUID path could fetch photos
@@ -51,17 +51,47 @@ CREATE POLICY "Encounter or match peers read profile photos"
     )
   );
 
--- verified_photos: keep public-read only if still used for approved badges;
--- tighten to authenticated for consistency
+-- verified_photos: keep private; service_role writes, owners and encounter/match
+-- peers can read.
 UPDATE storage.buckets
 SET public = false
 WHERE id = 'verified_photos';
 
 DROP POLICY IF EXISTS "Public read verified photos" ON storage.objects;
-CREATE POLICY "Authenticated read verified photos"
+DROP POLICY IF EXISTS "Authenticated read verified photos" ON storage.objects;
+DROP POLICY IF EXISTS "Users read own verified photos" ON storage.objects;
+CREATE POLICY "Users read own verified photos"
   ON storage.objects FOR SELECT
   TO authenticated
-  USING (bucket_id = 'verified_photos');
+  USING (
+    bucket_id = 'verified_photos'
+    AND (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+DROP POLICY IF EXISTS "Encounter or match peers read verified photos" ON storage.objects;
+CREATE POLICY "Encounter or match peers read verified photos"
+  ON storage.objects FOR SELECT
+  TO authenticated
+  USING (
+    bucket_id = 'verified_photos'
+    AND (
+      EXISTS (
+        SELECT 1 FROM public.encounters e
+        WHERE e.status IN ('active', 'matched')
+          AND (
+            (e.user_a = auth.uid() AND e.user_b::text = (storage.foldername(name))[1])
+            OR (e.user_b = auth.uid() AND e.user_a::text = (storage.foldername(name))[1])
+          )
+      )
+      OR EXISTS (
+        SELECT 1 FROM public.matches m
+        WHERE (
+          (m.user_a = auth.uid() AND m.user_b::text = (storage.foldername(name))[1])
+          OR (m.user_b = auth.uid() AND m.user_a::text = (storage.foldername(name))[1])
+        )
+      )
+    )
+  );
 
 -- ----------------------------------------------------------------------------
 -- 2. correlate_encounter — block / pause / active / deleted / photo-verified

@@ -49,8 +49,7 @@ class BackendStatus {
 
   /// Hide banner when fully online (including anonymous cloud guest).
   bool get showBanner =>
-      mode == BackendMode.offlineLocal ||
-      mode == BackendMode.cloudUnreachable;
+      mode == BackendMode.offlineLocal || mode == BackendMode.cloudUnreachable;
 }
 
 class BackendStatusController extends StateNotifier<BackendStatus> {
@@ -60,9 +59,7 @@ class BackendStatusController extends StateNotifier<BackendStatus> {
             mode: AppConfig.hasRealSupabase
                 ? BackendMode.cloudUnreachable
                 : BackendMode.offlineLocal,
-            message: AppConfig.hasRealSupabase
-                ? 'Checking connection…'
-                : null,
+            message: AppConfig.hasRealSupabase ? 'Checking connection…' : null,
             lastChecked: DateTime.now(),
           ),
         ) {
@@ -103,7 +100,7 @@ class BackendStatusController extends StateNotifier<BackendStatus> {
       debugPrint('Backend status check failed: $e');
       state = BackendStatus(
         mode: BackendMode.cloudUnreachable,
-        message: 'Cloud error: $e',
+        message: 'Cloud connection unavailable.',
         lastChecked: DateTime.now(),
       );
     }

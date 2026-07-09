@@ -113,9 +113,10 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
       await _showUndo();
       return true;
     } catch (e) {
+      debugPrint('Pass failed: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Pass failed: $e')),
+          const SnackBar(content: Text('Pass failed.')),
         );
       }
       return false;
@@ -148,9 +149,10 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
       }
       return true;
     } catch (e) {
+      debugPrint('Like failed: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Like failed: $e')),
+          const SnackBar(content: Text('Like failed.')),
         );
       }
       return false;

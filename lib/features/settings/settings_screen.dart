@@ -81,9 +81,12 @@ class SettingsScreen extends ConsumerWidget {
                     .read(sessionControllerProvider.notifier)
                     .setIncognito(v);
               } catch (e) {
+                debugPrint('setIncognito failed: $e');
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('$e')),
+                    const SnackBar(
+                      content: Text('Could not update incognito mode.'),
+                    ),
                   );
                 }
               }
@@ -188,14 +191,15 @@ class SettingsScreen extends ConsumerWidget {
               try {
                 await ProfileSyncService().deleteLocationHistory();
               } catch (e) {
-                cloudErr = e.toString();
+                cloudErr = 'Cloud delete failed';
+                debugPrint('deleteLocationHistory failed: $e');
               }
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
                     content: Text(
                       cloudErr != null
-                          ? 'Local cleared; cloud delete failed: $cloudErr'
+                          ? 'Local cleared; cloud delete failed.'
                           : (AppConfig.hasRealSupabase
                               ? 'Local + cloud location history cleared'
                               : 'Local sighting history cleared'),
@@ -382,9 +386,10 @@ Future<void> _showSystemFeedbackDialog(BuildContext context) async {
                   );
                   if (ctx.mounted) Navigator.pop(ctx, true);
                 } catch (e) {
+                  debugPrint('submitFeedback failed: $e');
                   if (ctx.mounted) {
                     ScaffoldMessenger.of(ctx).showSnackBar(
-                      SnackBar(content: Text('Feedback failed: $e')),
+                      const SnackBar(content: Text('Feedback failed.')),
                     );
                   }
                 }
@@ -401,9 +406,10 @@ Future<void> _showSystemFeedbackDialog(BuildContext context) async {
       );
     }
   } catch (e) {
+    debugPrint('showSystemFeedbackDialog failed: $e');
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Feedback failed: $e')),
+        const SnackBar(content: Text('Feedback failed.')),
       );
     }
   } finally {

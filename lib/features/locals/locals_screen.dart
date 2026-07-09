@@ -245,8 +245,7 @@ extension on _LocalsScreenState {
           final uid = row['user_id']?.toString() ?? 'peer-$i';
           final meters = (row['distance_m'] as num?)?.toDouble();
           final distLabel = _coarseDistanceLabel(meters);
-          final hood =
-              row['neighborhood']?.toString() ?? gps.neighborhood;
+          final hood = row['neighborhood']?.toString() ?? gps.neighborhood;
           final boosted = row['is_boosted'] == true;
           return _PeerCard(
             letter: '•',
@@ -270,9 +269,10 @@ extension on _LocalsScreenState {
                   );
                 }
               } catch (e) {
+                debugPrint('Locals like failed: $e');
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Like failed: $e')),
+                    const SnackBar(content: Text('Like failed.')),
                   );
                 }
               }
@@ -284,9 +284,8 @@ extension on _LocalsScreenState {
         final dismissed = matchStore.isDismissed(e.correlationId);
         final meters = _fakeDistanceFromRssi(e.bestRssi);
         final distLabel = _coarseDistanceLabel(meters);
-        final letter = e.displayName.isNotEmpty
-            ? e.displayName[0].toUpperCase()
-            : '?';
+        final letter =
+            e.displayName.isNotEmpty ? e.displayName[0].toUpperCase() : '?';
         return _PeerCard(
           letter: letter,
           distLabel: distLabel,
@@ -452,4 +451,3 @@ class _EmptyLocals extends StatelessWidget {
     );
   }
 }
-

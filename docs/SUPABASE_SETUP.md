@@ -100,11 +100,11 @@ Keep HMAC secret identical on every client for the same environment.
 
 Migrations create buckets:
 
-- `profile_photos` (public read, user upload own folder)
+- `profile_photos` (private, user upload own folder; owner/encounter/match read)
 - `chat_media` (private, match participants)
-- `verified_photos` (service_role write)
+- `verified_photos` (private, service_role write)
 
-Confirm under **Storage**. Policies are in `0002` + `0006`.
+Confirm under **Storage**. Policies are in `0002`, `0006`, and `0018`.
 
 ## 8. Edge Functions
 

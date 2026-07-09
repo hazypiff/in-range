@@ -125,7 +125,7 @@ class LocalsController extends StateNotifier<LocalsState> {
       );
       await _applyPosition(pos);
     } catch (e) {
-      state = state.copyWith(error: 'Location unavailable: $e');
+      state = state.copyWith(error: 'Location unavailable.');
       debugPrint('Locals fix failed: $e');
     }
   }

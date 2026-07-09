@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:in_range/core/privacy/safety_store.dart';
 import 'package:in_range/features/chat/messages_screen.dart';
 import 'package:in_range/features/matches/match_store.dart';
+import 'package:in_range/shared/services/photo_url_service.dart';
 
 /// Full profile unlock after mutual match.
 class MatchProfileScreen extends ConsumerWidget {
@@ -104,15 +105,7 @@ class MatchProfileScreen extends ConsumerWidget {
                       padding: const EdgeInsets.only(right: 8),
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(16),
-                        child: path.startsWith('http')
-                            ? Image.network(path, fit: BoxFit.cover)
-                            : (File(path).existsSync()
-                                ? Image.file(File(path), fit: BoxFit.cover)
-                                : const ColoredBox(
-                                    color: Colors.black12,
-                                    child: Center(
-                                        child: Icon(Icons.broken_image)),
-                                  )),
+                        child: _ProfilePhoto(path: path),
                       ),
                     ),
                 ],
@@ -150,9 +143,7 @@ class MatchProfileScreen extends ConsumerWidget {
           Wrap(
             spacing: 8,
             runSpacing: 8,
-            children: match.interests
-                .map((i) => Chip(label: Text(i)))
-                .toList(),
+            children: match.interests.map((i) => Chip(label: Text(i))).toList(),
           ),
           const SizedBox(height: 24),
           FilledButton.icon(
@@ -169,6 +160,45 @@ class MatchProfileScreen extends ConsumerWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _ProfilePhoto extends StatelessWidget {
+  const _ProfilePhoto({required this.path});
+
+  final String path;
+
+  @override
+  Widget build(BuildContext context) {
+    if (path.startsWith('http')) {
+      return Image.network(
+        path,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => _fallback(),
+      );
+    }
+    if (File(path).existsSync()) {
+      return Image.file(File(path), fit: BoxFit.cover);
+    }
+    return FutureBuilder<String?>(
+      future: PhotoUrlService.resolve(path),
+      builder: (context, snap) {
+        final url = snap.data;
+        if (url == null || !url.startsWith('http')) return _fallback();
+        return Image.network(
+          url,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => _fallback(),
+        );
+      },
+    );
+  }
+
+  Widget _fallback() {
+    return const ColoredBox(
+      color: Colors.black12,
+      child: Center(child: Icon(Icons.broken_image)),
     );
   }
 }

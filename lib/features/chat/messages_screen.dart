@@ -193,12 +193,11 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
             imagePath: imagePath,
           );
     } catch (e) {
+      debugPrint('sendMessage failed: $e');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            'Message not sent: $e',
-          ),
+          content: const Text('Message not sent.'),
           backgroundColor: Colors.red.shade700,
         ),
       );
@@ -295,8 +294,8 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute<void>(
-                  builder: (_) => MatchProfileScreen(
-                      correlationId: widget.correlationId),
+                  builder: (_) =>
+                      MatchProfileScreen(correlationId: widget.correlationId),
                 ),
               );
             },

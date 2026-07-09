@@ -18,9 +18,8 @@ class ProfileSyncService {
     final client = InRangeSupabase.client;
     if (client.auth.currentUser == null) return;
 
-    final dob = session.birthYear != null
-        ? DateTime(session.birthYear!, 1, 1)
-        : null;
+    final dob =
+        session.birthYear != null ? DateTime(session.birthYear!, 1, 1) : null;
 
     try {
       await client.rpc('upsert_my_profile', params: {
@@ -67,7 +66,8 @@ class ProfileSyncService {
 
       final ext = p.extension(path).replaceFirst('.', '');
       final safeExt = ext.isEmpty ? 'jpg' : ext;
-      final storagePath = '$uid/$i-${DateTime.now().millisecondsSinceEpoch}.$safeExt';
+      final storagePath =
+          '$uid/$i-${DateTime.now().millisecondsSinceEpoch}.$safeExt';
 
       try {
         await client.storage.from('profile_photos').upload(
@@ -84,10 +84,11 @@ class ProfileSyncService {
           'p_slot_index': i,
         });
 
-        // Store storage path only — bucket is private (migration 0017).
+        // Store storage path only; bucket privacy is enforced by migration 0018.
         // Clients resolve display URLs via createSignedUrl.
         uploaded.add(storagePath);
-        debugPrint('Photo slot $i uploaded + verification queued path=$storagePath');
+        debugPrint(
+            'Photo slot $i uploaded + verification queued path=$storagePath');
       } catch (e) {
         debugPrint('Photo upload slot $i failed: $e');
         uploaded.add(path); // keep local path as fallback
