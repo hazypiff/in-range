@@ -16,12 +16,22 @@ class EncountersRepository {
     }
     try {
       final rows = await _api.getMyEncounters();
-      return rows.map((r) {
-        final m = Map<String, dynamic>.from(r);
-        m['is_local'] = false;
-        m['is_server'] = true;
-        return m;
-      }).toList();
+      // Server already filters is_photo_verified; client belt-and-suspenders.
+      return rows
+          .map((r) {
+            final m = Map<String, dynamic>.from(r);
+            m['is_local'] = false;
+            m['is_server'] = true;
+            return m;
+          })
+          .where((m) {
+            final verified = m['is_photo_verified'];
+            if (verified == false) return false;
+            final urls = m['photo_urls'];
+            if (urls is List && urls.isEmpty) return false;
+            return true;
+          })
+          .toList();
     } catch (e) {
       debugPrint('getMyEncounters failed: $e');
       return [];

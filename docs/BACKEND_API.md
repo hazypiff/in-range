@@ -11,7 +11,7 @@ All RPCs are `SECURITY DEFINER` with `auth.uid()` checks unless noted.
 | `correlate_encounter` | token, lat, lon, radius_m, window_min | rows |
 | `record_location_ping` | lat, lon, range?, neighborhood? | ping id |
 | `correlate_miles_encounters` | lat, lon, range?, neighborhood? | rows |
-| `get_locals_feed` | lat, lon, range?, limit? | peers |
+| `get_locals_feed` | lat, lon, range?, limit? | peers (**is_photo_verified only**) |
 | `nearby_location_pings` | lat, lon, radius_m?, window_min?, limit? | pings |
 | `batch_correlate_recent_pings` | lookback_min | count (service_role) |
 
@@ -19,7 +19,7 @@ All RPCs are `SECURITY DEFINER` with `auth.uid()` checks unless noted.
 
 | RPC | Args | Returns |
 |-----|------|---------|
-| `get_my_encounters` | limit?, offset?, min_age_hours? | feed rows (photo + hood) |
+| `get_my_encounters` | limit?, offset?, min_age_hours? | feed rows (photo + hood); **verified only** |
 | `swipe_encounter` | encounter_id, action (like\|pass) | `{matched, match_id, ...}` |
 | `get_who_liked_you` | limit? | rows (subscriber) |
 | `expire_feet_encounters` | — | count (service_role) |

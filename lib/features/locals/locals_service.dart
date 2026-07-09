@@ -162,9 +162,16 @@ class LocalsController extends StateNotifier<LocalsState> {
         lon: lon,
         range: _range,
       );
+      // Server filters is_photo_verified; drop any residual unverified rows.
+      final verified = peers.where((p) {
+        if (p['is_photo_verified'] == false) return false;
+        final urls = p['photo_urls'];
+        if (urls is List && urls.isEmpty) return false;
+        return true;
+      }).toList();
 
       state = state.copyWith(
-        serverPeers: peers,
+        serverPeers: verified,
         usingServer: true,
         clearSyncError: true,
       );

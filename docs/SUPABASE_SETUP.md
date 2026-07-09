@@ -34,6 +34,9 @@ Dashboard → **SQL Editor** → paste & Run each file:
 | 8 | `supabase/migrations/0008_miles_correlation.sql` |
 | 9 | `supabase/migrations/0009_auth_profile_account.sql` |
 | 10 | `supabase/migrations/0010_realtime_grants_cleanup.sql` |
+| 11 | `supabase/migrations/0011_record_sighting_single_sig.sql` |
+| 12 | `supabase/migrations/0012_correlate_grace_dedupe.sql` |
+| 13 | `supabase/migrations/0013_photo_verification_gating.sql` |
 
 Or CLI:
 
@@ -103,7 +106,9 @@ Confirm under **Storage**. Policies are in `0002` + `0006`.
 
 ```bash
 supabase secrets set FCM_SERVER_KEY=YOUR_FCM_SERVER_KEY
-supabase secrets set STUB_AUTO_APPROVE=true   # lab auto photo verify
+supabase secrets set STUB_AUTO_APPROVE=true   # lab: auto photo verify
+# Production: STUB_AUTO_APPROVE=false — unverified profiles are hidden from
+# Encounters + Locals until decide_photo_verification / stub approve.
 
 supabase functions deploy send-push
 supabase functions deploy miles-correlate

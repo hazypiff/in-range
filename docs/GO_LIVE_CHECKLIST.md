@@ -6,7 +6,7 @@ Everything offline is implemented. Complete only these credential/config steps:
 
 - [ ] Create Supabase project
 - [ ] Enable PostGIS
-- [ ] Run migrations `0001` → `0010` in order
+- [ ] Run migrations `0001` → `0013` in order
 - [ ] (Optional) Run `supabase/seed/seed_test_data.sql`
 - [ ] Copy Project URL + anon key into `.env`
 
