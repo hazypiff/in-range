@@ -13,14 +13,47 @@ class MatchProfileScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final match = ref.watch(matchStoreProvider).firstWhere(
-          (m) => m.correlationId == correlationId,
-          orElse: () => MatchRecord(
-            correlationId: correlationId,
-            displayName: 'Match',
-            matchedAt: DateTime.now(),
+    final matches = ref.watch(matchStoreProvider);
+    MatchRecord? match;
+    for (final m in matches) {
+      if (m.correlationId == correlationId) {
+        match = m;
+        break;
+      }
+    }
+    if (match == null || match.isExpiredNoMessage) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Match')),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.person_off_outlined, size: 56),
+                const SizedBox(height: 12),
+                const Text(
+                  'This match is no longer available',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'It may have expired after 24 hours with no messages.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.grey.shade600),
+                ),
+                const SizedBox(height: 20),
+                FilledButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Back'),
+                ),
+              ],
+            ),
           ),
-        );
+        ),
+      );
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -71,7 +104,15 @@ class MatchProfileScreen extends ConsumerWidget {
                       padding: const EdgeInsets.only(right: 8),
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(16),
-                        child: Image.file(File(path), fit: BoxFit.cover),
+                        child: path.startsWith('http')
+                            ? Image.network(path, fit: BoxFit.cover)
+                            : (File(path).existsSync()
+                                ? Image.file(File(path), fit: BoxFit.cover)
+                                : const ColoredBox(
+                                    color: Colors.black12,
+                                    child: Center(
+                                        child: Icon(Icons.broken_image)),
+                                  )),
                       ),
                     ),
                 ],

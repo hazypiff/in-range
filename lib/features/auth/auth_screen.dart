@@ -19,9 +19,13 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
   final _password = TextEditingController();
   final _phone = TextEditingController();
   final _otp = TextEditingController();
+  final _birthYear = TextEditingController(
+    text: '${DateTime.now().year - 25}',
+  );
   bool _busy = false;
   bool _otpSent = false;
   bool _isSignUp = false;
+  bool _confirm18 = false;
   String? _error;
   String? _info;
 
@@ -38,7 +42,22 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
     _password.dispose();
     _phone.dispose();
     _otp.dispose();
+    _birthYear.dispose();
     super.dispose();
+  }
+
+  void _assertAgeGate() {
+    final year = int.tryParse(_birthYear.text.trim());
+    if (year == null || year < 1900 || year > DateTime.now().year) {
+      throw StateError('Enter a valid birth year');
+    }
+    final age = DateTime.now().year - year;
+    if (age < 18) {
+      throw StateError('You must be 18 or older to use In Range');
+    }
+    if (!_confirm18) {
+      throw StateError('Confirm that you are 18+ to continue');
+    }
   }
 
   Future<void> _run(Future<void> Function() fn) async {
@@ -57,7 +76,12 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
   }
 
   Future<void> _guest() => _run(() async {
-        await ref.read(sessionControllerProvider.notifier).signInAsGuest();
+        // Lab guest still requires 18+ affirmation (product: age verification).
+        _assertAgeGate();
+        final year = int.parse(_birthYear.text.trim());
+        await ref
+            .read(sessionControllerProvider.notifier)
+            .signInAsGuest(birthYear: year);
       });
 
   Future<void> _emailAuth() => _run(() async {
@@ -68,8 +92,15 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
         }
         final session = ref.read(sessionControllerProvider.notifier);
         if (_isSignUp) {
-          await session.signUpEmail(email: email, password: pass);
-          setState(() => _info = 'Account created. You may need to confirm email.');
+          _assertAgeGate();
+          final year = int.parse(_birthYear.text.trim());
+          await session.signUpEmail(
+            email: email,
+            password: pass,
+            birthYear: year,
+          );
+          setState(() =>
+              _info = 'Account created. You may need to confirm email.');
         } else {
           await session.signInEmail(email: email, password: pass);
         }
@@ -158,15 +189,18 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
               ],
             ),
             SizedBox(
-              height: 280,
+              height: _isSignUp || _tabs.index == 0 ? 380 : 300,
               child: TabBarView(
                 controller: _tabs,
                 children: [
                   _EmailTab(
                     email: _email,
                     password: _password,
+                    birthYear: _birthYear,
                     isSignUp: _isSignUp,
+                    confirm18: _confirm18,
                     busy: _busy,
+                    onConfirm18: (v) => setState(() => _confirm18 = v),
                     onToggleMode: () =>
                         setState(() => _isSignUp = !_isSignUp),
                     onSubmit: _emailAuth,
@@ -174,9 +208,15 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
                   _PhoneTab(
                     phone: _phone,
                     otp: _otp,
+                    birthYear: _birthYear,
+                    confirm18: _confirm18,
                     otpSent: _otpSent,
                     busy: _busy,
-                    onSend: _sendOtp,
+                    onConfirm18: (v) => setState(() => _confirm18 = v),
+                    onSend: () {
+                      _assertAgeGate();
+                      _sendOtp();
+                    },
                     onVerify: _verifyOtp,
                   ),
                 ],
@@ -217,6 +257,26 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
               ],
             ),
             const SizedBox(height: 12),
+            TextField(
+              controller: _birthYear,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Birth year (18+ required)',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              value: _confirm18,
+              onChanged: _busy
+                  ? null
+                  : (v) => setState(() => _confirm18 = v ?? false),
+              title: const Text(
+                'I confirm I am 18 or older (required for guest & sign-up)',
+                style: TextStyle(fontSize: 13),
+              ),
+              controlAffinity: ListTileControlAffinity.leading,
+            ),
             OutlinedButton(
               onPressed: _busy ? null : _guest,
               style: OutlinedButton.styleFrom(
@@ -270,16 +330,22 @@ class _EmailTab extends StatelessWidget {
   const _EmailTab({
     required this.email,
     required this.password,
+    required this.birthYear,
     required this.isSignUp,
+    required this.confirm18,
     required this.busy,
+    required this.onConfirm18,
     required this.onToggleMode,
     required this.onSubmit,
   });
 
   final TextEditingController email;
   final TextEditingController password;
+  final TextEditingController birthYear;
   final bool isSignUp;
+  final bool confirm18;
   final bool busy;
+  final ValueChanged<bool> onConfirm18;
   final VoidCallback onToggleMode;
   final VoidCallback onSubmit;
 
@@ -287,7 +353,7 @@ class _EmailTab extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(top: 16),
-      child: Column(
+      child: ListView(
         children: [
           TextField(
             controller: email,
@@ -306,7 +372,30 @@ class _EmailTab extends StatelessWidget {
               border: OutlineInputBorder(),
             ),
           ),
-          const SizedBox(height: 12),
+          if (isSignUp) ...[
+            const SizedBox(height: 12),
+            TextField(
+              controller: birthYear,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Birth year (must be 18+)',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              value: confirm18,
+              onChanged: busy
+                  ? null
+                  : (v) => onConfirm18(v ?? false),
+              title: const Text(
+                'I confirm I am 18 years of age or older',
+                style: TextStyle(fontSize: 13),
+              ),
+              controlAffinity: ListTileControlAffinity.leading,
+            ),
+          ],
+          const SizedBox(height: 8),
           FilledButton(
             onPressed: busy ? null : onSubmit,
             style: FilledButton.styleFrom(
@@ -340,16 +429,22 @@ class _PhoneTab extends StatelessWidget {
   const _PhoneTab({
     required this.phone,
     required this.otp,
+    required this.birthYear,
+    required this.confirm18,
     required this.otpSent,
     required this.busy,
+    required this.onConfirm18,
     required this.onSend,
     required this.onVerify,
   });
 
   final TextEditingController phone;
   final TextEditingController otp;
+  final TextEditingController birthYear;
+  final bool confirm18;
   final bool otpSent;
   final bool busy;
+  final ValueChanged<bool> onConfirm18;
   final VoidCallback onSend;
   final VoidCallback onVerify;
 
@@ -357,7 +452,7 @@ class _PhoneTab extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(top: 16),
-      child: Column(
+      child: ListView(
         children: [
           TextField(
             controller: phone,
@@ -369,6 +464,24 @@ class _PhoneTab extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
+          TextField(
+            controller: birthYear,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+              labelText: 'Birth year (must be 18+)',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          CheckboxListTile(
+            contentPadding: EdgeInsets.zero,
+            value: confirm18,
+            onChanged: busy ? null : (v) => onConfirm18(v ?? false),
+            title: const Text(
+              'I confirm I am 18 years of age or older',
+              style: TextStyle(fontSize: 13),
+            ),
+            controlAffinity: ListTileControlAffinity.leading,
+          ),
           if (otpSent) ...[
             TextField(
               controller: otp,

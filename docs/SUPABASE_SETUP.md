@@ -37,6 +37,8 @@ Dashboard → **SQL Editor** → paste & Run each file:
 | 11 | `supabase/migrations/0011_record_sighting_single_sig.sql` |
 | 12 | `supabase/migrations/0012_correlate_grace_dedupe.sql` |
 | 13 | `supabase/migrations/0013_photo_verification_gating.sql` |
+| 14 | `supabase/migrations/0014_restrict_profile_read.sql` |
+| 15 | `supabase/migrations/0015_audit_remaining_fixes.sql` |
 
 Or CLI:
 
@@ -120,10 +122,12 @@ supabase functions deploy maintenance
 
 | Function | Schedule |
 |----------|----------|
-| `maintenance` | `*/15 * * * *` |
+| `maintenance` | `*/15 * * * *` (or DB `pg_cron` → `run_maintenance`) |
 | `send-push` | `* * * * *` |
 | `photo-review` | `*/2 * * * *` |
 | `miles-correlate` | `*/10 * * * *` |
+
+Migration **0015** also tries to schedule `cron.schedule('in-range-maintenance', '*/15 * * * *', …)` when `pg_cron` is enabled.
 
 Without `FCM_SERVER_KEY`, `send-push` dry-runs and marks rows `skipped` / `dry_run_no_fcm_key`.
 

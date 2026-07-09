@@ -1,27 +1,59 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/core/privacy/safety_store.dart';
 import 'package:in_range/features/matches/match_profile_screen.dart';
 import 'package:in_range/features/matches/match_store.dart';
 import 'package:in_range/features/widgets/ad_banner.dart';
+import 'package:in_range/shared/services/chat_sync_service.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
-class MessagesScreen extends ConsumerWidget {
+class MessagesScreen extends ConsumerStatefulWidget {
   const MessagesScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<MessagesScreen> createState() => _MessagesScreenState();
+}
+
+class _MessagesScreenState extends ConsumerState<MessagesScreen> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(matchStoreProvider.notifier).syncFromCloud();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final matches = ref.watch(matchStoreProvider);
     final blocked = ref.watch(safetyStoreProvider).blocked;
-    final visible =
-        matches.where((m) => !blocked.contains(m.correlationId)).toList();
+    final visible = matches
+        .where((m) =>
+            !blocked.contains(m.correlationId) &&
+            !blocked.contains(m.otherUserId ?? '') &&
+            !m.isExpiredNoMessage)
+        .toList();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Messages')),
+      appBar: AppBar(
+        title: const Text('Messages'),
+        actions: [
+          if (AppConfig.hasRealSupabase)
+            IconButton(
+              tooltip: 'Refresh from cloud',
+              icon: const Icon(Icons.cloud_sync_outlined),
+              onPressed: () =>
+                  ref.read(matchStoreProvider.notifier).syncFromCloud(),
+            ),
+        ],
+      ),
       body: Column(
         children: [
           const FreeAdBanner(),
@@ -44,9 +76,8 @@ class MessagesScreen extends ConsumerWidget {
                           const SizedBox(height: 8),
                           Text(
                             'When you both like an encounter, chat appears here. '
-                            'Text + photos work now (local always; cloud when connected). '
-                            'Voice notes & video calls: storage + send_message ready; '
-                            'recording/WebRTC UI wires when platform keys are live.',
+                            '${AppConfig.hasRealSupabase ? "Cloud chat syncs via Supabase." : "Local mode until cloud keys are set."} '
+                            'Voice/video: storage ready; recording UI when platform keys are live.',
                             textAlign: TextAlign.center,
                             style: TextStyle(color: Colors.grey.shade600),
                           ),
@@ -71,7 +102,7 @@ class MessagesScreen extends ConsumerWidget {
                         ),
                         title: Text(m.displayName),
                         subtitle: Text(
-                          last,
+                          last.isEmpty ? 'Say hi 👋' : last,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -112,10 +143,43 @@ class ChatThreadScreen extends ConsumerStatefulWidget {
 
 class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
   final _ctrl = TextEditingController();
+  final _chat = ChatSyncService();
+  RealtimeChannel? _channel;
+  bool _missing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrap());
+  }
+
+  Future<void> _bootstrap() async {
+    final store = ref.read(matchStoreProvider.notifier);
+    final match = store.findMatch(widget.correlationId);
+    if (match == null) {
+      if (mounted) setState(() => _missing = true);
+      return;
+    }
+    await store.hydrateThread(widget.correlationId);
+    final matchId = int.tryParse(widget.correlationId);
+    if (matchId != null && AppConfig.hasRealSupabase) {
+      _channel = _chat.subscribeMessages(
+        matchId: matchId,
+        onInsert: (msg) {
+          if (msg.fromMe) return; // already optimistic
+          ref.read(matchStoreProvider.notifier).appendRemoteMessage(
+                widget.correlationId,
+                msg,
+              );
+        },
+      );
+    }
+  }
 
   @override
   void dispose() {
     _ctrl.dispose();
+    unawaited(_chat.unsubscribe(_channel));
     super.dispose();
   }
 
@@ -147,14 +211,56 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final match = ref.watch(matchStoreProvider).firstWhere(
-          (m) => m.correlationId == widget.correlationId,
-          orElse: () => MatchRecord(
-            correlationId: widget.correlationId,
-            displayName: 'Chat',
-            matchedAt: DateTime.now(),
+    if (_missing) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Chat')),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.chat_bubble_outline, size: 56),
+                const SizedBox(height: 12),
+                const Text(
+                  'This conversation is no longer available',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'It may have expired (24h with no messages) or been removed.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.grey.shade600),
+                ),
+                const SizedBox(height: 20),
+                FilledButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Back'),
+                ),
+              ],
+            ),
           ),
-        );
+        ),
+      );
+    }
+
+    final matches = ref.watch(matchStoreProvider);
+    MatchRecord? found;
+    for (final m in matches) {
+      if (m.correlationId == widget.correlationId) {
+        found = m;
+        break;
+      }
+    }
+    // If pruned while open (expiry timer), show empty state.
+    if (found == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() => _missing = true);
+      });
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    final match = found;
 
     return Scaffold(
       appBar: AppBar(
@@ -185,6 +291,23 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
       ),
       body: Column(
         children: [
+          if (AppConfig.hasRealSupabase && match.isServerMatch)
+            Material(
+              color: Colors.green.shade50,
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                child: Row(
+                  children: [
+                    Icon(Icons.cloud_done, size: 16, color: Colors.green),
+                    SizedBox(width: 8),
+                    Text(
+                      'Cloud chat · realtime when connected',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           Expanded(
             child: ListView.builder(
               padding: const EdgeInsets.all(16),
@@ -212,6 +335,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         if (msg.imagePath != null &&
+                            !msg.imagePath!.startsWith('http') &&
                             File(msg.imagePath!).existsSync())
                           ClipRRect(
                             borderRadius: BorderRadius.circular(8),

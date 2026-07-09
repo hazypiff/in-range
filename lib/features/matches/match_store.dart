@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/core/notifications/local_notify.dart';
 import 'package:in_range/core/session/app_session.dart';
+import 'package:in_range/shared/services/chat_sync_service.dart';
 import 'package:in_range/shared/services/encounters_api.dart';
 
 class MatchRecord {
@@ -20,8 +21,11 @@ class MatchRecord {
     this.interests = const [],
     this.photoPaths = const [],
     List<ChatMessage>? messages,
+    this.otherUserId,
+    this.isServerMatch = false,
   }) : messages = messages ?? [];
 
+  /// Local BLE corr-id or server match id (numeric string when cloud).
   final String correlationId;
   final String displayName;
   final DateTime matchedAt;
@@ -32,6 +36,11 @@ class MatchRecord {
   final List<String> interests;
   final List<String> photoPaths;
   final List<ChatMessage> messages;
+  final String? otherUserId;
+  final bool isServerMatch;
+
+  /// Parsed server match id when [correlationId] is numeric.
+  int? get serverMatchId => int.tryParse(correlationId);
 
   static const noMessageExpiry = Duration(hours: 24);
 
@@ -42,6 +51,34 @@ class MatchRecord {
     // Normalize both sides to UTC so timezone offset doesn't bias the
     // comparison (matchedAt is parsed from ISO and may be stored as UTC).
     return DateTime.now().toUtc().isAfter(matchedAt.toUtc().add(noMessageExpiry));
+  }
+
+  MatchRecord copyWith({
+    String? displayName,
+    String? neighborhood,
+    String? bio,
+    int? age,
+    String? gender,
+    List<String>? interests,
+    List<String>? photoPaths,
+    List<ChatMessage>? messages,
+    String? otherUserId,
+    bool? isServerMatch,
+  }) {
+    return MatchRecord(
+      correlationId: correlationId,
+      displayName: displayName ?? this.displayName,
+      matchedAt: matchedAt,
+      neighborhood: neighborhood ?? this.neighborhood,
+      bio: bio ?? this.bio,
+      age: age ?? this.age,
+      gender: gender ?? this.gender,
+      interests: interests ?? this.interests,
+      photoPaths: photoPaths ?? this.photoPaths,
+      messages: messages ?? this.messages,
+      otherUserId: otherUserId ?? this.otherUserId,
+      isServerMatch: isServerMatch ?? this.isServerMatch,
+    );
   }
 
   Map<String, dynamic> toJson() => {
@@ -55,6 +92,8 @@ class MatchRecord {
         'interests': interests,
         'photoPaths': photoPaths,
         'messages': messages.map((m) => m.toJson()).toList(),
+        'otherUserId': otherUserId,
+        'isServerMatch': isServerMatch,
       };
 
   factory MatchRecord.fromJson(Map<String, dynamic> j) => MatchRecord(
@@ -72,6 +111,8 @@ class MatchRecord {
             .map((e) =>
                 ChatMessage.fromJson(Map<String, dynamic>.from(e as Map)))
             .toList(),
+        otherUserId: j['otherUserId'] as String?,
+        isServerMatch: j['isServerMatch'] as bool? ?? false,
       );
 }
 
@@ -250,6 +291,8 @@ class MatchStore extends StateNotifier<List<MatchRecord>> {
               gender: gender,
               interests: interests ?? const [],
               photoPaths: photoPaths ?? const [],
+              otherUserId: res['other_user_id']?.toString(),
+              isServerMatch: true,
             );
             await LocalNotify.instance.notifyMatch(displayName);
             await _persistHistoryLike(correlationId, displayName, neighborhood);
@@ -399,6 +442,8 @@ class MatchStore extends StateNotifier<List<MatchRecord>> {
     String? gender,
     List<String> interests = const [],
     List<String> photoPaths = const [],
+    String? otherUserId,
+    bool isServerMatch = false,
   }) async {
     if (state.any((m) => m.correlationId == correlationId)) return;
     final m = MatchRecord(
@@ -412,11 +457,90 @@ class MatchStore extends StateNotifier<List<MatchRecord>> {
       interests: interests.isEmpty ? const ['Music', 'Travel'] : interests,
       photoPaths: photoPaths,
       // No canned opener — a real match starts with zero messages until a
-      // user sends one. The previous "I saw you were near..." auto-opener was
-      // deceptive (appeared to come from the other person).
+      // user sends one.
       messages: const [],
+      otherUserId: otherUserId,
+      isServerMatch: isServerMatch || int.tryParse(correlationId) != null,
     );
     state = [m, ...state];
+    await _persist();
+  }
+
+  /// Pull server matches (get_my_matches) and merge into local state.
+  Future<void> syncFromCloud() async {
+    if (!AppConfig.hasRealSupabase) return;
+    try {
+      final remote = await ChatSyncService().fetchMatches();
+      if (remote.isEmpty) return;
+      final byId = {for (final m in state) m.correlationId: m};
+      for (final r in remote) {
+        final existing = byId[r.correlationId];
+        if (existing == null) {
+          byId[r.correlationId] = r;
+        } else {
+          // Keep richer local message history if longer; else take remote meta.
+          byId[r.correlationId] = existing.copyWith(
+            displayName: r.displayName,
+            neighborhood: r.neighborhood,
+            bio: r.bio ?? existing.bio,
+            age: r.age ?? existing.age,
+            gender: r.gender ?? existing.gender,
+            interests: r.interests.isNotEmpty ? r.interests : existing.interests,
+            photoPaths:
+                r.photoPaths.isNotEmpty ? r.photoPaths : existing.photoPaths,
+            otherUserId: r.otherUserId ?? existing.otherUserId,
+            isServerMatch: true,
+            messages: existing.messages.length >= r.messages.length
+                ? existing.messages
+                : r.messages,
+          );
+        }
+      }
+      state = byId.values.toList()
+        ..sort((a, b) => b.matchedAt.compareTo(a.matchedAt));
+      await _persist();
+    } catch (e) {
+      debugPrint('syncFromCloud matches failed: $e');
+    }
+  }
+
+  /// Load full message history for a server match id.
+  Future<void> hydrateThread(String correlationId) async {
+    final matchId = int.tryParse(correlationId);
+    if (matchId == null || !AppConfig.hasRealSupabase) return;
+    try {
+      final msgs = await ChatSyncService().fetchMessages(matchId);
+      if (msgs.isEmpty) return;
+      state = [
+        for (final m in state)
+          if (m.correlationId == correlationId)
+            m.copyWith(messages: msgs, isServerMatch: true)
+          else
+            m,
+      ];
+      await _persist();
+      await ChatSyncService().markRead(matchId);
+    } catch (e) {
+      debugPrint('hydrateThread failed: $e');
+    }
+  }
+
+  /// Append an incoming realtime message (dedupe by id).
+  Future<void> appendRemoteMessage(
+    String correlationId,
+    ChatMessage msg,
+  ) async {
+    state = [
+      for (final m in state)
+        if (m.correlationId == correlationId)
+          m.copyWith(
+            messages: m.messages.any((x) => x.id == msg.id)
+                ? m.messages
+                : [...m.messages, msg],
+          )
+        else
+          m,
+    ];
     await _persist();
   }
 
@@ -427,34 +551,72 @@ class MatchStore extends StateNotifier<List<MatchRecord>> {
   }) async {
     final t = text.trim();
     if (t.isEmpty && imagePath == null) return;
+
+    final localId = DateTime.now().microsecondsSinceEpoch.toString();
+    final localMsg = ChatMessage(
+      id: localId,
+      fromMe: true,
+      text: t.isEmpty ? '📷 Photo' : t,
+      at: DateTime.now(),
+      imagePath: imagePath,
+    );
+
+    // Optimistic local append
     state = [
       for (final m in state)
         if (m.correlationId == correlationId)
-          MatchRecord(
-            correlationId: m.correlationId,
-            displayName: m.displayName,
-            matchedAt: m.matchedAt,
-            neighborhood: m.neighborhood,
-            bio: m.bio,
-            age: m.age,
-            gender: m.gender,
-            interests: m.interests,
-            photoPaths: m.photoPaths,
-            messages: [
-              ...m.messages,
-              ChatMessage(
-                id: DateTime.now().microsecondsSinceEpoch.toString(),
-                fromMe: true,
-                text: t.isEmpty ? '📷 Photo' : t,
-                at: DateTime.now(),
-                imagePath: imagePath,
-              ),
-            ],
-          )
+          m.copyWith(messages: [...m.messages, localMsg])
         else
           m,
     ];
     await _persist();
+
+    // Cloud path: server match ids are numeric
+    final matchId = int.tryParse(correlationId);
+    if (AppConfig.hasRealSupabase && matchId != null && t.isNotEmpty) {
+      try {
+        final serverId = await EncountersApi().sendMessage(
+          matchId: matchId,
+          content: t,
+        );
+        if (serverId != null) {
+          // Replace optimistic id with server id when possible
+          state = [
+            for (final m in state)
+              if (m.correlationId == correlationId)
+                m.copyWith(
+                  messages: [
+                    for (final msg in m.messages)
+                      if (msg.id == localId)
+                        ChatMessage(
+                          id: '$serverId',
+                          fromMe: true,
+                          text: msg.text,
+                          at: msg.at,
+                          imagePath: msg.imagePath,
+                        )
+                      else
+                        msg,
+                  ],
+                  isServerMatch: true,
+                )
+              else
+                m,
+          ];
+          await _persist();
+        }
+      } catch (e) {
+        debugPrint('send_message RPC failed (local kept): $e');
+      }
+    }
+  }
+
+  /// Safe lookup — null when match was pruned (expired / deleted).
+  MatchRecord? findMatch(String correlationId) {
+    for (final m in state) {
+      if (m.correlationId == correlationId) return m;
+    }
+    return null;
   }
 
   bool isDismissed(String correlationId) =>

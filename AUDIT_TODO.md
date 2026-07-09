@@ -1,88 +1,47 @@
-# In Range — Full Stack Audit (2026-07-09)
+# In Range — Full Stack Audit (updated after remaining todos)
 
-Build: analyze (1 info lint), test (1/1), debug APK — all green.
+Build: analyze / test / debug APK — re-verify after this commit.
 Secrets: clean (no real keys in tracked files or git history).
 
-## Fixed (this session)
+## Fixed (prior session + this session)
 
 | ID | Sev | Finding | Fix |
 |----|-----|---------|-----|
-| C1 | Critical | Hardcoded HMAC fallback secrets in client binary | Removed; beacon refuses to start when secrets missing |
-| C2 | Critical | send-push used legacy FCM API (shut down 2024) | Migrated to HTTP v1 (OAuth2 JWT + v1/projects/messages:send) |
-| H1 | High | autoMatchOnLike created fake matches with canned opener | Gated by !hasRealSupabase; canned opener removed |
-| H2 | High | Dead ChatSyncService | Deleted |
-| H3 | High | send-push delivered pushes to blocked pairs | Block check added to drain loop |
-| M1 | Medium | swipe_feed 1s setState rebuilt full stack | ValueNotifier + ValueListenableBuilder |
-| M2 | Medium | syncProfile sent p_photo_urls: null → invisible | Now passes session.photoPaths |
-| M4 | Medium | batch_correlate_recent_pings missing safety filters | Added paused/deleted/incognito filter |
-| L1 | Low | BeaconController state not reset on sign-out | ref.invalidate on sign-out |
-| S1 | High | lat/lon leaked in neighborhood fallback (0008 + miles-correlate TS) | Fallback → "Nearby" |
-| S2 | High | Overbroad profile SELECT exposed PII pre-match | Migration 0014: REVOKE on sensitive columns |
-| S3 | Medium | Missing Android 12+ BLE permissions | Added BLUETOOTH_SCAN/ADVERTISE/CONNECT to runtime request |
-| B1 | Medium | .env as sole asset breaks build without .env file | Added .env.example asset + mergeWith fallback |
-| B2 | Low | match expiry compare local vs UTC datetime | Normalized to UTC on both sides |
+| … | … | (see FULL_AUDIT_REPORT.md for original 14) | `8031c4c` |
+| P2 | High | Cloud chat not wired | ChatSyncService + send_message + realtime + hydrate |
+| P1 | High | Age gate only at profile | Birth year + 18+ confirm at sign-up / guest / phone |
+| P3 | High | Feet expiry cron commented | Migration 0015 schedules `run_maintenance` via pg_cron when available |
+| F1 | Critical | Dead feet_100/feet_500 in 0003 | Documented; canonical `range_radius_meters` is authority |
+| M3 | Medium | Expired match UI ghost | Messages/MatchProfile empty states when match missing |
+| M6 | Medium | nearby_location_pings still executable | Dropped in 0015 |
+| M8 | Medium | is_blocked_pair probeable | Authz: caller must be a participant |
+| L3 | Low | deleteLocationHistory swallows errors | Settings surfaces cloud error |
+| L7 | Low | Edge errors leak internals | `publicError()` sanitizer on all 4 functions |
 
-## Remaining (report, don't fix)
+## Remaining (operational / upstream — not pure code)
 
-### Critical (1)
-| ID | Finding |
-|----|---------|
-| F1 | Migration 0003: `record_sighting` CASE references nonexistent `feet_100`/`feet_500` enum values. Dead code after 0008 replaces the path, but if replayed on a partial migration stack it silently produces wrong radius. Fix: add enum values in a future migration or add a comment noting superseded code. |
+| ID | Sev | Finding | Action |
+|----|-----|---------|--------|
+| Ops | Med | Real FCM E2E | Set `FCM_PROJECT_ID` + `FCM_SERVICE_ACCOUNT_JSON`; deploy send-push |
+| Ops | Med | pg_cron may be disabled on free tier | Enable extension or use Edge Function cron in Dashboard |
+| Up | Med | flutter_ble_peripheral KGP | Upstream package migration |
+| Info | Low | Photo storage public-read by URL | Acceptable for photo-first dating; document threat model |
+| Info | Low | Chat photo cloud upload | Text path uses send_message; binary chat media still local-first |
 
-### High (3)
-| ID | Finding |
-|----|---------|
-| P1 | Product: age gate fires at profile save only (app_session.dart:346), not at sign-up. Underage users can register a cloud account before being blocked. |
-| P2 | Product: chat is entirely local — no cloud chat realtime (deleted ChatSyncService, send_message RPC never called from ChatThreadScreen). Server messages table will never receive chat content from client. |
-| P3 | Pipeline: feet-encounter expiry cron is commented out (0010_realtime_grants_cleanup.sql:102-104). `run_maintenance` Edge Function exists but needs a cron schedule. Until enabled, feet encounters never auto-expire on server. |
+## Product Outline
 
-### Medium (5)
-| ID | Finding |
-|----|---------|
-| M3 | Expired match UI crash — MessagesScreen/MatchProfileScreen return ghost match on expiry |
-| M5 | Profile storage SELECT policy is `TO public` — uploaded photos are readable by URL if known. Acceptable for photo-first app, but worth documenting. |
-| M6 | `nearby_location_pings` RPC deprecated but still executable — lacks block/pause safety filters |
-| M7 | Persistence leak: `autoMatchOnLike` is a static getter on StateNotifier — reads `AppConfig.hasRealSupabase` at call-time, which is fine, but static access pattern can't be reactive |
-| M8 | `is_blocked_pair` RPC is SECURITY DEFINER with no `auth.uid()` guard — any authenticated user can probe block relationships |
-| P3 | Product: Photo verification infrastructure is staged (stub auto-approve only) — expected per outline |
+| Area | Status |
+|------|--------|
+| C1 Auth + 18+ at signup | Implemented |
+| C5 Chat cloud | Implemented (text + realtime; media local-first) |
+| C3 Feet server expiry | Cron when pg_cron on; Edge maintenance fallback |
 
-### Low (6)
-| ID | Finding |
-|----|---------|
-| L2 | No network timeout (supabase_flutter API doesn't expose fetchTimeout cleanly) |
-| L3 | Empty catch swallows `deleteLocationHistory` errors |
-| L4 | Seed user Dan (u4) has `is_photo_verified=FALSE` — invisible in feeds (intentional for gating test, but documented) |
-| L5 | BLE advertisement sends 16-byte correlation-id only (not full 36-byte token) — HMAC anti-forgery unused server-side |
-| L6 | Two providers throw `UnimplementedError` if main() misses override (brittle) |
-| L7 | Edge function error messages use raw `String(e)` — could leak internal structure in production |
+## Verify
 
-## Product Outline Compliance
-
-| Area | Status | Notes |
-|------|--------|-------|
-| C1 Onboarding/Auth | Partial | Age gate at profile only |
-| C2 Profile | Implemented | 6 photos, bio ≤500, photo+neighborhood pre-match, verified gate |
-| C3 Beacon/Ranges | Implemented | All 10 range values, 24h feet expiry, FGS config, BLE+GSP |
-| C4 Encounters/Matching | Implemented | Reveal delay, unlimited swipes, mutual match |
-| C5 Chat | Partial | Local chat works; cloud realtime not wired |
-| C6 Monetization | Implemented | subscriptions/boosts/ad shells; pricing TBD |
-| C7 Safety | Implemented | Block/report/pause/delete/incognito; all feeds exclude blocked |
-| C8 Hybrid Offline/Cloud | Implemented | Every feature gates on hasRealSupabase; local fallback |
-
-## Edge Functions
-
-| Function | Status |
-|----------|--------|
-| send-push | **FIXED** — HTTP v1 + block check + dry-run safe |
-| miles-correlate | PASS — neighborhood leak fixed; synthetic-ping fallback works |
-| photo-review | PASS — stub auto-approve chain correctly updates is_photo_verified |
-| maintenance | PASS — thin passthrough to run_maintenance RPC |
-
-## Next Steps for Beta
-
-1. **Enable pg_cron + schedule run_maintenance** every 15 min (feet expiry + batch correlate + cleanup)
-2. **Add age gate at sign-up time** (not just profile save)
-3. **Wire cloud chat** — call `send_message` RPC from ChatThreadScreen + subscribe to Supabase realtime channel for incoming messages
-4. **Deploy send-push with real FCM_SERVICE_ACCOUNT_JSON** + verify E2E push delivery
-5. **Migration 0014** (profile SELECT restriction) — apply to staging + production projects
-6. **Upstream KGP migration** for flutter_ble_peripheral (before Flutter breaking release)
+```bash
+flutter test && flutter analyze lib test
+# Apply 0015 on project:
+supabase db query --linked -f supabase/migrations/0015_audit_remaining_fixes.sql
+# Deploy edges:
+supabase functions deploy send-push miles-correlate photo-review maintenance
+```

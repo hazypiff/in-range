@@ -205,7 +205,14 @@ class SessionController extends StateNotifier<AppSession> {
     state = state.copyWith(onboardingComplete: true);
   }
 
-  Future<void> signInAsGuest({String? emailHint}) async {
+  Future<void> signInAsGuest({String? emailHint, int? birthYear}) async {
+    if (birthYear != null) {
+      final age = DateTime.now().year - birthYear;
+      if (age < 18) {
+        throw StateError('You must be 18 or older to use In Range');
+      }
+      await _prefs.setInt('birth_year', birthYear);
+    }
     // Prefer anonymous cloud session when available
     if (AppConfig.hasRealSupabase) {
       try {
@@ -213,6 +220,9 @@ class SessionController extends StateNotifier<AppSession> {
         final uid = res.user?.id;
         if (uid != null) {
           await _applyCloudUser(uid, email: emailHint, isAnonymous: true);
+          if (birthYear != null) {
+            state = state.copyWith(birthYear: birthYear);
+          }
           return;
         }
       } catch (e) {
@@ -231,6 +241,7 @@ class SessionController extends StateNotifier<AppSession> {
       userId: id,
       isCloudUser: false,
       email: emailHint ?? state.email,
+      birthYear: birthYear ?? state.birthYear,
     );
   }
 
@@ -279,9 +290,17 @@ class SessionController extends StateNotifier<AppSession> {
     required String email,
     required String password,
     String? displayName,
+    int? birthYear,
   }) async {
+    if (birthYear != null) {
+      final age = DateTime.now().year - birthYear;
+      if (age < 18) {
+        throw StateError('You must be 18 or older to create an account');
+      }
+      await _prefs.setInt('birth_year', birthYear);
+    }
     if (!AppConfig.hasRealSupabase) {
-      await signInAsGuest(emailHint: email);
+      await signInAsGuest(emailHint: email, birthYear: birthYear);
       return;
     }
     final res = await _auth.signUpEmail(
@@ -292,8 +311,11 @@ class SessionController extends StateNotifier<AppSession> {
     final uid = res.user?.id;
     if (uid != null && res.session != null) {
       await _applyCloudUser(uid, email: email);
+      if (birthYear != null) {
+        state = state.copyWith(birthYear: birthYear);
+      }
     } else {
-      await signInAsGuest(emailHint: email);
+      await signInAsGuest(emailHint: email, birthYear: birthYear);
     }
   }
 

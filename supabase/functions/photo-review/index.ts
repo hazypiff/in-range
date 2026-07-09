@@ -18,6 +18,25 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
+
+
+
+function publicError(e: unknown): string {
+  // Avoid leaking stack traces / internal paths to API clients.
+  console.error(e);
+  if (e && typeof e === "object" && "message" in e) {
+    const m = String((e as { message: unknown }).message);
+    // Allow short, non-sensitive messages; reject path-like strings
+    if (m.length < 120 && !m.includes("/") && m.indexOf(String.fromCharCode(92)) < 0) {
+      return m;
+    }
+  }
+  return "internal_error";
+}
+
+
+
+
 Deno.serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -53,7 +72,7 @@ Deno.serve(async (req) => {
     }
 
     const { data: rows, error } = await query;
-    if (error) return json({ ok: false, error: error.message }, 500);
+    if (error) return json({ ok: false, error: publicError(error) }, 500);
 
     const results: Array<Record<string, unknown>> = [];
 
@@ -103,7 +122,7 @@ Deno.serve(async (req) => {
       results,
     });
   } catch (e) {
-    return json({ ok: false, error: String(e) }, 500);
+    return json({ ok: false, error: publicError(e) }, 500);
   }
 });
 

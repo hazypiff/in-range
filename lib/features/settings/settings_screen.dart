@@ -169,16 +169,21 @@ class SettingsScreen extends ConsumerWidget {
             onTap: () async {
               await ref.read(localEncounterStoreProvider.notifier).clear();
               await ref.read(safetyStoreProvider.notifier).clearLocationHistory();
+              String? cloudErr;
               try {
                 await ProfileSyncService().deleteLocationHistory();
-              } catch (_) {}
+              } catch (e) {
+                cloudErr = e.toString();
+              }
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
                     content: Text(
-                      AppConfig.hasRealSupabase
-                          ? 'Local + cloud location history cleared'
-                          : 'Local sighting history cleared',
+                      cloudErr != null
+                          ? 'Local cleared; cloud delete failed: $cloudErr'
+                          : (AppConfig.hasRealSupabase
+                              ? 'Local + cloud location history cleared'
+                              : 'Local sighting history cleared'),
                     ),
                   ),
                 );

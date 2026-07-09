@@ -7,6 +7,25 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
+
+
+
+function publicError(e: unknown): string {
+  // Avoid leaking stack traces / internal paths to API clients.
+  console.error(e);
+  if (e && typeof e === "object" && "message" in e) {
+    const m = String((e as { message: unknown }).message);
+    // Allow short, non-sensitive messages; reject path-like strings
+    if (m.length < 120 && !m.includes("/") && m.indexOf(String.fromCharCode(92)) < 0) {
+      return m;
+    }
+  }
+  return "internal_error";
+}
+
+
+
+
 Deno.serve(async (_req) => {
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -15,7 +34,7 @@ Deno.serve(async (_req) => {
 
     const { data, error } = await supabase.rpc("run_maintenance");
     if (error) {
-      return new Response(JSON.stringify({ ok: false, error: error.message }), {
+      return new Response(JSON.stringify({ ok: false, error: publicError(error) }), {
         status: 500,
         headers: { "Content-Type": "application/json" },
       });
@@ -38,7 +57,7 @@ Deno.serve(async (_req) => {
       { headers: { "Content-Type": "application/json" } },
     );
   } catch (e) {
-    return new Response(JSON.stringify({ ok: false, error: String(e) }), {
+    return new Response(JSON.stringify({ ok: false, error: publicError(e) }), {
       status: 500,
       headers: { "Content-Type": "application/json" },
     });
