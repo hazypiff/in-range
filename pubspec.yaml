@@ -15,20 +15,32 @@ dependencies:
   # Backend & State (core to Phase 0)
   supabase_flutter: ^2.8.0
   riverpod: ^2.6.1
+  flutter_riverpod: ^2.6.1
   riverpod_annotation: ^2.6.1
   freezed_annotation: ^2.4.4
 
   # BLE + Location (per 2026 research - flutter_blue_plus preferred)
   flutter_blue_plus: ^2.3.10
-  flutter_ble_peripheral: ^0.1.4   # For advertising ephemeral tokens
+  flutter_ble_peripheral: ^2.1.1   # For advertising ephemeral tokens
   geolocator: ^13.0.2
   permission_handler: ^11.3.1
+  flutter_dotenv: ^5.2.1
+
+  # Foreground service for reliable background BLE/GPS (required on modern Android)
+  flutter_background_service: ^5.0.0
+  flutter_background_service_android: ^6.0.0
 
   # Crypto + Utils
   crypto: ^3.0.6
   uuid: ^4.5.1
   intl: ^0.19.0
   collection: ^1.18.0
+  shared_preferences: ^2.5.5
+  sqflite: ^2.4.3
+  path: ^1.9.1
+  image_picker: ^1.2.3
+  path_provider: ^2.1.6
+  flutter_local_notifications: ^22.0.1
 
 dev_dependencies:
   flutter_test:
@@ -44,5 +56,5 @@ dev_dependencies:
 flutter:
   uses-material-design: true
 
-  # assets:
-  #   - assets/images/
+  assets:
+    - .env

@@ -19,8 +19,7 @@ lcov.info
 *.iws
 .DS_Store
 
-# Flutter platform folders (generated via `flutter create .` later)
-android/
+# Flutter platform folders — KEEP android/ (project scaffolding), ignore the rest
 ios/
 linux/
 macos/
@@ -39,6 +38,11 @@ web/
 *.keystore
 *.jks
 key.properties
+android/local.properties
+.supabase_access_token
+google-services.json
+GoogleService-Info.plist
+**/google-services.json
 
 # Supabase local
 supabase/.branches/
@@ -47,5 +51,13 @@ supabase/.temp/
 # Shorebird
 .shorebird/
 
+# Lab artifacts / smoke screenshots
+docs/*.png
+docs/smoke/
+
 # Misc
 *.log
+*.apk
+*.aab
+
+android/app/src/main/AndroidManifest.xml.bak

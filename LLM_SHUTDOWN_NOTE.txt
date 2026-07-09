@@ -1,0 +1,21 @@
+LOCAL LLM SHUTDOWN NOTE - 2026-07-07
+
+Local LLM (ollama/llama-server instances) shut down via kill -9 to free RAM (~4-5GB) and reduce load causing freezes during Flutter setup.
+
+Reason: High memory (llama ~32% mem), high load, disk pressure + Flutter SDK download/extract.
+
+Will restart after app is finished and tested on devices.
+
+Restart command: ollama serve &   (or original: /usr/local/lib/ollama/llama-server with model)
+
+At shutdown:
+- Flutter 3.44.5 ready
+- pubspec.lock present
+- Android ready
+- 4 devices connected
+- pub get + build_runner done
+- Monitoring scripts active
+
+Next: flutter run -d 324c305855433498 to launch and test beacon on phone.
+
+Do not restart LLM until done.

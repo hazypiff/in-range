@@ -1,0 +1,58 @@
+# Supabase CLI config — In Range
+# https://supabase.com/docs/guides/local-development/cli/config
+
+project_id = "in-range"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 15
+
+[db.migrations]
+enabled = true
+schema_paths = []
+
+[db.seed]
+enabled = true
+sql_paths = ["./seed/seed_test_data.sql"]
+
+[studio]
+enabled = true
+port = 54323
+
+[auth]
+enabled = true
+site_url = "io.inrange.app://login-callback"
+additional_redirect_urls = [
+  "io.inrange.app://login-callback",
+  "http://localhost:3000",
+]
+enable_signup = true
+enable_anonymous_sign_ins = true
+
+[auth.email]
+enable_signup = true
+enable_confirmations = false
+
+[auth.sms]
+enable_signup = true
+enable_confirmations = true
+
+[functions.send-push]
+verify_jwt = false
+
+[functions.miles-correlate]
+verify_jwt = false
+
+[functions.photo-review]
+verify_jwt = false
+
+[functions.maintenance]
+verify_jwt = false

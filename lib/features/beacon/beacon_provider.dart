@@ -1,28 +1,54 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:in_range/core/permissions/permission_service.dart';
+import 'package:in_range/core/prefs/app_prefs.dart';
 import 'package:in_range/features/beacon/beacon_service.dart';
+import 'package:in_range/features/encounters/local_encounter_store.dart';
 
-/// Configuration providers — replace these with secrets loaded from .env /
-/// flutter_dotenv or a remote config before shipping.
 final _userIdSecretProvider = Provider<String>((ref) {
-  throw UnimplementedError('Provide userIdSecret (from auth session) in override');
+  return dotenv.maybeGet('INRANGE_USER_ID_SECRET') ?? 'inrange-user-id-fallback';
 });
 
 final _hmacSecretProvider = Provider<String>((ref) {
-  throw UnimplementedError('Provide hmacSecret (from remote config) in override');
+  return dotenv.maybeGet('INRANGE_HMAC_SECRET') ?? 'inrange-hmac-fallback';
 });
 
-/// Provides the user's currently selected range ('feet' or 'miles').
-final selectedRangeProvider = StateProvider<String>((ref) => 'feet');
+/// Beacon feet range — persisted across restarts.
+final selectedRangeProvider =
+    StateNotifierProvider<SelectedRangeController, String>((ref) {
+  return SelectedRangeController(ref.watch(appPrefsProvider));
+});
 
-/// Singleton BeaconService wired with secrets from upstream providers.
+class SelectedRangeController extends StateNotifier<String> {
+  SelectedRangeController(this._prefs) : super(_prefs.beaconRange);
+  final AppPrefs _prefs;
+
+  Future<void> set(String range) async {
+    state = range;
+    await _prefs.setBeaconRange(range);
+  }
+}
+
 final beaconServiceProvider = Provider<BeaconService>((ref) {
+  final store = ref.read(localEncounterStoreProvider.notifier);
   return BeaconService(
     userIdSecret: ref.watch(_userIdSecretProvider),
     hmacSecret: ref.watch(_hmacSecretProvider),
+    onSighting: ({
+      required String correlationId,
+      required int rssi,
+      required String rangeType,
+    }) {
+      store.noteSighting(
+        correlationId: correlationId,
+        rssi: rssi,
+        rangeType: rangeType,
+      );
+    },
   );
 });
 
-/// Reactive beacon status (on/off + current token expiry if any).
 class BeaconState {
   const BeaconState({this.isOn = false, this.tokenExpiresAt});
   final bool isOn;
@@ -35,26 +61,32 @@ class BeaconState {
 }
 
 class BeaconController extends StateNotifier<BeaconState> {
-  BeaconController(this._service, this._rangeReader) : super(const BeaconState());
+  BeaconController(this._service, this._ref) : super(const BeaconState());
 
   final BeaconService _service;
-  final Reader _rangeReader;
+  final Ref _ref;
 
   Future<void> toggle() async {
     if (state.isOn) {
       await _service.turnOffBeacon();
       state = const BeaconState();
     } else {
-      final range = _rangeReader(selectedRangeProvider);
+      final perm = await PermissionService.requestAllForBeacon();
+      if (!perm.canUseBeacon) {
+        state = const BeaconState();
+        return;
+      }
+      final range = _ref.read(selectedRangeProvider);
       try {
         await _service.turnOnBeacon(rangeType: range);
         state = BeaconState(
           isOn: true,
           tokenExpiresAt: _service.currentToken?.expiresAt,
         );
-      } catch (_) {
-        // Claim failed — surface as off.
+      } catch (e) {
+        debugPrint('turnOnBeacon failed: $e');
         state = const BeaconState();
+        rethrow;
       }
     }
   }
@@ -62,5 +94,5 @@ class BeaconController extends StateNotifier<BeaconState> {
 
 final beaconControllerProvider =
     StateNotifierProvider<BeaconController, BeaconState>((ref) {
-  return BeaconController(ref.watch(beaconServiceProvider), ref.read);
+  return BeaconController(ref.watch(beaconServiceProvider), ref);
 });

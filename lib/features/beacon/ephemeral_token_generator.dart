@@ -8,7 +8,7 @@ import 'package:crypto/crypto.dart';
 ///
 /// Implements the v1 token format from docs/ephemeral-token-spec.md:
 ///
-///   <user_hash_8bytes>|<epoch_4bytes>|<random_16bytes>|<hmac_8bytes>
+///   `user_hash_8bytes|epoch_4bytes|random_16bytes|hmac_8bytes`
 ///
 /// - user_hash: first 8 bytes of HMAC-SHA256(user_id_secret, "inrange-token-v1")
 ///   (never the raw user UUID).

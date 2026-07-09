@@ -121,9 +121,9 @@ CREATE TABLE public.token_claims (
 CREATE INDEX idx_token_claims_lookup 
   ON public.token_claims (token, valid_from, valid_until);
 
+-- Note: cannot use NOW() in index predicate (must be IMMUTABLE).
 CREATE INDEX idx_token_claims_user_active 
-  ON public.token_claims (user_id, valid_until) 
-  WHERE valid_until > NOW();
+  ON public.token_claims (user_id, valid_until);
 
 -- =============================================================================
 -- SIGHTINGS (What OTHER devices were observed - BLE + GPS)
@@ -156,10 +156,9 @@ CREATE INDEX idx_sightings_observer
 CREATE INDEX idx_sightings_geo 
   ON public.sightings USING GIST (observer_location);
 
--- Optional: composite for recent sightings cleanup queries
+-- Cleanup queries filter by created_at at runtime (no NOW() in index predicate).
 CREATE INDEX idx_sightings_recent_cleanup 
-  ON public.sightings (created_at) 
-  WHERE created_at < NOW() - INTERVAL '7 days';   -- Example retention
+  ON public.sightings (created_at);
 
 -- =============================================================================
 -- ENCOUNTERS (Server-created real-world crossings)
@@ -277,10 +276,10 @@ $$;
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.record_sighting(
   p_observed_token TEXT,
-  p_rssi INTEGER DEFAULT NULL,
-  p_observed_at TIMESTAMPTZ DEFAULT NOW(),
   p_lat DOUBLE PRECISION,
   p_lon DOUBLE PRECISION,
+  p_rssi INTEGER DEFAULT NULL,
+  p_observed_at TIMESTAMPTZ DEFAULT NOW(),
   p_range public.range_type DEFAULT NULL
 )
 RETURNS BIGINT   -- returns the sighting id

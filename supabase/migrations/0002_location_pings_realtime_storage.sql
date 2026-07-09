@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS public.location_pings (
   id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   user_id         UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   geo             GEOGRAPHY(POINT, 4326) NOT NULL,
-  range_type      RANGE_TYPE NOT NULL DEFAULT 'miles',
+  range_type      public.range_type NOT NULL DEFAULT 'miles_10',
   neighborhood    TEXT,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
