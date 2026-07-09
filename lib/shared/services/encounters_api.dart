@@ -72,6 +72,33 @@ class EncountersApi {
     }
   }
 
+  /// Like/pass by peer user id (Locals). Ensures encounter then swipes.
+  Future<Map<String, dynamic>?> swipeUser({
+    required String otherUserId,
+    required String action,
+    String range = 'miles_10',
+    String neighborhood = 'Nearby',
+  }) async {
+    if (!cloudReady) return null;
+    try {
+      final response = await InRangeSupabase.client.rpc(
+        'swipe_user',
+        params: {
+          'p_other_user_id': otherUserId,
+          'p_action': action,
+          'p_range': range,
+          'p_neighborhood': neighborhood,
+        },
+      );
+      if (response is Map<String, dynamic>) return response;
+      if (response is Map) return Map<String, dynamic>.from(response);
+      return null;
+    } catch (e) {
+      debugPrint('swipe_user: $e');
+      rethrow;
+    }
+  }
+
   Future<int?> recordLocationPing({
     required double lat,
     required double lon,
@@ -155,25 +182,27 @@ class EncountersApi {
     }
   }
 
-  Future<int?> sendMessage({
+  /// Returns server message id. Throws on failure so UI can roll back optimistic send.
+  Future<int> sendMessage({
     required int matchId,
     required String content,
     String messageType = 'text',
     Map<String, dynamic>? metadata,
   }) async {
-    if (!cloudReady) return null;
-    try {
-      final id = await InRangeSupabase.client.rpc('send_message', params: {
-        'p_match_id': matchId,
-        'p_content': content,
-        'p_message_type': messageType,
-        'p_metadata': metadata,
-      });
-      return id is int ? id : int.tryParse('$id');
-    } catch (e) {
-      debugPrint('send_message: $e');
-      return null;
+    if (!cloudReady) {
+      throw StateError('Cloud chat unavailable — offline or not signed in');
     }
+    final id = await InRangeSupabase.client.rpc('send_message', params: {
+      'p_match_id': matchId,
+      'p_content': content,
+      'p_message_type': messageType,
+      'p_metadata': metadata,
+    });
+    final parsed = id is int ? id : int.tryParse('$id');
+    if (parsed == null) {
+      throw StateError('send_message returned no id');
+    }
+    return parsed;
   }
 
   Future<void> blockUser(String userId) async {

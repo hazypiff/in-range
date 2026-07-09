@@ -186,11 +186,25 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
   Future<void> _send({String? imagePath}) async {
     final t = _ctrl.text;
     _ctrl.clear();
-    await ref.read(matchStoreProvider.notifier).sendMessage(
-          correlationId: widget.correlationId,
-          text: t,
-          imagePath: imagePath,
-        );
+    try {
+      await ref.read(matchStoreProvider.notifier).sendMessage(
+            correlationId: widget.correlationId,
+            text: t,
+            imagePath: imagePath,
+          );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Message not sent: $e',
+          ),
+          backgroundColor: Colors.red.shade700,
+        ),
+      );
+      // Restore draft so user can retry
+      if (t.isNotEmpty) _ctrl.text = t;
+    }
   }
 
   Future<void> _pickPhoto() async {

@@ -8,22 +8,41 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 class AppConfig {
   AppConfig._();
 
-  static String get supabaseUrl =>
-      dotenv.maybeGet('SUPABASE_URL')?.trim() ?? '';
+  /// `--dart-define=KEY=value` wins (CI/release); then dotenv.
+  static String _env(String key) {
+    switch (key) {
+      case 'SUPABASE_URL':
+        const v = String.fromEnvironment('SUPABASE_URL');
+        if (v.isNotEmpty) return v.trim();
+      case 'SUPABASE_PUBLISHABLE_KEY':
+        const v = String.fromEnvironment('SUPABASE_PUBLISHABLE_KEY');
+        if (v.isNotEmpty) return v.trim();
+      case 'SUPABASE_ANON_KEY':
+        const v = String.fromEnvironment('SUPABASE_ANON_KEY');
+        if (v.isNotEmpty) return v.trim();
+      case 'INRANGE_HMAC_SECRET':
+        const v = String.fromEnvironment('INRANGE_HMAC_SECRET');
+        if (v.isNotEmpty) return v.trim();
+      case 'INRANGE_USER_ID_SECRET':
+        const v = String.fromEnvironment('INRANGE_USER_ID_SECRET');
+        if (v.isNotEmpty) return v.trim();
+    }
+    return dotenv.maybeGet(key)?.trim() ?? '';
+  }
 
-  static String get supabaseAnonKey =>
-      dotenv.maybeGet('SUPABASE_PUBLISHABLE_KEY')?.trim() ??
-      dotenv.maybeGet('SUPABASE_ANON_KEY')?.trim() ??
-      '';
+  static String get supabaseUrl => _env('SUPABASE_URL');
 
-  // No hardcoded fallback — a missing secret must not silently degrade to a
-  // value embedded in the APK. Returns empty string when unset; BeaconService
-  // refuses to advertise when empty (safety, not silent fallback).
-  static String get hmacSecret =>
-      dotenv.maybeGet('INRANGE_HMAC_SECRET')?.trim() ?? '';
+  static String get supabaseAnonKey {
+    final k = _env('SUPABASE_PUBLISHABLE_KEY');
+    if (k.isNotEmpty) return k;
+    return _env('SUPABASE_ANON_KEY');
+  }
 
-  static String get userIdSecret =>
-      dotenv.maybeGet('INRANGE_USER_ID_SECRET')?.trim() ?? '';
+  // No hardcoded fallback — missing secret must not silently degrade to a
+  // value embedded in the APK. BeaconService refuses to advertise when empty.
+  static String get hmacSecret => _env('INRANGE_HMAC_SECRET');
+
+  static String get userIdSecret => _env('INRANGE_USER_ID_SECRET');
 
   /// True when both crypto secrets are present. When false, the beacon cannot
   /// safely advertise (forged tokens would be trivial).

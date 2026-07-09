@@ -270,17 +270,33 @@ class MatchStore extends StateNotifier<List<MatchRecord>> {
     String? gender,
     List<String>? interests,
     List<String>? photoPaths,
+    String? otherUserId,
+    String range = 'miles_10',
   }) async {
-    // Server swipe when correlationId is a numeric encounter id
+    // Server swipe: numeric id = encounter_id; UUID = other user (Locals).
     if (AppConfig.hasRealSupabase) {
       final encId = int.tryParse(correlationId);
-      if (encId != null) {
-        try {
-          final res = await EncountersApi().swipe(
+      final isUuid = correlationId.contains('-') && correlationId.length >= 32;
+      try {
+        Map<String, dynamic>? res;
+        if (encId != null) {
+          res = await EncountersApi().swipe(
             encounterId: encId,
             action: 'like',
           );
-          if (res != null && res['matched'] == true) {
+        } else if (isUuid || otherUserId != null) {
+          res = await EncountersApi().swipeUser(
+            otherUserId: otherUserId ?? correlationId,
+            action: 'like',
+            range: range,
+            neighborhood: neighborhood,
+          );
+        }
+        if (res != null) {
+          final likedOnly = likes..add(correlationId);
+          await _prefs.setStringList('liked_corrs', likedOnly.toList());
+          await _persistHistoryLike(correlationId, displayName, neighborhood);
+          if (res['matched'] == true) {
             final matchId = res['match_id']?.toString() ?? correlationId;
             await _upsertMatch(
               correlationId: matchId,
@@ -291,21 +307,18 @@ class MatchStore extends StateNotifier<List<MatchRecord>> {
               gender: gender,
               interests: interests ?? const [],
               photoPaths: photoPaths ?? const [],
-              otherUserId: res['other_user_id']?.toString(),
+              otherUserId:
+                  res['other_user_id']?.toString() ?? otherUserId,
               isServerMatch: true,
             );
             await LocalNotify.instance.notifyMatch(displayName);
-            await _persistHistoryLike(correlationId, displayName, neighborhood);
-            return;
           }
-          // Liked but not mutual yet — still record local history
-          await _persistHistoryLike(correlationId, displayName, neighborhood);
-          final likedOnly = likes..add(correlationId);
-          await _prefs.setStringList('liked_corrs', likedOnly.toList());
           return;
-        } catch (e) {
-          debugPrint('Server like failed, local fallback: $e');
         }
+      } catch (e) {
+        debugPrint('Server like failed, local fallback: $e');
+        // Fall through to local only when not a pure cloud id
+        if (encId != null || isUuid) rethrow;
       }
     }
 
@@ -378,15 +391,26 @@ class MatchStore extends StateNotifier<List<MatchRecord>> {
     String correlationId, {
     String displayName = 'Someone',
     String neighborhood = 'Nearby',
+    String? otherUserId,
+    String range = 'miles_10',
   }) async {
     if (AppConfig.hasRealSupabase) {
       final encId = int.tryParse(correlationId);
-      if (encId != null) {
-        try {
+      final isUuid = correlationId.contains('-') && correlationId.length >= 32;
+      try {
+        if (encId != null) {
           await EncountersApi().swipe(encounterId: encId, action: 'pass');
-        } catch (e) {
-          debugPrint('Server pass failed, local fallback: $e');
+        } else if (isUuid || otherUserId != null) {
+          await EncountersApi().swipeUser(
+            otherUserId: otherUserId ?? correlationId,
+            action: 'pass',
+            range: range,
+            neighborhood: neighborhood,
+          );
         }
+      } catch (e) {
+        debugPrint('Server pass failed, local fallback: $e');
+        if (encId != null || isUuid) rethrow;
       }
     }
     final p = passes..add(correlationId);
@@ -544,13 +568,18 @@ class MatchStore extends StateNotifier<List<MatchRecord>> {
     await _persist();
   }
 
-  Future<void> sendMessage({
+  /// Sends a message. For server matches, fails loudly if cloud send fails
+  /// (optimistic bubble is removed). Returns true if permanently kept.
+  Future<bool> sendMessage({
     required String correlationId,
     required String text,
     String? imagePath,
   }) async {
     final t = text.trim();
-    if (t.isEmpty && imagePath == null) return;
+    if (t.isEmpty && imagePath == null) return false;
+
+    final matchId = int.tryParse(correlationId);
+    final isServerMatch = matchId != null && AppConfig.hasRealSupabase;
 
     final localId = DateTime.now().microsecondsSinceEpoch.toString();
     final localMsg = ChatMessage(
@@ -571,44 +600,55 @@ class MatchStore extends StateNotifier<List<MatchRecord>> {
     ];
     await _persist();
 
-    // Cloud path: server match ids are numeric
-    final matchId = int.tryParse(correlationId);
-    if (AppConfig.hasRealSupabase && matchId != null && t.isNotEmpty) {
+    if (isServerMatch && t.isNotEmpty) {
       try {
         final serverId = await EncountersApi().sendMessage(
           matchId: matchId,
           content: t,
         );
-        if (serverId != null) {
-          // Replace optimistic id with server id when possible
-          state = [
-            for (final m in state)
-              if (m.correlationId == correlationId)
-                m.copyWith(
-                  messages: [
-                    for (final msg in m.messages)
-                      if (msg.id == localId)
-                        ChatMessage(
-                          id: '$serverId',
-                          fromMe: true,
-                          text: msg.text,
-                          at: msg.at,
-                          imagePath: msg.imagePath,
-                        )
-                      else
-                        msg,
-                  ],
-                  isServerMatch: true,
-                )
-              else
-                m,
-          ];
-          await _persist();
-        }
+        state = [
+          for (final m in state)
+            if (m.correlationId == correlationId)
+              m.copyWith(
+                messages: [
+                  for (final msg in m.messages)
+                    if (msg.id == localId)
+                      ChatMessage(
+                        id: '$serverId',
+                        fromMe: true,
+                        text: msg.text,
+                        at: msg.at,
+                        imagePath: msg.imagePath,
+                      )
+                    else
+                      msg,
+                ],
+                isServerMatch: true,
+              )
+            else
+              m,
+        ];
+        await _persist();
+        return true;
       } catch (e) {
-        debugPrint('send_message RPC failed (local kept): $e');
+        debugPrint('send_message RPC failed — rolling back optimistic: $e');
+        // Remove optimistic bubble so UI does not pretend the message sent
+        state = [
+          for (final m in state)
+            if (m.correlationId == correlationId)
+              m.copyWith(
+                messages: m.messages.where((msg) => msg.id != localId).toList(),
+              )
+            else
+              m,
+        ];
+        await _persist();
+        rethrow;
       }
     }
+
+    // Local-only match (lab BLE): keep message offline
+    return true;
   }
 
   /// Safe lookup — null when match was pruned (expired / deleted).

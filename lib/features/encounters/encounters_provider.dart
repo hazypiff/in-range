@@ -14,14 +14,14 @@ final myEncountersProvider =
   return repo.getMyEncounters();
 });
 
-/// Hybrid feed: server rows when live, else local BLE store as maps.
-/// SwipeFeed currently uses LocalEncounter directly; this provider is for
-/// server-first UIs and debugging.
+/// Hybrid feed maps (server first when live). SwipeFeed uses [SwipeCard] deck.
 final hybridEncountersProvider =
     Provider<List<Map<String, dynamic>>>((ref) {
   final serverAsync = ref.watch(myEncountersProvider);
   final server = serverAsync.valueOrNull ?? const [];
-  if (server.isNotEmpty && AppConfig.hasRealSupabase) {
+  if (server.isNotEmpty &&
+      AppConfig.hasRealSupabase &&
+      AppConfig.preferServerFeeds) {
     return server;
   }
 

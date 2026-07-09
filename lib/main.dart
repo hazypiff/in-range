@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -15,13 +18,23 @@ import 'package:shared_preferences/shared_preferences.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Load .env (with secrets) atop .env.example (with placeholders).
-// If .env is missing or doesn't ship in the asset bundle, the example
-// fallback keeps the app alive in offline/local mode without crashing.
-await dotenv.load(
-  fileName: '.env',
-  mergeWith: {'fileName': '.env.example'},
-);
+  // Reproducible clone/CI: only `.env.example` is a required asset.
+  // Secrets: (1) filesystem `.env` in debug/lab, (2) --dart-define=… at build.
+  await dotenv.load(fileName: '.env.example');
+  if (!kReleaseMode) {
+    try {
+      final file = File('.env');
+      if (await file.exists()) {
+        dotenv.testLoad(
+          fileInput: await file.readAsString(),
+          mergeWith: Map<String, String>.from(dotenv.env),
+        );
+        debugPrint('Loaded filesystem .env overlay (debug/lab)');
+      }
+    } catch (e) {
+      debugPrint('Filesystem .env skip: $e');
+    }
+  }
   final prefs = await SharedPreferences.getInstance();
   final localDb = await LocalDb.open();
   await LocalNotify.instance.init();

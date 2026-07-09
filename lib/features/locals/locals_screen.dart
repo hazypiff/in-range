@@ -255,15 +255,26 @@ extension on _LocalsScreenState {
             badge: boosted ? 'Boosted' : null,
             dismissed: matchStore.isDismissed(uid),
             onTap: () async {
-              await ref.read(matchStoreProvider.notifier).like(
-                    correlationId: uid,
-                    displayName: 'Someone nearby',
-                    neighborhood: hood,
+              try {
+                // UUID → swipe_user RPC (creates/finds encounter then swipes).
+                await ref.read(matchStoreProvider.notifier).like(
+                      correlationId: uid,
+                      displayName: 'Someone nearby',
+                      neighborhood: hood,
+                      otherUserId: uid,
+                      range: _range,
+                    );
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Liked from Locals')),
                   );
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Liked from Locals')),
-                );
+                }
+              } catch (e) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Like failed: $e')),
+                  );
+                }
               }
             },
           );

@@ -57,5 +57,7 @@ flutter:
   uses-material-design: true
 
   assets:
+    # Required: reproducible CI/clone builds. Optional local secrets via .env
+    # are loaded when present in the asset bundle (gitignored — add only for
+    # device builds: flutter build with a copied .env, or use --dart-define).
     - .env.example
-    - .env

@@ -80,7 +80,7 @@ Deno.serve(async (req) => {
           neighborhood: hood,
         });
         if (pingErr) {
-          return json({ ok: false, error: pingErr.message }, 400);
+          return json({ ok: false, error: publicError(pingErr) }, 400);
         }
       }
     }

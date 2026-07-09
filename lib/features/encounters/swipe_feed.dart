@@ -8,7 +8,9 @@ import 'package:in_range/core/notifications/local_notify.dart';
 import 'package:in_range/core/prefs/app_prefs.dart';
 import 'package:in_range/core/privacy/safety_store.dart';
 import 'package:in_range/core/session/app_session.dart';
+import 'package:in_range/features/encounters/encounters_provider.dart';
 import 'package:in_range/features/encounters/local_encounter_store.dart';
+import 'package:in_range/features/encounters/swipe_card.dart';
 import 'package:in_range/features/matches/match_store.dart';
 import 'package:in_range/features/widgets/ad_banner.dart';
 
@@ -58,6 +60,20 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
     }
   }
 
+  List<SwipeCard> _deck(WidgetRef ref) {
+    final band = ref.watch(swipeBandFilterProvider);
+    final matchStore = ref.watch(matchStoreProvider.notifier);
+    final safety = ref.watch(safetyStoreProvider);
+    final server = ref.watch(myEncountersProvider).valueOrNull ?? const [];
+    final local = ref.watch(localEncounterStoreProvider.notifier).visible;
+    return buildHybridSwipeDeck(
+      serverRows: server,
+      localVisible: local,
+      isDismissed: matchStore.isDismissed,
+      blocked: safety.blocked,
+    ).where((c) => c.matchesBandFilter(band)).toList();
+  }
+
   String _fmt(Duration d) {
     final h = d.inHours;
     final m = d.inMinutes.remainder(60);
@@ -84,36 +100,55 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
     );
   }
 
-  Future<void> _doPass(LocalEncounter e) async {
-    await ref.read(matchStoreProvider.notifier).pass(
-          e.correlationId,
-          displayName: e.displayName,
-          neighborhood: e.neighborhoodLabel,
+  Future<void> _doPass(SwipeCard c) async {
+    try {
+      await ref.read(matchStoreProvider.notifier).pass(
+            c.id,
+            displayName: c.displayLabel,
+            neighborhood: c.neighborhood,
+            otherUserId: c.otherUserId,
+            range: c.rangeType,
+          );
+      await _showUndo();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Pass failed: $e')),
         );
-    await _showUndo();
+      }
+    }
   }
 
-  Future<void> _doLike(LocalEncounter e) async {
+  Future<void> _doLike(SwipeCard c) async {
     final me = ref.read(sessionControllerProvider);
-    await ref.read(matchStoreProvider.notifier).like(
-          correlationId: e.correlationId,
-          displayName: e.displayName,
-          neighborhood: e.neighborhoodLabel,
-          // Local unlock profile uses placeholder peer data.
-          bio: 'We crossed paths near ${e.neighborhoodLabel}.',
-          age: 27,
-          gender: 'prefer-not-to-say',
-          interests: const ['Coffee', 'Music'],
-          photoPaths: me.photoPaths,
+    try {
+      await ref.read(matchStoreProvider.notifier).like(
+            correlationId: c.id,
+            displayName: c.displayLabel,
+            neighborhood: c.neighborhood,
+            bio: 'We crossed paths near ${c.neighborhood}.',
+            age: 27,
+            gender: 'prefer-not-to-say',
+            interests: const ['Coffee', 'Music'],
+            photoPaths: c.photoUrls.isNotEmpty ? c.photoUrls : me.photoPaths,
+            otherUserId: c.otherUserId,
+            range: c.rangeType,
+          );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Liked'),
+            duration: Duration(seconds: 1),
+          ),
         );
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('It\'s a match 🔥'),
-          duration: Duration(seconds: 1),
-        ),
-      );
-      await _showUndo();
+        await _showUndo();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Like failed: $e')),
+        );
+      }
     }
   }
 
@@ -149,26 +184,38 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
   Widget build(BuildContext context) {
     final band = ref.watch(swipeBandFilterProvider);
     final pending = ref.watch(pendingRevealCountProvider);
-    final matchStore = ref.watch(matchStoreProvider.notifier);
-    final store = ref.watch(localEncounterStoreProvider.notifier);
-    final safety = ref.watch(safetyStoreProvider);
     final newCount = ref.watch(newEncounterCountProvider);
+    // Keep server encounters warm
+    ref.watch(myEncountersProvider);
 
     if (newCount > _prevNew) {
       LocalNotify.instance.notifyNewEncounter('new');
     }
     _prevNew = newCount;
 
-    final cards = store.visible.where((e) {
-      if (matchStore.isDismissed(e.correlationId)) return false;
-      if (safety.blocked.contains(e.correlationId)) return false;
-      if (!e.matchesBandFilter(band)) return false;
-      return true;
-    }).toList();
+    final cards = _deck(ref);
+    final serverCount = cards.where((c) => c.isServer).length;
 
     return Column(
       children: [
         const FreeAdBanner(),
+        if (AppConfig.hasRealSupabase && serverCount > 0)
+          Material(
+            color: Colors.green.shade50,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              child: Row(
+                children: [
+                  const Icon(Icons.cloud_done, size: 16, color: Colors.green),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Cloud deck · $serverCount verified encounter${serverCount == 1 ? "" : "s"}',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+          ),
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
@@ -214,7 +261,7 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
                   band: band,
                 )
               : Dismissible(
-                  key: ValueKey(cards.first.correlationId),
+                  key: ValueKey(cards.first.id),
                   background: Container(
                     color: Colors.red.shade100,
                     alignment: Alignment.centerLeft,
@@ -263,15 +310,15 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
                   iconColor: Colors.orange.shade800,
                   onTap: () async {
                     final e = cards.first;
+                    final target = e.otherUserId ?? e.id;
                     await ref.read(safetyStoreProvider.notifier).report(
-                          targetId: e.correlationId,
+                          targetId: target,
                           reason: 'Reported from swipe feed',
                         );
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Reported & blocked')),
-                      );
-                    }
+                    if (!context.mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Reported & blocked')),
+                    );
                   },
                 ),
               ],
@@ -281,21 +328,33 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
     );
   }
 
-  Widget _buildCard(LocalEncounter e) {
-    final me = ref.watch(sessionControllerProvider);
-    final letter =
-        e.displayName.isNotEmpty ? e.displayName[0].toUpperCase() : '?';
-    final remaining = e.timeRemaining;
-    final progress = e.expiresAt == null
-        ? 0.0
-        : remaining.inMilliseconds /
-            LocalEncounter.feetLifespan.inMilliseconds;
+  Widget _buildCard(SwipeCard e) {
+    final letter = '?';
+    final progress = e.expiryProgress;
+
+    Widget photo;
+    if (e.photoUrls.isNotEmpty) {
+      final url = e.photoUrls.first;
+      photo = url.startsWith('http')
+          ? Image.network(
+              url,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => _letterAvatar(letter),
+            )
+          : (File(url).existsSync()
+              ? Image.file(File(url), fit: BoxFit.cover)
+              : _letterAvatar(letter));
+    } else {
+      photo = _letterAvatar(letter);
+    }
 
     return Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 360),
         child: GestureDetector(
-          onLongPress: () => _aliasDialog(e.correlationId, e.displayName),
+          onLongPress: e.local != null
+              ? () => _aliasDialog(e.id, e.local!.displayName)
+              : null,
           child: Card(
             elevation: 4,
             clipBehavior: Clip.antiAlias,
@@ -310,33 +369,34 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
                   minHeight: 4,
                   backgroundColor: Colors.grey.shade200,
                 ),
-                Expanded(
-                  child: me.photoPaths.isNotEmpty
-                      ? Image.file(
-                          File(me.photoPaths.first),
-                          fit: BoxFit.cover,
-                          // Peer photo unknown locally — show own as placeholder art
-                          // until server profiles exist.
-                          color: Colors.black26,
-                          colorBlendMode: BlendMode.darken,
-                          errorBuilder: (_, __, ___) => _letterAvatar(letter),
-                        )
-                      : _letterAvatar(letter),
-                ),
+                Expanded(child: photo),
                 Padding(
                   padding: const EdgeInsets.all(20),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text(
-                        'Someone nearby',
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w700,
-                        ),
+                      Row(
+                        children: [
+                          const Expanded(
+                            child: Text(
+                              'Someone nearby',
+                              style: TextStyle(
+                                fontSize: 22,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                          if (e.isServer)
+                            Chip(
+                              label: const Text('Cloud',
+                                  style: TextStyle(fontSize: 10)),
+                              visualDensity: VisualDensity.compact,
+                              backgroundColor: Colors.green.shade50,
+                            ),
+                        ],
                       ),
                       const SizedBox(height: 6),
-                      Text(e.neighborhoodLabel,
+                      Text(e.neighborhood,
                           style: TextStyle(color: Colors.grey.shade800)),
                       const SizedBox(height: 8),
                       Row(
@@ -366,7 +426,9 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        'Swipe ← pass · → like · long-press alias · photo+area only',
+                        e.isServer
+                            ? 'Photo + neighborhood only · like calls server'
+                            : 'Local BLE · swipe · long-press alias',
                         style: TextStyle(
                             fontSize: 11, color: Colors.grey.shade600),
                       ),

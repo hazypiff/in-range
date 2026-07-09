@@ -88,7 +88,7 @@ Deno.serve(async (req) => {
       });
 
       if (aiErr) {
-        results.push({ id: row.id, error: aiErr.message });
+        results.push({ id: row.id, error: publicError(aiErr) });
         continue;
       }
 
@@ -102,7 +102,7 @@ Deno.serve(async (req) => {
           score,
           passed,
           auto_approved: !decErr,
-          error: decErr?.message,
+          error: decErr ? publicError(decErr) : undefined,
         });
       } else {
         results.push({
