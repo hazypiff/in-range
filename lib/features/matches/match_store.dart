@@ -163,7 +163,10 @@ class MatchStore extends StateNotifier<List<MatchRecord>> {
   }
 
   final SharedPreferences _prefs;
-  static const autoMatchOnLike = true;
+  // Demo/offline convenience: immediately create a local match on like. Must
+  // stay OFF when real Supabase is configured — a real match requires a mutual
+  // server swipe (handled above via EncountersApi.swipe → res['matched']).
+  static bool get autoMatchOnLike => !AppConfig.hasRealSupabase;
 
   UndoAction? lastUndo;
   List<HistoryEntry> history = [];
@@ -406,16 +409,10 @@ class MatchStore extends StateNotifier<List<MatchRecord>> {
       gender: gender ?? 'prefer-not-to-say',
       interests: interests.isEmpty ? const ['Music', 'Travel'] : interests,
       photoPaths: photoPaths,
-      messages: [
-        ChatMessage(
-          id: 'sys1',
-          fromMe: false,
-          text:
-              'You matched! Hey! I saw you were near $neighborhood. '
-              'Small world — what brought you there?',
-          at: DateTime.now(),
-        ),
-      ],
+      // No canned opener — a real match starts with zero messages until a
+      // user sends one. The previous "I saw you were near..." auto-opener was
+      // deceptive (appeared to come from the other person).
+      messages: const [],
     );
     state = [m, ...state];
     await _persist();

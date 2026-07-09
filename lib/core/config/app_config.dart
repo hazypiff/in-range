@@ -16,12 +16,19 @@ class AppConfig {
       dotenv.maybeGet('SUPABASE_ANON_KEY')?.trim() ??
       '';
 
+  // No hardcoded fallback — a missing secret must not silently degrade to a
+  // value embedded in the APK. Returns empty string when unset; BeaconService
+  // refuses to advertise when empty (safety, not silent fallback).
   static String get hmacSecret =>
-      dotenv.maybeGet('INRANGE_HMAC_SECRET')?.trim() ?? 'inrange-hmac-fallback';
+      dotenv.maybeGet('INRANGE_HMAC_SECRET')?.trim() ?? '';
 
   static String get userIdSecret =>
-      dotenv.maybeGet('INRANGE_USER_ID_SECRET')?.trim() ??
-      'inrange-user-id-fallback';
+      dotenv.maybeGet('INRANGE_USER_ID_SECRET')?.trim() ?? '';
+
+  /// True when both crypto secrets are present. When false, the beacon cannot
+  /// safely advertise (forged tokens would be trivial).
+  static bool get hasCryptoSecrets =>
+      hmacSecret.isNotEmpty && userIdSecret.isNotEmpty;
 
   /// Hours after first mutual BLE sighting before a person appears on
   /// the Encounters tab. 0 = instant (test mode). Production target is 4.

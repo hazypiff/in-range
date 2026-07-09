@@ -7,11 +7,11 @@ import 'package:in_range/features/beacon/beacon_service.dart';
 import 'package:in_range/features/encounters/local_encounter_store.dart';
 
 final _userIdSecretProvider = Provider<String>((ref) {
-  return dotenv.maybeGet('INRANGE_USER_ID_SECRET') ?? 'inrange-user-id-fallback';
+  return dotenv.maybeGet('INRANGE_USER_ID_SECRET')?.trim() ?? '';
 });
 
 final _hmacSecretProvider = Provider<String>((ref) {
-  return dotenv.maybeGet('INRANGE_HMAC_SECRET') ?? 'inrange-hmac-fallback';
+  return dotenv.maybeGet('INRANGE_HMAC_SECRET')?.trim() ?? '';
 });
 
 /// Beacon feet range — persisted across restarts.
@@ -89,7 +89,6 @@ class BeaconController extends StateNotifier<BeaconState> {
       } catch (e) {
         debugPrint('turnOnBeacon failed: $e');
         state = const BeaconState();
-        rethrow;
       }
     }
   }

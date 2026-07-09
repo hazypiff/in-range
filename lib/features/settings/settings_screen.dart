@@ -4,6 +4,7 @@ import 'package:in_range/core/backend/backend_status.dart';
 import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/core/privacy/safety_store.dart';
 import 'package:in_range/core/session/app_session.dart';
+import 'package:in_range/features/beacon/beacon_provider.dart';
 import 'package:in_range/features/encounters/local_encounter_store.dart';
 import 'package:in_range/features/history/history_screen.dart';
 import 'package:in_range/features/matches/match_store.dart';
@@ -245,8 +246,12 @@ class SettingsScreen extends ConsumerWidget {
           ListTile(
             leading: const Icon(Icons.logout),
             title: const Text('Sign out'),
-            onTap: () =>
-                ref.read(sessionControllerProvider.notifier).signOut(),
+            onTap: () {
+              ref.read(sessionControllerProvider.notifier).signOut();
+              // Reset beacon state so a re-signed-in user doesn't see stale
+              // "Beacon ON" while BLE is actually off.
+              ref.invalidate(beaconControllerProvider);
+            },
           ),
           ListTile(
             leading: Icon(Icons.delete_forever, color: Colors.red.shade700),

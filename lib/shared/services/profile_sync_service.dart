@@ -35,7 +35,7 @@ class ProfileSyncService {
               session.customInterest!.isNotEmpty)
             session.customInterest!,
         ],
-        'p_photo_urls': null, // uploaded separately
+        'p_photo_urls': session.photoPaths.isEmpty ? null : session.photoPaths,
       });
       debugPrint('Profile sync OK');
     } catch (e) {
@@ -45,7 +45,9 @@ class ProfileSyncService {
   }
 
   /// Upload local photo files to storage + submit verification for each.
-  /// Returns public/storage paths.
+  /// Returns public/storage paths. The caller is responsible for calling
+  /// [syncProfile] afterward with the returned paths in the session's
+  /// photoPaths (already done in SessionController.finishOnboarding).
   Future<List<String>> uploadPhotos(List<String> localPaths) async {
     if (!cloudReady) return localPaths;
     final client = InRangeSupabase.client;

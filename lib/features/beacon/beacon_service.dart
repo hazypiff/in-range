@@ -63,6 +63,13 @@ class BeaconService {
 
   Future<void> turnOnBeacon({required String rangeType}) async {
     if (_isOn) return;
+    if (!AppConfig.hasCryptoSecrets) {
+      debugPrint(
+        'Beacon refused: INRANGE_HMAC_SECRET / INRANGE_USER_ID_SECRET missing. '
+        'Set these in .env — no hardcoded fallback is shipped.',
+      );
+      throw StateError('Missing crypto secrets; cannot start beacon.');
+    }
     _isOn = true;
     _currentRangeType = rangeType;
 

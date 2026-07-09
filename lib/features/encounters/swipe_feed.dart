@@ -21,6 +21,9 @@ class SwipeFeed extends ConsumerStatefulWidget {
 
 class _SwipeFeedState extends ConsumerState<SwipeFeed> {
   Timer? _tick;
+  // Incremented every second to drive countdown text only — avoids rebuilding
+  // the entire swipe stack via setState on every tick.
+  final ValueNotifier<int> _tickNotifier = ValueNotifier(0);
   final _notifiedExpiring = <String>{};
   int _prevNew = 0;
 
@@ -29,10 +32,17 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
     super.initState();
     _tick = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
-      setState(() {});
+      _tickNotifier.value++;
       ref.read(matchStoreProvider.notifier).pruneExpired();
       _checkExpiring();
     });
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    _tickNotifier.dispose();
+    super.dispose();
   }
 
   void _checkExpiring() {
@@ -46,12 +56,6 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
         LocalNotify.instance.notifyExpiringSoon(e.displayName);
       }
     }
-  }
-
-  @override
-  void dispose() {
-    _tick?.cancel();
-    super.dispose();
   }
 
   String _fmt(Duration d) {
@@ -340,17 +344,23 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
                           Icon(Icons.timer_outlined,
                               size: 16, color: Colors.orange.shade800),
                           const SizedBox(width: 4),
-                          Text(
-                            e.expiresAt == null
-                                ? 'Stays until you swipe'
-                                : 'Expires in ${_fmt(remaining)}',
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: remaining.inHours < 2
-                                  ? Colors.red.shade700
-                                  : Colors.orange.shade900,
-                            ),
+                          ValueListenableBuilder<int>(
+                            valueListenable: _tickNotifier,
+                            builder: (context, _, __) {
+                              final rem = e.timeRemaining;
+                              return Text(
+                                e.expiresAt == null
+                                    ? 'Stays until you swipe'
+                                    : 'Expires in ${_fmt(rem)}',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: rem.inHours < 2
+                                      ? Colors.red.shade700
+                                      : Colors.orange.shade900,
+                                ),
+                              );
+                            },
                           ),
                         ],
                       ),
