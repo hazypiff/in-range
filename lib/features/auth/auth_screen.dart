@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/core/session/app_session.dart';
+import 'package:in_range/core/session/age_gate.dart';
 
-/// Sign-up / sign-in: Email, Phone OTP, Google, Apple, Guest.
-/// Provider configs are placeholders until Dashboard keys are set.
+/// Sign-up / sign-in: cloud Email/Phone/OAuth plus explicit local guest mode.
 class AuthScreen extends ConsumerStatefulWidget {
   const AuthScreen({super.key});
 
@@ -19,8 +19,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
   final _password = TextEditingController();
   final _phone = TextEditingController();
   final _otp = TextEditingController();
-  final _birthYear = TextEditingController(
-    text: '${DateTime.now().year - 25}',
+  final _birthDate = TextEditingController(
+    text: AgeGate.format(DateTime(DateTime.now().year - 25, 1, 1)),
   );
   bool _busy = false;
   bool _otpSent = false;
@@ -42,22 +42,19 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
     _password.dispose();
     _phone.dispose();
     _otp.dispose();
-    _birthYear.dispose();
+    _birthDate.dispose();
     super.dispose();
   }
 
-  void _assertAgeGate() {
-    final year = int.tryParse(_birthYear.text.trim());
-    if (year == null || year < 1900 || year > DateTime.now().year) {
-      throw StateError('Enter a valid birth year');
-    }
-    final age = DateTime.now().year - year;
-    if (age < 18) {
+  DateTime _assertAgeGate() {
+    final birthDate = AgeGate.parseIsoDate(_birthDate.text);
+    if (!AgeGate.isAdult(birthDate)) {
       throw StateError('You must be 18 or older to use In Range');
     }
     if (!_confirm18) {
       throw StateError('Confirm that you are 18+ to continue');
     }
+    return birthDate;
   }
 
   Future<void> _run(Future<void> Function() fn) async {
@@ -69,7 +66,13 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
     try {
       await fn();
     } catch (e) {
-      setState(() => _error = e.toString().replaceFirst('StateError: ', ''));
+      debugPrint('Auth request failed: $e');
+      final message = switch (e) {
+        StateError() => e.message.toString(),
+        FormatException() => e.message,
+        _ => 'Authentication failed. Check your details and try again.',
+      };
+      setState(() => _error = message);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -77,11 +80,10 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
 
   Future<void> _guest() => _run(() async {
         // Lab guest still requires 18+ affirmation (product: age verification).
-        _assertAgeGate();
-        final year = int.parse(_birthYear.text.trim());
+        final birthDate = _assertAgeGate();
         await ref
             .read(sessionControllerProvider.notifier)
-            .signInAsGuest(birthYear: year);
+            .signInAsGuest(birthDate: birthDate);
       });
 
   Future<void> _emailAuth() => _run(() async {
@@ -92,21 +94,21 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
         }
         final session = ref.read(sessionControllerProvider.notifier);
         if (_isSignUp) {
-          _assertAgeGate();
-          final year = int.parse(_birthYear.text.trim());
+          final birthDate = _assertAgeGate();
           await session.signUpEmail(
             email: email,
             password: pass,
-            birthYear: year,
+            birthDate: birthDate,
           );
-          setState(() =>
-              _info = 'Account created. You may need to confirm email.');
+          setState(
+              () => _info = 'Account created. You may need to confirm email.');
         } else {
           await session.signInEmail(email: email, password: pass);
         }
       });
 
   Future<void> _sendOtp() => _run(() async {
+        final birthDate = _assertAgeGate();
         if (!AppConfig.hasRealSupabase) {
           throw StateError(
             'Phone SMS requires Supabase + SMS provider (Twilio). '
@@ -117,7 +119,12 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
         if (phone.length < 8) {
           throw StateError('Enter phone in E.164 format, e.g. +15551234567');
         }
-        await ref.read(sessionControllerProvider.notifier).startPhoneAuth(phone);
+        await ref
+            .read(sessionControllerProvider.notifier)
+            .startPhoneAuth(phone);
+        await ref
+            .read(sessionControllerProvider.notifier)
+            .rememberBirthDate(birthDate);
         setState(() {
           _otpSent = true;
           _info = 'Code sent (when SMS provider is configured).';
@@ -135,23 +142,29 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
       });
 
   Future<void> _google() => _run(() async {
+        final birthDate = _assertAgeGate();
         if (!AppConfig.hasRealSupabase) {
           throw StateError(
             'Google Sign-In needs Supabase URL/key + Google provider client IDs.',
           );
         }
-        await ref.read(sessionControllerProvider.notifier).signInWithGoogle();
+        final session = ref.read(sessionControllerProvider.notifier);
+        await session.rememberBirthDate(birthDate);
+        await session.signInWithGoogle();
         setState(() => _info =
             'Complete Google sign-in in the browser, then return to the app.');
       });
 
   Future<void> _apple() => _run(() async {
+        final birthDate = _assertAgeGate();
         if (!AppConfig.hasRealSupabase) {
           throw StateError(
             'Apple Sign-In needs Supabase URL/key + Apple provider config.',
           );
         }
-        await ref.read(sessionControllerProvider.notifier).signInWithApple();
+        final session = ref.read(sessionControllerProvider.notifier);
+        await session.rememberBirthDate(birthDate);
+        await session.signInWithApple();
         setState(() => _info =
             'Complete Apple sign-in in the browser, then return to the app.');
       });
@@ -196,27 +209,23 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
                   _EmailTab(
                     email: _email,
                     password: _password,
-                    birthYear: _birthYear,
+                    birthDate: _birthDate,
                     isSignUp: _isSignUp,
                     confirm18: _confirm18,
                     busy: _busy,
                     onConfirm18: (v) => setState(() => _confirm18 = v),
-                    onToggleMode: () =>
-                        setState(() => _isSignUp = !_isSignUp),
+                    onToggleMode: () => setState(() => _isSignUp = !_isSignUp),
                     onSubmit: _emailAuth,
                   ),
                   _PhoneTab(
                     phone: _phone,
                     otp: _otp,
-                    birthYear: _birthYear,
+                    birthDate: _birthDate,
                     confirm18: _confirm18,
                     otpSent: _otpSent,
                     busy: _busy,
                     onConfirm18: (v) => setState(() => _confirm18 = v),
-                    onSend: () {
-                      _assertAgeGate();
-                      _sendOtp();
-                    },
+                    onSend: _sendOtp,
                     onVerify: _verifyOtp,
                   ),
                 ],
@@ -258,19 +267,18 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
             ),
             const SizedBox(height: 12),
             TextField(
-              controller: _birthYear,
-              keyboardType: TextInputType.number,
+              controller: _birthDate,
+              keyboardType: TextInputType.datetime,
               decoration: const InputDecoration(
-                labelText: 'Birth year (18+ required)',
+                labelText: 'Date of birth (YYYY-MM-DD, 18+ required)',
                 border: OutlineInputBorder(),
               ),
             ),
             CheckboxListTile(
               contentPadding: EdgeInsets.zero,
               value: _confirm18,
-              onChanged: _busy
-                  ? null
-                  : (v) => setState(() => _confirm18 = v ?? false),
+              onChanged:
+                  _busy ? null : (v) => setState(() => _confirm18 = v ?? false),
               title: const Text(
                 'I confirm I am 18 or older (required for guest & sign-up)',
                 style: TextStyle(fontSize: 13),
@@ -289,8 +297,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
               cloud
                   ? 'Providers use Supabase Auth. Enable Email / Phone / Google / Apple '
                       'in the Dashboard and set OAuth client IDs — no further app code needed.'
-                  : 'Local mode: guest and email work offline. Phone / Google / Apple '
-                      'activate when you add SUPABASE_URL + keys and enable providers.',
+                  : 'Local mode: only explicit guest mode works offline. Email, phone, '
+                      'Google, and Apple activate with Supabase provider configuration.',
               style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
             ),
           ],
@@ -318,8 +326,7 @@ class _ModeChip extends StatelessWidget {
           cloud ? 'Cloud ready' : 'Offline / local mode',
           style: const TextStyle(fontSize: 12),
         ),
-        backgroundColor:
-            cloud ? Colors.green.shade50 : Colors.orange.shade50,
+        backgroundColor: cloud ? Colors.green.shade50 : Colors.orange.shade50,
         visualDensity: VisualDensity.compact,
       ),
     );
@@ -330,7 +337,7 @@ class _EmailTab extends StatelessWidget {
   const _EmailTab({
     required this.email,
     required this.password,
-    required this.birthYear,
+    required this.birthDate,
     required this.isSignUp,
     required this.confirm18,
     required this.busy,
@@ -341,7 +348,7 @@ class _EmailTab extends StatelessWidget {
 
   final TextEditingController email;
   final TextEditingController password;
-  final TextEditingController birthYear;
+  final TextEditingController birthDate;
   final bool isSignUp;
   final bool confirm18;
   final bool busy;
@@ -375,19 +382,17 @@ class _EmailTab extends StatelessWidget {
           if (isSignUp) ...[
             const SizedBox(height: 12),
             TextField(
-              controller: birthYear,
-              keyboardType: TextInputType.number,
+              controller: birthDate,
+              keyboardType: TextInputType.datetime,
               decoration: const InputDecoration(
-                labelText: 'Birth year (must be 18+)',
+                labelText: 'Date of birth (YYYY-MM-DD, 18+)',
                 border: OutlineInputBorder(),
               ),
             ),
             CheckboxListTile(
               contentPadding: EdgeInsets.zero,
               value: confirm18,
-              onChanged: busy
-                  ? null
-                  : (v) => onConfirm18(v ?? false),
+              onChanged: busy ? null : (v) => onConfirm18(v ?? false),
               title: const Text(
                 'I confirm I am 18 years of age or older',
                 style: TextStyle(fontSize: 13),
@@ -405,10 +410,10 @@ class _EmailTab extends StatelessWidget {
               isSignUp
                   ? (AppConfig.hasRealSupabase
                       ? 'Create account'
-                      : 'Create account (local)')
+                      : 'Create account (cloud required)')
                   : (AppConfig.hasRealSupabase
                       ? 'Sign in with email'
-                      : 'Continue with email (local)'),
+                      : 'Sign in (cloud required)'),
             ),
           ),
           TextButton(
@@ -429,7 +434,7 @@ class _PhoneTab extends StatelessWidget {
   const _PhoneTab({
     required this.phone,
     required this.otp,
-    required this.birthYear,
+    required this.birthDate,
     required this.confirm18,
     required this.otpSent,
     required this.busy,
@@ -440,7 +445,7 @@ class _PhoneTab extends StatelessWidget {
 
   final TextEditingController phone;
   final TextEditingController otp;
-  final TextEditingController birthYear;
+  final TextEditingController birthDate;
   final bool confirm18;
   final bool otpSent;
   final bool busy;
@@ -465,10 +470,10 @@ class _PhoneTab extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           TextField(
-            controller: birthYear,
-            keyboardType: TextInputType.number,
+            controller: birthDate,
+            keyboardType: TextInputType.datetime,
             decoration: const InputDecoration(
-              labelText: 'Birth year (must be 18+)',
+              labelText: 'Date of birth (YYYY-MM-DD, 18+)',
               border: OutlineInputBorder(),
             ),
           ),

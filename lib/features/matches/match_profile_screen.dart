@@ -63,9 +63,8 @@ class MatchProfileScreen extends ConsumerWidget {
           PopupMenuButton<String>(
             onSelected: (v) async {
               if (v == 'block') {
-                await ref
-                    .read(safetyStoreProvider.notifier)
-                    .block(correlationId);
+                final targetId = match!.otherUserId ?? correlationId;
+                await ref.read(safetyStoreProvider.notifier).block(targetId);
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('Blocked')),
@@ -73,9 +72,11 @@ class MatchProfileScreen extends ConsumerWidget {
                   Navigator.pop(context);
                 }
               } else if (v == 'report') {
+                final targetId = match!.otherUserId ?? correlationId;
                 await ref.read(safetyStoreProvider.notifier).report(
-                      targetId: correlationId,
+                      targetId: targetId,
                       reason: 'User reported from profile',
+                      matchId: match.serverMatchId,
                     );
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
@@ -171,13 +172,6 @@ class _ProfilePhoto extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (path.startsWith('http')) {
-      return Image.network(
-        path,
-        fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) => _fallback(),
-      );
-    }
     if (File(path).existsSync()) {
       return Image.file(File(path), fit: BoxFit.cover);
     }

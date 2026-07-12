@@ -11,21 +11,14 @@
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { requireServiceRole } from "../_shared/service_auth.ts";
 
 
 
 
 function publicError(e: unknown): string {
-  // Avoid leaking stack traces / internal paths to API clients.
   console.error(e);
-  if (e && typeof e === "object" && "message" in e) {
-    const m = String((e as { message: unknown }).message);
-    // Allow short, non-sensitive messages; reject path-like strings
-    if (m.length < 120 && !m.includes("/") && m.indexOf(String.fromCharCode(92)) < 0) {
-      return m;
-    }
-  }
-  return "internal_error";
+  return "operation_failed";
 }
 
 function newRunKey(source: string): string {
@@ -103,8 +96,10 @@ Deno.serve(async (req) => {
   let runId: string | null = null;
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    supabase = createClient(supabaseUrl, serviceKey);
+    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    const authError = requireServiceRole(req, serviceKey);
+    if (authError) return authError;
+    supabase = createClient(supabaseUrl, serviceKey!);
 
     let lookback = 30;
     let single: {
@@ -118,7 +113,9 @@ Deno.serve(async (req) => {
     if (req.method === "POST") {
       try {
         const body = await req.json();
-        if (body?.lookback_minutes) lookback = Number(body.lookback_minutes) || 30;
+        if (body?.lookback_minutes) {
+          lookback = Math.max(1, Math.min(120, Number(body.lookback_minutes) || 30));
+        }
         if (body?.user_id && body?.lat != null && body?.lon != null) {
           single = body;
         }
@@ -132,39 +129,58 @@ Deno.serve(async (req) => {
     });
 
     if (single?.user_id) {
+      if (
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+          .test(single.user_id) ||
+        !Number.isFinite(single.lat) || single.lat! < -90 || single.lat! > 90 ||
+        !Number.isFinite(single.lon) || single.lon! < -180 || single.lon! > 180
+      ) {
+        return json({ ok: false, error: "invalid_single_ping" }, 400);
+      }
       // Service-role insert of a synthetic ping then batch correlate
       const range = single.range ?? "miles_10";
-      const hood = single.neighborhood ?? "Nearby";
+      if (!["miles_1", "miles_5", "miles_10"].includes(range)) {
+        return json({ ok: false, error: "invalid_range" }, 400);
+      }
+      const requestedHood = String(single.neighborhood ?? "Nearby").trim();
+      const hood = requestedHood.length <= 80 &&
+          !/[-+]?\d{1,3}\.\d+\s*[,/]\s*[-+]?\d{1,3}\.\d+/.test(requestedHood)
+        ? requestedHood
+        : "Nearby";
 
-      // Use RPC batch; for single user we still run full batch (idempotent)
-      const { error: insertErr } = await supabase.rpc("record_location_ping", {
-        p_lat: single.lat,
-        p_lon: single.lon,
-        p_range: range,
-        p_neighborhood: hood,
+      const { data: profile } = await supabase.from("profiles")
+        .select(
+          "is_active,is_paused,is_incognito,age_verified,is_photo_verified,deleted_at,photo_urls",
+        )
+        .eq("id", single.user_id)
+        .maybeSingle();
+      if (
+        !profile || profile.is_active !== true || profile.is_paused === true ||
+        profile.is_incognito === true || profile.age_verified !== true ||
+        profile.is_photo_verified !== true || profile.deleted_at != null ||
+        !Array.isArray(profile.photo_urls) || profile.photo_urls.length === 0
+      ) {
+        return json({ ok: false, error: "user_not_discoverable" }, 403);
+      }
+
+      const { error: pingErr } = await supabase.from("location_pings").insert({
+        user_id: single.user_id,
+        geo: `SRID=4326;POINT(${single.lon} ${single.lat})`,
+        range_type: range,
+        neighborhood: hood,
       });
-
-      // record_location_ping needs auth.uid() — so use direct table + batch instead
-      if (insertErr) {
-        const { error: pingErr } = await supabase.from("location_pings").insert({
-          user_id: single.user_id,
-          geo: `SRID=4326;POINT(${single.lon} ${single.lat})`,
-          range_type: range,
-          neighborhood: hood,
+      if (pingErr) {
+        const err = publicError(pingErr);
+        await logEvent(supabase, runId, {
+          p_event_type: "location_ping_insert",
+          p_user_id: single.user_id,
+          p_decision: "insert_failed",
+          p_status: "failed",
+          p_error_public: err,
+          p_metadata: { range, has_neighborhood: Boolean(hood) },
         });
-        if (pingErr) {
-          const err = publicError(pingErr);
-          await logEvent(supabase, runId, {
-            p_event_type: "location_ping_insert",
-            p_user_id: single.user_id,
-            p_decision: "insert_failed",
-            p_status: "failed",
-            p_error_public: err,
-            p_metadata: { range, has_neighborhood: Boolean(hood) },
-          });
-          await completeRun(supabase, runId, "failed", { phase: "single_ping_insert" }, err);
-          return json({ ok: false, error: err }, 400);
-        }
+        await completeRun(supabase, runId, "failed", { phase: "single_ping_insert" }, err);
+        return json({ ok: false, error: err }, 400);
       }
     }
 

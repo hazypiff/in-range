@@ -73,31 +73,32 @@ BEGIN
   -- Profiles (trigger may have created stubs — upsert)
   INSERT INTO public.profiles (
     id, display_name, bio, dob, gender, sexual_preference, interests,
-    photo_urls, is_photo_verified, photo_verification_status, neighborhood, is_active
+    photo_urls, is_photo_verified, photo_verification_status, neighborhood,
+    is_active, age_verified
   ) VALUES
     (
       u1, 'Alice', 'Coffee & hikes. Met you near downtown.',
       '1995-04-12', 'female', 'men',
       ARRAY['Coffee','Hiking','Music'],
-      ARRAY['seed/alice_1.jpg'], TRUE, 'verified', 'Downtown', TRUE
+      ARRAY['seed/alice_1.jpg'], TRUE, 'verified', 'Downtown', TRUE, TRUE
     ),
     (
       u2, 'Bob', 'Tech + tacos.',
       '1992-08-03', 'male', 'women',
       ARRAY['Tech','Food','Gaming'],
-      ARRAY['seed/bob_1.jpg'], TRUE, 'verified', 'Downtown', TRUE
+      ARRAY['seed/bob_1.jpg'], TRUE, 'verified', 'Downtown', TRUE, TRUE
     ),
     (
       u3, 'Cara', 'Art walks and dogs.',
       '1998-01-22', 'female', 'both',
       ARRAY['Art','Dogs','Travel'],
-      ARRAY['seed/cara_1.jpg'], TRUE, 'verified', 'Eastside', TRUE
+      ARRAY['seed/cara_1.jpg'], TRUE, 'verified', 'Eastside', TRUE, TRUE
     ),
     (
       u4, 'Dan', 'Gym mornings.',
       '1990-11-09', 'male', 'women',
       ARRAY['Fitness','Movies'],
-      ARRAY['seed/dan_1.jpg'], FALSE, 'pending', 'Westside', TRUE
+      ARRAY['seed/dan_1.jpg'], FALSE, 'pending', 'Westside', TRUE, TRUE
     )
   ON CONFLICT (id) DO UPDATE SET
     display_name = EXCLUDED.display_name,
@@ -109,7 +110,8 @@ BEGIN
     photo_urls = EXCLUDED.photo_urls,
     is_photo_verified = EXCLUDED.is_photo_verified,
     photo_verification_status = EXCLUDED.photo_verification_status,
-    neighborhood = EXCLUDED.neighborhood;
+    neighborhood = EXCLUDED.neighborhood,
+    age_verified = EXCLUDED.age_verified;
 
   -- Location pings near DTLA-ish coords (for miles correlation)
   INSERT INTO public.location_pings (user_id, geo, range_type, neighborhood, created_at)
@@ -125,8 +127,7 @@ BEGIN
   ) VALUES
     (u1, u2, 'Downtown coffee shop', NOW() - INTERVAL '5 hours', 'feet_20', 0.92, 'active'),
     (u1, u3, 'Eastside', NOW() - INTERVAL '6 hours', 'miles_5', 0.80, 'active'),
-    (u2, u3, 'Downtown', NOW() - INTERVAL '3 hours', 'miles_10', 0.75, 'active')
-  RETURNING id INTO enc1;
+    (u2, u3, 'Downtown', NOW() - INTERVAL '3 hours', 'miles_10', 0.75, 'active');
 
   -- Mutual like → match Alice & Bob on first encounter
   SELECT id INTO enc1 FROM public.encounters

@@ -6,6 +6,11 @@
 -- Server-side: get_my_encounters only returns rows older than p_min_age_hours.
 -- Default 4. Clients in test mode can pass 0.
 
+-- The return shape gains display_name in this migration. PostgreSQL does not
+-- allow CREATE OR REPLACE to change OUT parameters, so remove the 0001
+-- signature first. Without this, a clean `supabase db reset` stops here.
+DROP FUNCTION IF EXISTS public.get_my_encounters(INT, INT);
+
 CREATE OR REPLACE FUNCTION public.get_my_encounters(
   p_limit INT DEFAULT 50,
   p_offset INT DEFAULT 0,

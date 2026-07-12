@@ -1,8 +1,17 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:in_range/core/network/supabase_client.dart';
 import 'package:in_range/features/matches/match_store.dart';
 import 'package:in_range/shared/services/encounters_api.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:uuid/uuid.dart';
+
+class SentChatMedia {
+  const SentChatMedia({required this.messageId, required this.storagePath});
+  final int messageId;
+  final String storagePath;
+}
 
 /// Cloud chat: hydrate matches, send/read messages, realtime subscribe.
 class ChatSyncService {
@@ -20,14 +29,12 @@ class ChatSyncService {
       final matchId = r['match_id']?.toString() ??
           r['id']?.toString() ??
           DateTime.now().microsecondsSinceEpoch.toString();
-      final photos = (r['photo_urls'] as List?)
-              ?.map((e) => e.toString())
-              .toList() ??
-          const <String>[];
-      final interests = (r['interests'] as List?)
-              ?.map((e) => e.toString())
-              .toList() ??
-          const <String>[];
+      final photos =
+          (r['photo_urls'] as List?)?.map((e) => e.toString()).toList() ??
+              const <String>[];
+      final interests =
+          (r['interests'] as List?)?.map((e) => e.toString()).toList() ??
+              const <String>[];
       final last = r['last_message']?.toString();
       final lastAt = DateTime.tryParse(r['last_message_at']?.toString() ?? '');
       final msgs = <ChatMessage>[];
@@ -88,7 +95,7 @@ class ChatSyncService {
       }).toList();
     } catch (e) {
       debugPrint('fetchMessages: $e');
-      return [];
+      rethrow;
     }
   }
 
@@ -97,6 +104,50 @@ class ChatSyncService {
     required String content,
   }) =>
       _api.sendMessage(matchId: matchId, content: content);
+
+  Future<SentChatMedia> sendPhoto({
+    required int matchId,
+    required String localPath,
+    String caption = '',
+  }) async {
+    if (!cloudReady) throw StateError('Cloud chat is unavailable');
+    final client = InRangeSupabase.client;
+    final uid = client.auth.currentUser?.id;
+    if (uid == null) throw StateError('Sign in before sending media');
+    final storagePath = '$matchId/$uid/${const Uuid().v4()}.jpg';
+    await client.storage.from('chat_media').upload(
+          storagePath,
+          File(localPath),
+          fileOptions: const FileOptions(
+            upsert: false,
+            contentType: 'image/jpeg',
+          ),
+        );
+    try {
+      final id = await _api.sendMessage(
+        matchId: matchId,
+        content: caption,
+        messageType: 'photo',
+        metadata: {'storage_path': storagePath},
+      );
+      return SentChatMedia(messageId: id, storagePath: storagePath);
+    } catch (_) {
+      await client.storage.from('chat_media').remove([storagePath]);
+      rethrow;
+    }
+  }
+
+  Future<String?> resolveMedia(String storagePath) async {
+    if (!cloudReady || storagePath.isEmpty) return null;
+    try {
+      return await InRangeSupabase.client.storage
+          .from('chat_media')
+          .createSignedUrl(storagePath, 900);
+    } catch (e) {
+      debugPrint('resolve chat media failed: $e');
+      return null;
+    }
+  }
 
   Future<void> markRead(int matchId) async {
     if (!cloudReady) return;
@@ -132,6 +183,9 @@ class ChatSyncService {
           callback: (payload) {
             final r = payload.newRecord;
             final sender = r['sender_id']?.toString();
+            final metadata = r['metadata'];
+            final imagePath =
+                metadata is Map ? metadata['storage_path']?.toString() : null;
             onInsert(
               ChatMessage(
                 id: r['id']?.toString() ??
@@ -140,6 +194,7 @@ class ChatSyncService {
                 text: r['content']?.toString() ?? '',
                 at: DateTime.tryParse(r['created_at']?.toString() ?? '') ??
                     DateTime.now(),
+                imagePath: imagePath,
               ),
             );
           },

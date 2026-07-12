@@ -1,6 +1,6 @@
-import 'package:flutter/foundation.dart';
 import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/core/network/supabase_client.dart';
+import 'package:in_range/core/session/age_gate.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 /// Full auth flows: email, phone OTP, Google, Apple, anonymous/guest.
@@ -24,6 +24,7 @@ class AuthService {
     required String email,
     required String password,
     String? displayName,
+    required DateTime birthDate,
   }) async {
     _requireCloud();
     return _client!.auth.signUp(
@@ -32,6 +33,7 @@ class AuthService {
       data: {
         if (displayName != null && displayName.isNotEmpty)
           'display_name': displayName,
+        'dob': AgeGate.format(birthDate),
       },
     );
   }
@@ -94,19 +96,19 @@ class AuthService {
   }
 
   /// Anonymous cloud session (enable Anonymous provider in Dashboard).
-  Future<AuthResponse> signInAnonymously() async {
+  Future<AuthResponse> signInAnonymously({DateTime? birthDate}) async {
     _requireCloud();
-    return _client!.auth.signInAnonymously();
+    return _client!.auth.signInAnonymously(
+      data: {
+        if (birthDate != null) 'dob': AgeGate.format(birthDate),
+      },
+    );
   }
 
   Future<void> signOut() async {
     final c = _client;
     if (c != null) {
-      try {
-        await c.auth.signOut();
-      } catch (e) {
-        debugPrint('Cloud signOut: $e');
-      }
+      await c.auth.signOut();
     }
   }
 

@@ -6,7 +6,7 @@ set -euo pipefail
 
 PORT=5555
 TS_IP="${PIXEL_TS_IP:-100.79.154.58}"
-PKG=com.example.in_range
+PKG=io.inrange.app
 
 echo "Looking for Pixel USB..."
 SERIAL=""

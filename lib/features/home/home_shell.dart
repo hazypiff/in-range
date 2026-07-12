@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:in_range/core/navigation/home_tab.dart';
 import 'package:in_range/features/beacon/beacon_screen.dart';
+import 'package:in_range/features/beacon/beacon_provider.dart';
 import 'package:in_range/features/chat/messages_screen.dart';
 import 'package:in_range/features/encounters/encounters_screen.dart';
 import 'package:in_range/features/encounters/local_encounter_store.dart';
 import 'package:in_range/features/locals/locals_screen.dart';
+import 'package:in_range/features/locals/locals_service.dart';
 import 'package:in_range/features/matches/match_store.dart';
 import 'package:in_range/features/settings/settings_screen.dart';
 import 'package:in_range/features/widgets/offline_banner.dart';
@@ -97,8 +99,19 @@ class _HomeShellState extends ConsumerState<HomeShell>
           : null,
       bottomNavigationBar: NavigationBar(
         selectedIndex: index,
-        onDestinationSelected: (i) =>
-            ref.read(homeTabIndexProvider.notifier).state = i,
+        onDestinationSelected: (i) async {
+          final previous = ref.read(homeTabIndexProvider);
+          ref.read(homeTabIndexProvider.notifier).state = i;
+          if (i == 2) {
+            await ref.read(localsControllerProvider.notifier).start();
+          } else if (previous == 2) {
+            final beaconOn = ref.read(beaconControllerProvider).isOn;
+            final miles = ref.read(selectedRangeProvider).startsWith('miles');
+            if (!beaconOn || !miles) {
+              await ref.read(localsControllerProvider.notifier).stop();
+            }
+          }
+        },
         destinations: [
           const NavigationDestination(
             icon: Icon(Icons.radar_outlined),

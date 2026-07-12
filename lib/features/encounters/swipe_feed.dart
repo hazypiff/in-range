@@ -7,7 +7,6 @@ import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/core/notifications/local_notify.dart';
 import 'package:in_range/core/prefs/app_prefs.dart';
 import 'package:in_range/core/privacy/safety_store.dart';
-import 'package:in_range/core/session/app_session.dart';
 import 'package:in_range/features/encounters/encounters_provider.dart';
 import 'package:in_range/features/encounters/local_encounter_store.dart';
 import 'package:in_range/features/encounters/swipe_card.dart';
@@ -29,6 +28,7 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
   final ValueNotifier<int> _tickNotifier = ValueNotifier(0);
   final _notifiedExpiring = <String>{};
   int _prevNew = 0;
+  bool _actionInFlight = false;
 
   @override
   void initState() {
@@ -63,6 +63,7 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
 
   List<SwipeCard> _deck(WidgetRef ref) {
     final band = ref.watch(swipeBandFilterProvider);
+    ref.watch(matchStoreProvider);
     final matchStore = ref.watch(matchStoreProvider.notifier);
     final safety = ref.watch(safetyStoreProvider);
     final server = ref.watch(myEncountersProvider).valueOrNull ?? const [];
@@ -85,6 +86,7 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
   }
 
   Future<void> _showUndo() async {
+    if (AppConfig.hasRealSupabase) return;
     final store = ref.read(matchStoreProvider.notifier);
     final u = store.lastUndo;
     if (u == null || !u.isValid || !mounted) return;
@@ -102,6 +104,8 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
   }
 
   Future<bool> _doPass(SwipeCard c) async {
+    if (_actionInFlight) return false;
+    setState(() => _actionInFlight = true);
     try {
       await ref.read(matchStoreProvider.notifier).pass(
             c.id,
@@ -120,21 +124,20 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
         );
       }
       return false;
+    } finally {
+      if (mounted) setState(() => _actionInFlight = false);
     }
   }
 
   Future<bool> _doLike(SwipeCard c) async {
-    final me = ref.read(sessionControllerProvider);
+    if (_actionInFlight) return false;
+    setState(() => _actionInFlight = true);
     try {
       await ref.read(matchStoreProvider.notifier).like(
             correlationId: c.id,
             displayName: c.displayLabel,
             neighborhood: c.neighborhood,
-            bio: 'We crossed paths near ${c.neighborhood}.',
-            age: 27,
-            gender: 'prefer-not-to-say',
-            interests: const ['Coffee', 'Music'],
-            photoPaths: c.photoUrls.isNotEmpty ? c.photoUrls : me.photoPaths,
+            photoPaths: c.photoUrls,
             otherUserId: c.otherUserId,
             range: c.rangeType,
           );
@@ -156,6 +159,8 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
         );
       }
       return false;
+    } finally {
+      if (mounted) setState(() => _actionInFlight = false);
     }
   }
 
@@ -299,13 +304,13 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
                   color: Colors.grey.shade200,
                   icon: Icons.close,
                   iconColor: Colors.grey.shade800,
-                  onTap: () => _doPass(cards.first),
+                  onTap: _actionInFlight ? null : () => _doPass(cards.first),
                 ),
                 _RoundAction(
                   color: Colors.pink.shade50,
                   icon: Icons.favorite,
                   iconColor: Colors.pink.shade700,
-                  onTap: () => _doLike(cards.first),
+                  onTap: _actionInFlight ? null : () => _doLike(cards.first),
                 ),
                 _RoundAction(
                   color: Colors.orange.shade50,
@@ -338,13 +343,7 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
     Widget photo;
     if (e.photoUrls.isNotEmpty) {
       final raw = e.photoUrls.first;
-      if (raw.startsWith('http')) {
-        photo = Image.network(
-          raw,
-          fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => _letterAvatar(letter),
-        );
-      } else if (File(raw).existsSync()) {
+      if (File(raw).existsSync()) {
         photo = Image.file(File(raw), fit: BoxFit.cover);
       } else {
         // Private storage path — resolve signed URL
@@ -488,7 +487,7 @@ class _RoundAction extends StatelessWidget {
   final Color color;
   final IconData icon;
   final Color iconColor;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {

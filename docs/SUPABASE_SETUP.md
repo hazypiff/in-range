@@ -41,6 +41,8 @@ Dashboard → **SQL Editor** → paste & Run each file:
 | 15 | `supabase/migrations/0015_audit_remaining_fixes.sql` |
 | 16 | `supabase/migrations/0016_swipe_user_and_feed_wire.sql` |
 | 17 | `supabase/migrations/0017_ai_ops_metadata_feedback.sql` |
+| 18 | `supabase/migrations/0018_security_correlate_photos.sql` |
+| 19 | `supabase/migrations/0019_beta_security_hardening.sql` |
 
 Or CLI:
 
@@ -104,15 +106,15 @@ Migrations create buckets:
 - `chat_media` (private, match participants)
 - `verified_photos` (private, service_role write)
 
-Confirm under **Storage**. Policies are in `0002`, `0006`, and `0018`.
+Confirm under **Storage**. Policies are finalized by `0019_beta_security_hardening.sql`.
 
 ## 8. Edge Functions
 
 ```bash
-supabase secrets set FCM_SERVER_KEY=YOUR_FCM_SERVER_KEY
-supabase secrets set STUB_AUTO_APPROVE=true   # lab: auto photo verify
-# Production: STUB_AUTO_APPROVE=false — unverified profiles are hidden from
-# Encounters + Locals until decide_photo_verification / stub approve.
+supabase secrets set FCM_PROJECT_ID=YOUR_FIREBASE_PROJECT_ID
+supabase secrets set FCM_SERVICE_ACCOUNT_JSON='YOUR_SERVICE_ACCOUNT_JSON'
+supabase secrets set STUB_AUTO_APPROVE=false
+# Remote deployments always route the format-only stub to manual review.
 
 supabase functions deploy send-push
 supabase functions deploy miles-correlate
@@ -129,17 +131,22 @@ supabase functions deploy maintenance
 | `photo-review` | `*/2 * * * *` |
 | `miles-correlate` | `*/10 * * * *` |
 
+Each schedule/webhook must use `POST` with
+`Authorization: Bearer <SUPABASE_SERVICE_ROLE_KEY>`. Gateway JWT verification
+and an in-function service-role check are both enabled.
+
 Migration **0015** also tries to schedule `cron.schedule('in-range-maintenance', '*/15 * * * *', …)` when `pg_cron` is enabled.
 
-Without `FCM_SERVER_KEY`, `send-push` dry-runs and marks rows `skipped` / `dry_run_no_fcm_key`.
+Without the Firebase project ID and service-account JSON, `send-push` dry-runs
+and marks rows `skipped` / `dry_run_no_fcm_key`.
 
 ## 9. Firebase (push — when ready)
 
-1. Create Firebase project · Android app package `com.example.in_range` (or your id)  
+1. Create Firebase project · Android app package `io.inrange.app`
 2. Download `google-services.json` → `android/app/`  
 3. Add `firebase_core` + `firebase_messaging` to pubspec  
 4. Call `PushService.bindFirebaseToken` from `onTokenRefresh`  
-5. Set `FCM_SERVER_KEY` secret for Edge `send-push`
+5. Set `FCM_PROJECT_ID` + `FCM_SERVICE_ACCOUNT_JSON` for Edge `send-push`
 
 Until then, optional: `FCM_MOCK_TOKEN=any-string` exercises `register_push_token`.
 
@@ -147,6 +154,7 @@ Until then, optional: `FCM_MOCK_TOKEN=any-string` exercises `register_push_token
 
 ```sql
 select public.get_my_encounters(10, 0, 0);
+-- run_maintenance is service-role/admin only
 select public.run_maintenance();
 ```
 

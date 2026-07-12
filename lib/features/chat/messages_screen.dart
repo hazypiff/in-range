@@ -5,13 +5,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:in_range/core/config/app_config.dart';
+import 'package:in_range/core/privacy/image_sanitizer.dart';
 import 'package:in_range/core/privacy/safety_store.dart';
 import 'package:in_range/features/matches/match_profile_screen.dart';
 import 'package:in_range/features/matches/match_store.dart';
 import 'package:in_range/features/widgets/ad_banner.dart';
 import 'package:in_range/shared/services/chat_sync_service.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class MessagesScreen extends ConsumerStatefulWidget {
@@ -90,8 +89,13 @@ class _MessagesScreenState extends ConsumerState<MessagesScreen> {
                     separatorBuilder: (_, __) => const Divider(height: 1),
                     itemBuilder: (context, i) {
                       final m = visible[i];
-                      final last =
-                          m.messages.isNotEmpty ? m.messages.last.text : '';
+                      final last = m.messages.isEmpty
+                          ? ''
+                          : m.messages.last.text.isNotEmpty
+                              ? m.messages.last.text
+                              : m.messages.last.imagePath != null
+                                  ? '📷 Photo'
+                                  : '';
                       return ListTile(
                         leading: CircleAvatar(
                           child: Text(
@@ -146,6 +150,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
   final _chat = ChatSyncService();
   RealtimeChannel? _channel;
   bool _missing = false;
+  bool _historySyncFailed = false;
 
   @override
   void initState() {
@@ -160,7 +165,11 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
       if (mounted) setState(() => _missing = true);
       return;
     }
-    await store.hydrateThread(widget.correlationId);
+    try {
+      await store.hydrateThread(widget.correlationId);
+    } catch (_) {
+      if (mounted) setState(() => _historySyncFailed = true);
+    }
     final matchId = int.tryParse(widget.correlationId);
     if (matchId != null && AppConfig.hasRealSupabase) {
       _channel = _chat.subscribeMessages(
@@ -213,13 +222,13 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
       imageQuality: 80,
     );
     if (x == null) return;
-    final dir = await getApplicationDocumentsDirectory();
-    final dest = p.join(
-      dir.path,
-      'chat_${DateTime.now().millisecondsSinceEpoch}.jpg',
+    final clean = await ImageSanitizer.toJpeg(
+      x.path,
+      prefix: 'chat',
+      maxWidth: 1200,
+      quality: 80,
     );
-    await File(x.path).copy(dest);
-    await _send(imagePath: dest);
+    await _send(imagePath: clean.path);
   }
 
   @override
@@ -321,6 +330,17 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
                 ),
               ),
             ),
+          if (_historySyncFailed)
+            Material(
+              color: Colors.orange.shade50,
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                child: Text(
+                  'Cloud history could not be loaded. New messages may still arrive.',
+                  style: TextStyle(fontSize: 12),
+                ),
+              ),
+            ),
           Expanded(
             child: ListView.builder(
               padding: const EdgeInsets.all(16),
@@ -347,17 +367,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        if (msg.imagePath != null &&
-                            !msg.imagePath!.startsWith('http') &&
-                            File(msg.imagePath!).existsSync())
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(8),
-                            child: Image.file(
-                              File(msg.imagePath!),
-                              height: 160,
-                              fit: BoxFit.cover,
-                            ),
-                          ),
+                        if (msg.imagePath != null) _media(msg.imagePath!),
                         if (msg.text.isNotEmpty) Text(msg.text),
                       ],
                     ),
@@ -397,6 +407,40 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _media(String path) {
+    final local = File(path);
+    if (local.existsSync()) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Image.file(local, height: 160, fit: BoxFit.cover),
+      );
+    }
+    return FutureBuilder<String?>(
+      future: _chat.resolveMedia(path),
+      builder: (context, snapshot) {
+        final url = snapshot.data;
+        if (url == null) {
+          return const SizedBox(
+            height: 80,
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Image.network(
+            url,
+            height: 160,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => const SizedBox(
+              height: 80,
+              child: Center(child: Icon(Icons.broken_image_outlined)),
+            ),
+          ),
+        );
+      },
     );
   }
 }

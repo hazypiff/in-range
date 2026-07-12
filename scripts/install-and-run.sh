@@ -16,7 +16,7 @@ echo "=== Installing to $DEVICE ==="
 adb -s "$DEVICE" install -r "$APK"
 
 echo "=== Launching ==="
-adb -s "$DEVICE" shell am start -n com.example.in_range/.MainActivity
+adb -s "$DEVICE" shell am start -n io.inrange.app/.MainActivity
 
 echo "=== Device ready. Use logcat to monitor ==="
 echo "adb -s $DEVICE logcat | grep -E 'flutter|Beacon|In Range|Encounter|BLE'"

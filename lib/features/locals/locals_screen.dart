@@ -20,10 +20,6 @@ class _LocalsScreenState extends ConsumerState<LocalsScreen> {
     'miles_1': 1,
     'miles_5': 5,
     'miles_10': 10,
-    'miles_25': 25,
-    'miles_50': 50,
-    'miles_100': 100,
-    'miles_200': 200,
   };
 
   @override
@@ -32,7 +28,6 @@ class _LocalsScreenState extends ConsumerState<LocalsScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final c = ref.read(localsControllerProvider.notifier);
       c.setRange(_range);
-      c.start();
     });
   }
 

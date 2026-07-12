@@ -50,7 +50,9 @@ class MatchRecord {
     if (hasUserMessage) return false;
     // Normalize both sides to UTC so timezone offset doesn't bias the
     // comparison (matchedAt is parsed from ISO and may be stored as UTC).
-    return DateTime.now().toUtc().isAfter(matchedAt.toUtc().add(noMessageExpiry));
+    return DateTime.now()
+        .toUtc()
+        .isAfter(matchedAt.toUtc().add(noMessageExpiry));
   }
 
   MatchRecord copyWith({
@@ -213,6 +215,7 @@ class MatchStore extends StateNotifier<List<MatchRecord>> {
 
   UndoAction? lastUndo;
   List<HistoryEntry> history = [];
+
   /// Local "liked you" sim: when we match, they "liked" us.
   Set<String> likedYou = {};
 
@@ -246,7 +249,13 @@ class MatchStore extends StateNotifier<List<MatchRecord>> {
   Future<void> _persist() async {
     await _prefs.setString(
       'matches_json',
-      jsonEncode(state.map((m) => m.toJson()).toList()),
+      jsonEncode(state.map((m) {
+        final json = m.toJson();
+        // Cloud chat is rehydrated from RLS-protected Postgres; do not retain
+        // message bodies in plaintext SharedPreferences.
+        if (m.isServerMatch) json['messages'] = <Object>[];
+        return json;
+      }).toList()),
     );
     await _prefs.setString(
       'history_json',
@@ -307,12 +316,12 @@ class MatchStore extends StateNotifier<List<MatchRecord>> {
               gender: gender,
               interests: interests ?? const [],
               photoPaths: photoPaths ?? const [],
-              otherUserId:
-                  res['other_user_id']?.toString() ?? otherUserId,
+              otherUserId: res['other_user_id']?.toString() ?? otherUserId,
               isServerMatch: true,
             );
             await LocalNotify.instance.notifyMatch(displayName);
           }
+          state = [...state];
           return;
         }
       } catch (e) {
@@ -322,8 +331,7 @@ class MatchStore extends StateNotifier<List<MatchRecord>> {
       }
     }
 
-    final alreadyMatch =
-        state.any((m) => m.correlationId == correlationId);
+    final alreadyMatch = state.any((m) => m.correlationId == correlationId);
     final liked = likes..add(correlationId);
     await _prefs.setStringList('liked_corrs', liked.toList());
     final p = passes..remove(correlationId);
@@ -443,8 +451,7 @@ class MatchStore extends StateNotifier<List<MatchRecord>> {
       final liked = likes..remove(u.correlationId);
       await _prefs.setStringList('liked_corrs', liked.toList());
       if (u.createdMatch) {
-        state =
-            state.where((m) => m.correlationId != u.correlationId).toList();
+        state = state.where((m) => m.correlationId != u.correlationId).toList();
         likedYou = {...likedYou}..remove(u.correlationId);
       }
     } else {
@@ -475,10 +482,10 @@ class MatchStore extends StateNotifier<List<MatchRecord>> {
       displayName: displayName,
       matchedAt: DateTime.now(),
       neighborhood: neighborhood,
-      bio: bio ?? 'I love coffee shops and spontaneous walks.',
-      age: age ?? 28,
-      gender: gender ?? 'prefer-not-to-say',
-      interests: interests.isEmpty ? const ['Music', 'Travel'] : interests,
+      bio: bio ?? (isServerMatch ? null : 'Profile available after sync.'),
+      age: age,
+      gender: gender,
+      interests: interests,
       photoPaths: photoPaths,
       // No canned opener — a real match starts with zero messages until a
       // user sends one.
@@ -495,10 +502,13 @@ class MatchStore extends StateNotifier<List<MatchRecord>> {
     if (!AppConfig.hasRealSupabase) return;
     try {
       final remote = await ChatSyncService().fetchMatches();
-      if (remote.isEmpty) return;
-      final byId = {for (final m in state) m.correlationId: m};
+      final existingById = {for (final m in state) m.correlationId: m};
+      final byId = {
+        for (final m in state.where((m) => !m.isServerMatch))
+          m.correlationId: m,
+      };
       for (final r in remote) {
-        final existing = byId[r.correlationId];
+        final existing = existingById[r.correlationId];
         if (existing == null) {
           byId[r.correlationId] = r;
         } else {
@@ -509,7 +519,8 @@ class MatchStore extends StateNotifier<List<MatchRecord>> {
             bio: r.bio ?? existing.bio,
             age: r.age ?? existing.age,
             gender: r.gender ?? existing.gender,
-            interests: r.interests.isNotEmpty ? r.interests : existing.interests,
+            interests:
+                r.interests.isNotEmpty ? r.interests : existing.interests,
             photoPaths:
                 r.photoPaths.isNotEmpty ? r.photoPaths : existing.photoPaths,
             otherUserId: r.otherUserId ?? existing.otherUserId,
@@ -546,6 +557,7 @@ class MatchStore extends StateNotifier<List<MatchRecord>> {
       await ChatSyncService().markRead(matchId);
     } catch (e) {
       debugPrint('hydrateThread failed: $e');
+      rethrow;
     }
   }
 
@@ -585,7 +597,7 @@ class MatchStore extends StateNotifier<List<MatchRecord>> {
     final localMsg = ChatMessage(
       id: localId,
       fromMe: true,
-      text: t.isEmpty ? '📷 Photo' : t,
+      text: t,
       at: DateTime.now(),
       imagePath: imagePath,
     );
@@ -600,12 +612,20 @@ class MatchStore extends StateNotifier<List<MatchRecord>> {
     ];
     await _persist();
 
-    if (isServerMatch && t.isNotEmpty) {
+    if (isServerMatch) {
       try {
-        final serverId = await EncountersApi().sendMessage(
-          matchId: matchId,
-          content: t,
-        );
+        final SentChatMedia? media = imagePath == null
+            ? null
+            : await ChatSyncService().sendPhoto(
+                matchId: matchId,
+                localPath: imagePath,
+                caption: t,
+              );
+        final serverId = media?.messageId ??
+            await EncountersApi().sendMessage(
+              matchId: matchId,
+              content: t,
+            );
         state = [
           for (final m in state)
             if (m.correlationId == correlationId)
@@ -618,7 +638,7 @@ class MatchStore extends StateNotifier<List<MatchRecord>> {
                         fromMe: true,
                         text: msg.text,
                         at: msg.at,
-                        imagePath: msg.imagePath,
+                        imagePath: media?.storagePath ?? msg.imagePath,
                       )
                     else
                       msg,

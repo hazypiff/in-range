@@ -1,8 +1,10 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:in_range/core/session/app_session.dart';
+import 'package:in_range/shared/services/encounters_api.dart';
 
 /// Local report / block lists (server moderation later).
 class SafetyStore extends StateNotifier<SafetyState> {
@@ -11,6 +13,7 @@ class SafetyStore extends StateNotifier<SafetyState> {
   }
 
   final SharedPreferences _prefs;
+  final _api = EncountersApi();
 
   void _load() {
     state = SafetyState(
@@ -29,9 +32,13 @@ class SafetyStore extends StateNotifier<SafetyState> {
     if (raw == null || raw.isEmpty) return const [];
     try {
       return (jsonDecode(raw) as List)
-          .map((e) => ReportRecord.fromJson(Map<String, dynamic>.from(e as Map)))
+          .map(
+              (e) => ReportRecord.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList();
-    } catch (_) {
+    } catch (e) {
+      // Corrupt local moderation state must not crash startup; fail closed by
+      // dropping the malformed cache and leave an audit breadcrumb in debug.
+      debugPrint('Local report cache could not be decoded: $e');
       return const [];
     }
   }
@@ -60,9 +67,11 @@ class SafetyStore extends StateNotifier<SafetyState> {
   Future<void> block(String id) async {
     state = state.copyWith(blocked: {...state.blocked, id});
     await _persist();
+    if (_looksLikeUuid(id)) await _api.blockUser(id);
   }
 
   Future<void> unblock(String id) async {
+    if (_looksLikeUuid(id)) await _api.unblockUser(id);
     final b = {...state.blocked}..remove(id);
     state = state.copyWith(blocked: b);
     await _persist();
@@ -71,15 +80,26 @@ class SafetyStore extends StateNotifier<SafetyState> {
   Future<void> report({
     required String targetId,
     required String reason,
+    int? matchId,
   }) async {
     final r = ReportRecord(
       targetId: targetId,
       reason: reason,
       at: DateTime.now(),
     );
-    state = state.copyWith(reports: [r, ...state.reports]);
-    // Auto-block on report for local safety.
-    await block(targetId);
+    state = state.copyWith(
+      reports: [r, ...state.reports],
+      blocked: {...state.blocked, targetId},
+    );
+    await _persist();
+    if (_looksLikeUuid(targetId)) {
+      await _api.reportUser(
+        userId: targetId,
+        reason: 'other',
+        details: reason,
+        matchId: matchId,
+      );
+    }
   }
 
   Future<void> setIncognito(bool v) async {
@@ -96,7 +116,8 @@ class SafetyStore extends StateNotifier<SafetyState> {
   }
 
   /// Local boost simulation (30 min) — no payment.
-  Future<void> activateBoostLocal({Duration d = const Duration(minutes: 30)}) async {
+  Future<void> activateBoostLocal(
+      {Duration d = const Duration(minutes: 30)}) async {
     state = state.copyWith(boostActiveUntil: DateTime.now().add(d));
     await _persist();
   }
@@ -108,6 +129,26 @@ class SafetyStore extends StateNotifier<SafetyState> {
       DateTime.now().toIso8601String(),
     );
   }
+
+  Future<void> clearAll() async {
+    for (final key in const [
+      'blocked_ids',
+      'reports_json',
+      'incognito',
+      'free_ads',
+      'subscriber_local',
+      'boost_until',
+      'location_history_cleared_at',
+    ]) {
+      await _prefs.remove(key);
+    }
+    state = SafetyState.empty;
+  }
+
+  static bool _looksLikeUuid(String value) => RegExp(
+        r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+        caseSensitive: false,
+      ).hasMatch(value);
 }
 
 class SafetyState {

@@ -6,21 +6,14 @@
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { requireServiceRole } from "../_shared/service_auth.ts";
 
 
 
 
 function publicError(e: unknown): string {
-  // Avoid leaking stack traces / internal paths to API clients.
   console.error(e);
-  if (e && typeof e === "object" && "message" in e) {
-    const m = String((e as { message: unknown }).message);
-    // Allow short, non-sensitive messages; reject path-like strings
-    if (m.length < 120 && !m.includes("/") && m.indexOf(String.fromCharCode(92)) < 0) {
-      return m;
-    }
-  }
-  return "internal_error";
+  return "operation_failed";
 }
 
 function newRunKey(source: string): string {
@@ -89,13 +82,15 @@ async function completeRun(
 
 
 
-Deno.serve(async (_req) => {
+Deno.serve(async (req) => {
   let supabase: ReturnType<typeof createClient> | null = null;
   let runId: string | null = null;
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    supabase = createClient(supabaseUrl, serviceKey);
+    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    const authError = requireServiceRole(req, serviceKey);
+    if (authError) return authError;
+    supabase = createClient(supabaseUrl, serviceKey!);
     runId = await logRun(supabase, "maintenance");
 
     const { data, error } = await supabase.rpc("run_maintenance");

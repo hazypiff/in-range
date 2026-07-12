@@ -13,7 +13,10 @@ class PhotoUrlService {
   static Future<String?> resolve(String? pathOrUrl) async {
     if (pathOrUrl == null || pathOrUrl.isEmpty) return null;
     if (pathOrUrl.startsWith('http://') || pathOrUrl.startsWith('https://')) {
-      return pathOrUrl;
+      final uri = Uri.tryParse(pathOrUrl);
+      final backend = Uri.tryParse(AppConfig.supabaseUrl);
+      if (uri?.scheme != 'https' || uri?.host != backend?.host) return null;
+      return uri.toString();
     }
     if (pathOrUrl.startsWith('/') || pathOrUrl.contains(r'\')) {
       // Local absolute path
@@ -21,18 +24,19 @@ class PhotoUrlService {
     }
     if (!AppConfig.hasRealSupabase) return pathOrUrl;
 
-    final cached = _cache[pathOrUrl];
+    final client = InRangeSupabase.clientOrNull;
+    if (client == null || client.auth.currentUser == null) return null;
+    final cacheKey = '${client.auth.currentUser!.id}:$pathOrUrl';
+    final cached = _cache[cacheKey];
     if (cached != null && cached.exp.isAfter(DateTime.now())) {
       return cached.url;
     }
 
     try {
-      final client = InRangeSupabase.clientOrNull;
-      if (client == null) return null;
       final signed = await client.storage
           .from('profile_photos')
           .createSignedUrl(pathOrUrl, 3600);
-      _cache[pathOrUrl] = (
+      _cache[cacheKey] = (
         url: signed,
         exp: DateTime.now().add(const Duration(minutes: 50)),
       );

@@ -7,9 +7,11 @@ import 'package:in_range/core/session/app_session.dart';
 import 'package:in_range/features/beacon/beacon_provider.dart';
 import 'package:in_range/features/encounters/local_encounter_store.dart';
 import 'package:in_range/features/history/history_screen.dart';
+import 'package:in_range/features/locals/locals_service.dart';
 import 'package:in_range/features/matches/match_store.dart';
 import 'package:in_range/shared/services/ai_feedback_service.dart';
 import 'package:in_range/shared/services/profile_sync_service.dart';
+import 'package:in_range/shared/services/photo_url_service.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -63,8 +65,23 @@ class SettingsScreen extends ConsumerWidget {
             title: const Text('Pause account'),
             subtitle: const Text('Hide from new encounters'),
             value: session.paused,
-            onChanged: (v) =>
-                ref.read(sessionControllerProvider.notifier).setPaused(v),
+            onChanged: (v) async {
+              try {
+                if (v && ref.read(beaconControllerProvider).isOn) {
+                  await ref.read(beaconControllerProvider.notifier).toggle();
+                }
+                if (v) await ref.read(localsControllerProvider.notifier).stop();
+                await ref.read(sessionControllerProvider.notifier).setPaused(v);
+              } catch (e) {
+                debugPrint('setPaused failed: $e');
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                        content: Text('Could not update pause state.')),
+                  );
+                }
+              }
+            },
           ),
           SwitchListTile(
             title: const Text('Incognito'),
@@ -75,11 +92,15 @@ class SettingsScreen extends ConsumerWidget {
             ),
             value: safety.incognito,
             onChanged: (v) async {
-              await ref.read(safetyStoreProvider.notifier).setIncognito(v);
               try {
                 await ref
                     .read(sessionControllerProvider.notifier)
                     .setIncognito(v);
+                await ref.read(safetyStoreProvider.notifier).setIncognito(v);
+                if (v && ref.read(beaconControllerProvider).isOn) {
+                  await ref.read(beaconControllerProvider.notifier).toggle();
+                  await ref.read(localsControllerProvider.notifier).stop();
+                }
               } catch (e) {
                 debugPrint('setIncognito failed: $e');
                 if (context.mounted) {
@@ -164,11 +185,15 @@ class SettingsScreen extends ConsumerWidget {
                           title:
                               Text(id.length > 12 ? id.substring(0, 12) : id),
                           trailing: TextButton(
-                            onPressed: () {
-                              ref
-                                  .read(safetyStoreProvider.notifier)
-                                  .unblock(id);
-                              Navigator.pop(ctx);
+                            onPressed: () async {
+                              try {
+                                await ref
+                                    .read(safetyStoreProvider.notifier)
+                                    .unblock(id);
+                                if (ctx.mounted) Navigator.pop(ctx);
+                              } catch (e) {
+                                debugPrint('unblock failed: $e');
+                              }
                             },
                             child: const Text('Unblock'),
                           ),
@@ -269,26 +294,35 @@ class SettingsScreen extends ConsumerWidget {
           ListTile(
             leading: const Icon(Icons.logout),
             title: const Text('Sign out'),
-            onTap: () {
-              ref.read(sessionControllerProvider.notifier).signOut();
-              // Reset beacon state so a re-signed-in user doesn't see stale
-              // "Beacon ON" while BLE is actually off.
+            onTap: () async {
+              if (ref.read(beaconControllerProvider).isOn) {
+                await ref.read(beaconControllerProvider.notifier).toggle();
+              }
+              await ref.read(localsControllerProvider.notifier).stop();
+              await ref.read(matchStoreProvider.notifier).clearAll();
+              await ref.read(localEncounterStoreProvider.notifier).clear();
+              await ref.read(safetyStoreProvider.notifier).clearAll();
+              PhotoUrlService.clearCache();
+              await ref.read(sessionControllerProvider.notifier).signOut();
               ref.invalidate(beaconControllerProvider);
+              if (context.mounted) {
+                Navigator.of(context).popUntil((route) => route.isFirst);
+              }
             },
           ),
           ListTile(
             leading: Icon(Icons.delete_forever, color: Colors.red.shade700),
             title: Text(
-              'Delete account (local)',
+              'Request account deletion',
               style: TextStyle(color: Colors.red.shade700),
             ),
             onTap: () async {
               final ok = await showDialog<bool>(
                 context: context,
                 builder: (ctx) => AlertDialog(
-                  title: const Text('Delete local account?'),
+                  title: const Text('Deactivate account?'),
                   content: const Text(
-                    'Clears onboarding, profile, likes, matches, and sightings on this device.',
+                    'Scrubs and deactivates the cloud profile, then clears profile, likes, matches, and sightings on this device. The auth record requires the server retention purge.',
                   ),
                   actions: [
                     TextButton(
@@ -303,11 +337,31 @@ class SettingsScreen extends ConsumerWidget {
                 ),
               );
               if (ok == true) {
-                await ref.read(matchStoreProvider.notifier).clearAll();
-                await ref.read(localEncounterStoreProvider.notifier).clear();
-                await ref
-                    .read(sessionControllerProvider.notifier)
-                    .deleteAccountLocal();
+                try {
+                  if (ref.read(beaconControllerProvider).isOn) {
+                    await ref.read(beaconControllerProvider.notifier).toggle();
+                  }
+                  await ref.read(localsControllerProvider.notifier).stop();
+                  await ref
+                      .read(sessionControllerProvider.notifier)
+                      .deleteAccountLocal();
+                  await ref.read(matchStoreProvider.notifier).clearAll();
+                  await ref.read(localEncounterStoreProvider.notifier).clear();
+                  await ref.read(safetyStoreProvider.notifier).clearAll();
+                  PhotoUrlService.clearCache();
+                  if (context.mounted) {
+                    Navigator.of(context).popUntil((route) => route.isFirst);
+                  }
+                } catch (e) {
+                  debugPrint('Delete account failed: $e');
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                          content: Text(
+                              'Account deletion failed. No local data was cleared.')),
+                    );
+                  }
+                }
               }
             },
           ),
@@ -365,6 +419,9 @@ Future<void> _showSystemFeedbackDialog(BuildContext context) async {
                 maxLength: 2000,
                 decoration: const InputDecoration(
                   labelText: 'Notes',
+                  helperText:
+                      'Do not include names, contact details, or locations.',
+                  helperMaxLines: 2,
                   border: OutlineInputBorder(),
                 ),
               ),

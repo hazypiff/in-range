@@ -3,8 +3,9 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/core/network/supabase_client.dart';
+import 'package:in_range/core/privacy/image_sanitizer.dart';
 import 'package:in_range/core/session/app_session.dart';
-import 'package:path/path.dart' as p;
+import 'package:in_range/core/session/age_gate.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 /// Syncs local profile + photos to Supabase when cloud is live.
@@ -18,14 +19,13 @@ class ProfileSyncService {
     final client = InRangeSupabase.client;
     if (client.auth.currentUser == null) return;
 
-    final dob =
-        session.birthYear != null ? DateTime(session.birthYear!, 1, 1) : null;
+    final dob = session.birthDate;
 
     try {
       await client.rpc('upsert_my_profile', params: {
         'p_display_name': session.displayName ?? 'User',
         'p_bio': session.bio,
-        'p_dob': dob?.toIso8601String().split('T').first,
+        'p_dob': dob == null ? null : AgeGate.format(dob),
         'p_gender': session.gender,
         'p_sexual_preference': session.preference,
         'p_interests': [
@@ -57,24 +57,31 @@ class ProfileSyncService {
     for (var i = 0; i < localPaths.length && i < 6; i++) {
       final path = localPaths[i];
       // Already a remote path?
-      if (path.startsWith('http') || path.startsWith('$uid/')) {
+      if (path.startsWith('$uid/')) {
         uploaded.add(path);
         continue;
       }
+      if (path.startsWith('http')) {
+        throw StateError('External profile photo URLs are not accepted');
+      }
       final file = File(path);
-      if (!await file.exists()) continue;
+      if (!await file.exists()) {
+        throw StateError('Profile photo is no longer available on this device');
+      }
 
-      final ext = p.extension(path).replaceFirst('.', '');
-      final safeExt = ext.isEmpty ? 'jpg' : ext;
+      final clean = await ImageSanitizer.toJpeg(
+        path,
+        prefix: 'profile_upload_$i',
+      );
       final storagePath =
-          '$uid/$i-${DateTime.now().millisecondsSinceEpoch}.$safeExt';
+          '$uid/$i-${DateTime.now().microsecondsSinceEpoch}.jpg';
 
       try {
         await client.storage.from('profile_photos').upload(
               storagePath,
-              file,
+              clean,
               fileOptions: const FileOptions(
-                upsert: true,
+                upsert: false,
                 contentType: 'image/jpeg',
               ),
             );
@@ -91,7 +98,7 @@ class ProfileSyncService {
             'Photo slot $i uploaded + verification queued path=$storagePath');
       } catch (e) {
         debugPrint('Photo upload slot $i failed: $e');
-        uploaded.add(path); // keep local path as fallback
+        rethrow;
       }
     }
     return uploaded;
@@ -99,32 +106,20 @@ class ProfileSyncService {
 
   Future<void> setPaused(bool paused) async {
     if (!cloudReady) return;
-    try {
-      await InRangeSupabase.client.rpc(
-        'set_account_paused',
-        params: {'p_paused': paused},
-      );
-    } catch (e) {
-      debugPrint('set_account_paused failed: $e');
-    }
+    await InRangeSupabase.client.rpc(
+      'set_account_paused',
+      params: {'p_paused': paused},
+    );
   }
 
   Future<void> requestDeletion() async {
     if (!cloudReady) return;
-    try {
-      await InRangeSupabase.client.rpc('request_account_deletion');
-    } catch (e) {
-      debugPrint('request_account_deletion failed: $e');
-    }
+    await InRangeSupabase.client.rpc('request_account_deletion');
   }
 
   Future<void> deleteLocationHistory() async {
     if (!cloudReady) return;
-    try {
-      await InRangeSupabase.client.rpc('delete_my_location_history');
-    } catch (e) {
-      debugPrint('delete_my_location_history failed: $e');
-    }
+    await InRangeSupabase.client.rpc('delete_my_location_history');
   }
 
   Future<void> setIncognito(bool enabled) async {

@@ -7,18 +7,18 @@ plugins {
 }
 
 android {
-    namespace = "com.example.in_range"
+    namespace = "io.inrange.app"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.example.in_range"
+        applicationId = "io.inrange.app"
         minSdk = flutter.minSdkVersion
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
 
         ndk {
-            abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a"))
+            abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a", "x86_64"))
         }
     }
 
@@ -37,11 +37,7 @@ android {
         }
     }
 
-    buildTypes {
-        release {
-            signingConfig = signingConfigs.getByName("debug")
-        }
-    }
+    // Release signing must be supplied by CI/Play. Never ship the debug key.
 }
 
 flutter {

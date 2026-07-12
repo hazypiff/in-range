@@ -1,10 +1,14 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/core/network/supabase_client.dart';
+import 'package:in_range/core/session/age_gate.dart';
 import 'package:in_range/shared/services/auth_service.dart';
 import 'package:in_range/shared/services/profile_sync_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 
 /// Local-first session with optional cloud bind when Supabase is live.
@@ -21,7 +25,7 @@ class AppSession {
     this.preference,
     this.interests = const [],
     this.customInterest,
-    this.birthYear,
+    this.birthDate,
     this.photoPaths = const [],
     this.photoVerificationStatus = 'pending',
     this.isCloudUser = false,
@@ -41,7 +45,7 @@ class AppSession {
   final String? preference;
   final List<String> interests;
   final String? customInterest;
-  final int? birthYear;
+  final DateTime? birthDate;
   final List<String> photoPaths;
 
   /// pending | verified | rejected
@@ -52,8 +56,8 @@ class AppSession {
   final bool incognito;
 
   int? get age {
-    if (birthYear == null) return null;
-    return DateTime.now().year - birthYear!;
+    if (birthDate == null) return null;
+    return AgeGate.age(birthDate!);
   }
 
   bool get needsOnboarding => !onboardingComplete;
@@ -74,7 +78,7 @@ class AppSession {
     String? preference,
     List<String>? interests,
     String? customInterest,
-    int? birthYear,
+    DateTime? birthDate,
     List<String>? photoPaths,
     String? photoVerificationStatus,
     bool? isCloudUser,
@@ -94,7 +98,7 @@ class AppSession {
       preference: preference ?? this.preference,
       interests: interests ?? this.interests,
       customInterest: customInterest ?? this.customInterest,
-      birthYear: birthYear ?? this.birthYear,
+      birthDate: birthDate ?? this.birthDate,
       photoPaths: photoPaths ?? this.photoPaths,
       photoVerificationStatus:
           photoVerificationStatus ?? this.photoVerificationStatus,
@@ -116,12 +120,18 @@ class AppSession {
 class SessionController extends StateNotifier<AppSession> {
   SessionController(this._prefs) : super(AppSession.empty) {
     _load();
-    _bindCloudSessionIfAny();
+    if (AppConfig.hasRealSupabase) {
+      _authSubscription = _auth.onAuthStateChange.listen(_handleAuthState);
+      _bindCloudSessionIfAny();
+    } else if (_prefs.getBool('has_cloud_session') == true) {
+      unawaited(_clearAccountState());
+    }
   }
 
   final SharedPreferences _prefs;
   final _auth = AuthService();
   final _profileSync = ProfileSyncService();
+  StreamSubscription<AuthState>? _authSubscription;
   static const _uuid = Uuid();
 
   void _load() {
@@ -139,7 +149,7 @@ class SessionController extends StateNotifier<AppSession> {
       preference: _prefs.getString('preference'),
       interests: interestsRaw,
       customInterest: _prefs.getString('custom_interest'),
-      birthYear: _prefs.getInt('birth_year'),
+      birthDate: _storedBirthDate(),
       photoPaths: photos,
       photoVerificationStatus:
           _prefs.getString('photo_verification') ?? 'pending',
@@ -151,9 +161,18 @@ class SessionController extends StateNotifier<AppSession> {
     debugPrint(
       'Session loaded: onboard=${state.onboardingComplete} '
       'auth=${state.signedIn} profile=${state.profileComplete} '
-      'photos=${state.photoPaths.length} uid=${state.userId} '
+      'photos=${state.photoPaths.length} hasUid=${state.userId != null} '
       'cloud=${state.isCloudUser}',
     );
+  }
+
+  DateTime? _storedBirthDate() {
+    final exact = DateTime.tryParse(_prefs.getString('birth_date') ?? '');
+    if (exact != null) return DateTime(exact.year, exact.month, exact.day);
+    final legacyYear = _prefs.getInt('birth_year');
+    // A year-only legacy value cannot prove someone has had their birthday;
+    // December 31 is the conservative migration until they edit their profile.
+    return legacyYear == null ? null : DateTime(legacyYear, 12, 31);
   }
 
   Future<void> _bindCloudSessionIfAny() async {
@@ -162,6 +181,9 @@ class SessionController extends StateNotifier<AppSession> {
       final user = InRangeSupabase.clientOrNull?.auth.currentUser;
       if (user == null) {
         debugPrint('Cloud bind: no Supabase user yet');
+        if (_prefs.getBool('has_cloud_session') == true) {
+          await _clearAccountState();
+        }
         return;
       }
       // Prefer cloud uid for server RPCs even when anonymous; keep local
@@ -171,11 +193,86 @@ class SessionController extends StateNotifier<AppSession> {
         email: user.email,
         isAnonymous: user.isAnonymous,
       );
+      if (!user.isAnonymous) await _hydrateCloudProfile();
       debugPrint(
-        'Cloud bind OK uid=${user.id} anon=${user.isAnonymous}',
+        'Cloud bind OK anon=${user.isAnonymous}',
       );
     } catch (e) {
       debugPrint('Cloud session bind skipped: $e');
+    }
+  }
+
+  Future<void> _handleAuthState(AuthState authState) async {
+    final user = authState.session?.user;
+    if (user != null) {
+      await _applyCloudUser(
+        user.id,
+        email: user.email,
+        isAnonymous: user.isAnonymous,
+      );
+      if (!user.isAnonymous) await _hydrateCloudProfile();
+      return;
+    }
+    if (authState.event == AuthChangeEvent.signedOut) {
+      await _clearAccountState();
+    }
+  }
+
+  Future<void> _hydrateCloudProfile() async {
+    try {
+      final raw = await InRangeSupabase.client.rpc('get_my_profile');
+      if (raw is! Map) return;
+      final profile = Map<String, dynamic>.from(raw);
+      final dob = DateTime.tryParse(profile['dob']?.toString() ?? '');
+      final interests =
+          (profile['interests'] as List?)?.map((e) => e.toString()).toList() ??
+              const <String>[];
+      final photos = (profile['photo_urls'] as List?)
+              ?.map((e) => e.toString())
+              .where((e) => e.isNotEmpty)
+              .toList() ??
+          const <String>[];
+      final displayName = profile['display_name']?.toString();
+      final complete = profile['age_verified'] == true &&
+          displayName != null &&
+          displayName.trim().isNotEmpty;
+
+      if (displayName != null) {
+        await _prefs.setString('display_name', displayName);
+      }
+      await _prefs.setString('bio', profile['bio']?.toString() ?? '');
+      if (dob != null) {
+        await _prefs.setString('birth_date', AgeGate.format(dob));
+        await _prefs.remove('birth_year');
+      }
+      await _prefs.setStringList('interests', interests);
+      await _prefs.setStringList('photo_paths', photos);
+      await _prefs.setString(
+        'photo_verification',
+        profile['photo_verification_status']?.toString() ?? 'pending',
+      );
+      await _prefs.setBool('profile_complete', complete);
+      await _prefs.setBool('paused', profile['is_paused'] == true);
+      await _prefs.setBool('incognito', profile['is_incognito'] == true);
+      await _prefs.setBool('is_subscriber', profile['is_subscriber'] == true);
+
+      state = state.copyWith(
+        displayName: displayName,
+        bio: profile['bio']?.toString(),
+        gender: profile['gender']?.toString(),
+        preference: profile['sexual_preference']?.toString(),
+        interests: interests,
+        birthDate: dob,
+        photoPaths: photos,
+        photoVerificationStatus:
+            profile['photo_verification_status']?.toString() ?? 'pending',
+        profileComplete: complete,
+        paused: profile['is_paused'] == true,
+        incognito: profile['is_incognito'] == true,
+        isSubscriber: profile['is_subscriber'] == true,
+      );
+    } catch (e) {
+      debugPrint('Cloud profile hydration failed: $e');
     }
   }
 
@@ -205,23 +302,17 @@ class SessionController extends StateNotifier<AppSession> {
     state = state.copyWith(onboardingComplete: true);
   }
 
-  Future<void> signInAsGuest({String? emailHint, int? birthYear}) async {
-    if (birthYear != null) {
-      final age = DateTime.now().year - birthYear;
-      if (age < 18) {
-        throw StateError('You must be 18 or older to use In Range');
-      }
-      await _prefs.setInt('birth_year', birthYear);
-    }
+  Future<void> signInAsGuest({String? emailHint, DateTime? birthDate}) async {
+    if (birthDate != null) await rememberBirthDate(birthDate);
     // Prefer anonymous cloud session when available
     if (AppConfig.hasRealSupabase) {
       try {
-        final res = await _auth.signInAnonymously();
+        final res = await _auth.signInAnonymously(birthDate: birthDate);
         final uid = res.user?.id;
         if (uid != null) {
           await _applyCloudUser(uid, email: emailHint, isAnonymous: true);
-          if (birthYear != null) {
-            state = state.copyWith(birthYear: birthYear);
+          if (birthDate != null) {
+            state = state.copyWith(birthDate: birthDate);
           }
           return;
         }
@@ -241,81 +332,60 @@ class SessionController extends StateNotifier<AppSession> {
       userId: id,
       isCloudUser: false,
       email: emailHint ?? state.email,
-      birthYear: birthYear ?? state.birthYear,
+      birthDate: birthDate ?? state.birthDate,
     );
+  }
+
+  Future<void> rememberBirthDate(DateTime birthDate) async {
+    if (!AgeGate.isAdult(birthDate)) {
+      throw StateError('You must be 18 or older to use In Range');
+    }
+    await _prefs.setString('birth_date', AgeGate.format(birthDate));
+    await _prefs.remove('birth_year');
+    state = state.copyWith(birthDate: birthDate);
   }
 
   Future<void> signInEmail({
     required String email,
     required String password,
   }) async {
-    if (AppConfig.hasRealSupabase) {
-      try {
-        // Try sign-in first; if user missing, sign-up
-        try {
-          final res = await _auth.signInEmail(email: email, password: password);
-          final uid = res.user?.id;
-          if (uid != null) {
-            await _applyCloudUser(uid, email: email);
-            return;
-          }
-        } catch (_) {
-          final res = await _auth.signUpEmail(email: email, password: password);
-          final uid = res.user?.id;
-          if (uid != null) {
-            await _applyCloudUser(uid, email: email);
-            return;
-          }
-          // Email confirmation required — still allow local progression
-          if (res.session == null) {
-            await signInAsGuest(emailHint: email);
-            throw StateError(
-              'Check your email to confirm the account. Continuing in local mode until confirmed.',
-            );
-          }
-        }
-      } catch (e) {
-        if (e is StateError && e.message.contains('Check your email')) rethrow;
-        debugPrint('Cloud email auth failed: $e');
-        // Fall through to local so dual-phone testing never blocks
-        await signInAsGuest(emailHint: email);
-        rethrow;
-      }
-    } else {
-      await signInAsGuest(emailHint: email);
+    if (!AppConfig.hasRealSupabase) {
+      throw StateError(
+          'Cloud sign-in is unavailable. Use explicit guest mode.');
     }
+    final res = await _auth.signInEmail(email: email, password: password);
+    final uid = res.user?.id;
+    if (uid == null || res.session == null) {
+      throw StateError('Sign-in did not create a session');
+    }
+    await _applyCloudUser(uid, email: email);
+    await _hydrateCloudProfile();
   }
 
   Future<void> signUpEmail({
     required String email,
     required String password,
     String? displayName,
-    int? birthYear,
+    required DateTime birthDate,
   }) async {
-    if (birthYear != null) {
-      final age = DateTime.now().year - birthYear;
-      if (age < 18) {
-        throw StateError('You must be 18 or older to create an account');
-      }
-      await _prefs.setInt('birth_year', birthYear);
-    }
+    await rememberBirthDate(birthDate);
     if (!AppConfig.hasRealSupabase) {
-      await signInAsGuest(emailHint: email, birthYear: birthYear);
-      return;
+      throw StateError(
+          'Cloud sign-up is unavailable. Use explicit guest mode.');
     }
     final res = await _auth.signUpEmail(
       email: email,
       password: password,
       displayName: displayName,
+      birthDate: birthDate,
     );
     final uid = res.user?.id;
     if (uid != null && res.session != null) {
       await _applyCloudUser(uid, email: email);
-      if (birthYear != null) {
-        state = state.copyWith(birthYear: birthYear);
-      }
+      state = state.copyWith(birthDate: birthDate);
     } else {
-      await signInAsGuest(emailHint: email, birthYear: birthYear);
+      throw StateError(
+          'Check your email to confirm the account, then sign in.');
     }
   }
 
@@ -359,19 +429,21 @@ class SessionController extends StateNotifier<AppSession> {
     required String bio,
     required String gender,
     required String preference,
-    required int birthYear,
+    required DateTime birthDate,
     required List<String> interests,
     String? customInterest,
     List<String>? photoPaths,
   }) async {
-    final age = DateTime.now().year - birthYear;
-    if (age < 18) {
+    if (!AgeGate.isAdult(birthDate)) {
       throw StateError('Must be 18+');
     }
     if (displayName.trim().isEmpty) {
       throw StateError('Display name required');
     }
     var photos = photoPaths ?? state.photoPaths;
+    if (photos.isEmpty) {
+      throw StateError('Add at least one profile photo');
+    }
 
     // Upload photos + profile when cloud is live
     if (AppConfig.hasRealSupabase && state.isCloudUser) {
@@ -382,14 +454,15 @@ class SessionController extends StateNotifier<AppSession> {
           bio: bio.trim(),
           gender: gender,
           preference: preference,
-          birthYear: birthYear,
+          birthDate: birthDate,
           interests: interests,
           customInterest: customInterest?.trim(),
           photoPaths: photos,
         );
         await _profileSync.syncProfile(draft);
       } catch (e) {
-        debugPrint('Cloud profile sync deferred: $e');
+        debugPrint('Cloud profile sync failed: $e');
+        rethrow;
       }
     }
 
@@ -397,7 +470,8 @@ class SessionController extends StateNotifier<AppSession> {
     await _prefs.setString('bio', bio.trim());
     await _prefs.setString('gender', gender);
     await _prefs.setString('preference', preference);
-    await _prefs.setInt('birth_year', birthYear);
+    await _prefs.setString('birth_date', AgeGate.format(birthDate));
+    await _prefs.remove('birth_year');
     await _prefs.setStringList('interests', interests);
     if (customInterest != null) {
       await _prefs.setString('custom_interest', customInterest.trim());
@@ -410,7 +484,7 @@ class SessionController extends StateNotifier<AppSession> {
       bio: bio.trim(),
       gender: gender,
       preference: preference,
-      birthYear: birthYear,
+      birthDate: birthDate,
       interests: interests,
       customInterest: customInterest?.trim(),
       photoPaths: photos,
@@ -426,9 +500,9 @@ class SessionController extends StateNotifier<AppSession> {
   }
 
   Future<void> setPaused(bool paused) async {
+    await _profileSync.setPaused(paused);
     await _prefs.setBool('paused', paused);
     state = state.copyWith(paused: paused);
-    await _profileSync.setPaused(paused);
   }
 
   Future<void> setIncognito(bool enabled) async {
@@ -438,23 +512,59 @@ class SessionController extends StateNotifier<AppSession> {
   }
 
   Future<void> deleteAccountLocal() async {
-    try {
+    if (AppConfig.hasRealSupabase &&
+        InRangeSupabase.clientOrNull?.auth.currentUser != null) {
       await _profileSync.requestDeletion();
-      await _auth.signOut();
-    } catch (e) {
-      debugPrint('Cloud delete: $e');
     }
-    await _prefs.clear();
-    state = AppSession.empty;
+    await _auth.signOut();
+    await _clearAccountState(clearOnboarding: true);
   }
 
   Future<void> signOut() async {
     try {
       await _auth.signOut();
-    } catch (_) {}
-    await _prefs.setBool('signed_in', false);
-    await _prefs.setBool('is_cloud_user', false);
-    state = state.copyWith(signedIn: false, isCloudUser: false);
+    } catch (e) {
+      debugPrint('Cloud sign-out failed; clearing this device session: $e');
+    }
+    await _clearAccountState();
+  }
+
+  Future<void> _clearAccountState({bool clearOnboarding = false}) async {
+    const accountKeys = <String>[
+      'signed_in',
+      'user_id',
+      'is_cloud_user',
+      'has_cloud_session',
+      'email_hint',
+      'profile_complete',
+      'paused',
+      'display_name',
+      'bio',
+      'gender',
+      'preference',
+      'interests',
+      'custom_interest',
+      'birth_date',
+      'birth_year',
+      'photo_paths',
+      'photo_verification',
+      'is_subscriber',
+      'incognito',
+    ];
+    for (final key in accountKeys) {
+      await _prefs.remove(key);
+    }
+    if (clearOnboarding) await _prefs.remove('onboarding_complete');
+    final onboarded = clearOnboarding
+        ? false
+        : (_prefs.getBool('onboarding_complete') ?? state.onboardingComplete);
+    state = AppSession.empty.copyWith(onboardingComplete: onboarded);
+  }
+
+  @override
+  void dispose() {
+    _authSubscription?.cancel();
+    super.dispose();
   }
 }
 

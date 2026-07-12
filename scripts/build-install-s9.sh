@@ -5,26 +5,16 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-echo "=== flutter build apk --debug (arm + arm64) ==="
-# Optional: bake host .env into APK via dart-define (device cannot read host files).
-# Secrets stay out of git; only present in this lab build artifact.
+echo "=== flutter build apk --debug (arm + arm64 + x64) ==="
+# Flutter parses the env file directly. Do not source an untrusted file as shell.
 DEFINES=()
 if [[ -f .env ]]; then
-  # shellcheck disable=SC1091
-  set -a
-  # shellcheck source=/dev/null
-  source <(grep -E '^(SUPABASE_URL|SUPABASE_PUBLISHABLE_KEY|INRANGE_HMAC_SECRET|INRANGE_USER_ID_SECRET|ENCOUNTER_REVEAL_DELAY_HOURS)=' .env | sed 's/\r$//')
-  set +a
-  [[ -n "${SUPABASE_URL:-}" ]] && DEFINES+=(--dart-define=SUPABASE_URL="$SUPABASE_URL")
-  [[ -n "${SUPABASE_PUBLISHABLE_KEY:-}" ]] && DEFINES+=(--dart-define=SUPABASE_PUBLISHABLE_KEY="$SUPABASE_PUBLISHABLE_KEY")
-  [[ -n "${INRANGE_HMAC_SECRET:-}" ]] && DEFINES+=(--dart-define=INRANGE_HMAC_SECRET="$INRANGE_HMAC_SECRET")
-  [[ -n "${INRANGE_USER_ID_SECRET:-}" ]] && DEFINES+=(--dart-define=INRANGE_USER_ID_SECRET="$INRANGE_USER_ID_SECRET")
-  [[ -n "${ENCOUNTER_REVEAL_DELAY_HOURS:-}" ]] && DEFINES+=(--dart-define=ENCOUNTER_REVEAL_DELAY_HOURS="$ENCOUNTER_REVEAL_DELAY_HOURS")
-  echo "Using ${#DEFINES[@]} dart-define(s) from .env"
+  DEFINES+=(--dart-define-from-file=.env)
+  echo "Using Flutter dart-defines from .env"
 fi
 
 flutter build apk --debug \
-  --target-platform android-arm,android-arm64 \
+  --target-platform android-arm,android-arm64,android-x64 \
   "${DEFINES[@]}"
 APK="build/app/outputs/flutter-apk/app-debug.apk"
 if [[ ! -f "$APK" ]]; then
@@ -42,8 +32,8 @@ fi
 for ser in "${DEVICES[@]}"; do
   echo "--- $ser ---"
   adb -s "$ser" install -r "$APK"
-  adb -s "$ser" shell am force-stop com.example.in_range || true
-  adb -s "$ser" shell monkey -p com.example.in_range -c android.intent.category.LAUNCHER 1 >/dev/null || true
+  adb -s "$ser" shell am force-stop io.inrange.app || true
+  adb -s "$ser" shell monkey -p io.inrange.app -c android.intent.category.LAUNCHER 1 >/dev/null || true
 done
 
 echo "Done. Multi-ABI APK on ${#DEVICES[@]} device(s)."

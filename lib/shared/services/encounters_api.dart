@@ -17,7 +17,6 @@ class EncountersApi {
         params: {
           'p_limit': 50,
           'p_offset': 0,
-          'p_min_age_hours': AppConfig.encounterRevealDelayHours,
         },
       );
       return List<Map<String, dynamic>>.from(response as List? ?? []);
@@ -46,7 +45,7 @@ class EncountersApi {
       return List<Map<String, dynamic>>.from(response as List? ?? []);
     } catch (e) {
       debugPrint('getLocalsFeed: $e');
-      return [];
+      rethrow;
     }
   }
 
@@ -119,7 +118,7 @@ class EncountersApi {
       return id is int ? id : int.tryParse('$id');
     } catch (e) {
       debugPrint('record_location_ping: $e');
-      return null;
+      rethrow;
     }
   }
 
@@ -178,7 +177,7 @@ class EncountersApi {
       return List<Map<String, dynamic>>.from(response as List? ?? []);
     } catch (e) {
       debugPrint('get_my_matches: $e');
-      return [];
+      rethrow;
     }
   }
 
@@ -208,6 +207,13 @@ class EncountersApi {
   Future<void> blockUser(String userId) async {
     if (!cloudReady) return;
     await InRangeSupabase.client.rpc('block_user', params: {
+      'p_blocked_id': userId,
+    });
+  }
+
+  Future<void> unblockUser(String userId) async {
+    if (!cloudReady) return;
+    await InRangeSupabase.client.rpc('unblock_user', params: {
       'p_blocked_id': userId,
     });
   }

@@ -27,9 +27,7 @@ class _BeaconScreenState extends ConsumerState<BeaconScreen> {
       final beacon = ref.read(beaconControllerProvider);
       if (beacon.isOn) {
         await ref.read(beaconControllerProvider.notifier).toggle();
-        if (isMiles) {
-          // Keep GPS optional when turning off beacon; Locals tab owns continuous GPS.
-        }
+        if (isMiles) await ref.read(localsControllerProvider.notifier).stop();
         return;
       }
 
@@ -44,7 +42,12 @@ class _BeaconScreenState extends ConsumerState<BeaconScreen> {
       if (isMiles) {
         // Miles mode: GPS logging while beacon ON (product outline).
         await ref.read(localsControllerProvider.notifier).start();
-        await ref.read(beaconControllerProvider.notifier).toggle();
+        try {
+          await ref.read(beaconControllerProvider.notifier).toggle();
+        } catch (_) {
+          await ref.read(localsControllerProvider.notifier).stop();
+          rethrow;
+        }
         // BLE still runs for hybrid discovery; miles is continuous GPS.
       } else {
         await ref.read(beaconControllerProvider.notifier).toggle();
@@ -58,7 +61,13 @@ class _BeaconScreenState extends ConsumerState<BeaconScreen> {
         });
       }
     } catch (e) {
-      if (mounted) setState(() => _lastError = e.toString());
+      debugPrint('Beacon toggle failed: $e');
+      if (mounted) {
+        setState(() {
+          _lastError =
+              'Could not start the Beacon. Check Bluetooth, location, and app permissions.';
+        });
+      }
     }
   }
 
@@ -100,8 +109,7 @@ class _BeaconScreenState extends ConsumerState<BeaconScreen> {
                 ),
                 subtitle: const Text('Tap to open Encounters'),
                 trailing: const Icon(Icons.chevron_right),
-                onTap: () =>
-                    ref.read(homeTabIndexProvider.notifier).state = 1,
+                onTap: () => ref.read(homeTabIndexProvider.notifier).state = 1,
               ),
             ),
           const SizedBox(height: 12),
@@ -111,22 +119,26 @@ class _BeaconScreenState extends ConsumerState<BeaconScreen> {
             initialValue: range,
             decoration: const InputDecoration(border: OutlineInputBorder()),
             items: const [
-              DropdownMenuItem(value: 'feet_10', child: Text('10 ft (BLE · 24h)')),
-              DropdownMenuItem(value: 'feet_20', child: Text('20 ft (BLE · 24h)')),
-              DropdownMenuItem(value: 'feet_30', child: Text('30 ft (BLE · 24h)')),
-              DropdownMenuItem(value: 'miles_1', child: Text('1 mi (GPS · keep)')),
-              DropdownMenuItem(value: 'miles_5', child: Text('5 mi (GPS · keep)')),
-              DropdownMenuItem(value: 'miles_10', child: Text('10 mi (GPS · keep)')),
-              DropdownMenuItem(value: 'miles_25', child: Text('25 mi (GPS · keep)')),
-              DropdownMenuItem(value: 'miles_50', child: Text('50 mi (GPS · keep)')),
-              DropdownMenuItem(value: 'miles_100', child: Text('100 mi (GPS · keep)')),
-              DropdownMenuItem(value: 'miles_200', child: Text('200 mi (GPS · keep)')),
+              DropdownMenuItem(
+                  value: 'feet_10', child: Text('10 ft (BLE · 24h)')),
+              DropdownMenuItem(
+                  value: 'feet_20', child: Text('20 ft (BLE · 24h)')),
+              DropdownMenuItem(
+                  value: 'feet_30', child: Text('30 ft (BLE · 24h)')),
+              DropdownMenuItem(
+                  value: 'miles_1', child: Text('1 mi (GPS · keep)')),
+              DropdownMenuItem(
+                  value: 'miles_5', child: Text('5 mi (GPS · keep)')),
+              DropdownMenuItem(
+                  value: 'miles_10', child: Text('10 mi (GPS · keep)')),
             ],
-            onChanged: (v) {
-              if (v != null) {
-                ref.read(selectedRangeProvider.notifier).set(v);
-              }
-            },
+            onChanged: state.isOn
+                ? null
+                : (v) {
+                    if (v != null) {
+                      ref.read(selectedRangeProvider.notifier).set(v);
+                    }
+                  },
           ),
           const SizedBox(height: 8),
           Text(
@@ -212,6 +224,13 @@ class _StatusCard extends StatelessWidget {
               Text(
                 'Token expires: ${expiry.toLocal()}',
                 style: const TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+            ],
+            if (state.isOn && state.cloudSynced == false) ...[
+              const SizedBox(height: 6),
+              Text(
+                'Local BLE only — the cloud claim did not sync.',
+                style: TextStyle(fontSize: 12, color: Colors.orange.shade800),
               ),
             ],
             if (boost) ...[

@@ -6,7 +6,7 @@ Everything offline is implemented. Complete only these credential/config steps:
 
 - [ ] Create Supabase project
 - [ ] Enable PostGIS
-- [ ] Run migrations `0001` → `0015` in order
+- [ ] Run migrations `0001` → `0019` in order
 - [ ] (Optional) Run `supabase/seed/seed_test_data.sql`
 - [ ] Copy Project URL + anon key into `.env`
 
@@ -22,13 +22,13 @@ Everything offline is implemented. Complete only these credential/config steps:
 ## Storage
 
 - [ ] Confirm buckets: `profile_photos`, `chat_media`, `verified_photos`
-- [ ] (Optional) Set `STUB_AUTO_APPROVE=false` and moderate via `v_pending_photo_reviews`
+- [ ] Configure manual photo moderation via `v_pending_photo_reviews`
 
 ## Edge + push
 
 - [ ] Deploy functions: `send-push`, `miles-correlate`, `photo-review`, `maintenance`
 - [ ] Schedule crons (see SUPABASE_SETUP.md)
-- [ ] Set `FCM_SERVER_KEY` when Firebase is ready
+- [ ] Set `FCM_PROJECT_ID` + `FCM_SERVICE_ACCOUNT_JSON` when Firebase is ready
 - [ ] Add `google-services.json` + firebase_messaging when ready
 
 ## App secrets

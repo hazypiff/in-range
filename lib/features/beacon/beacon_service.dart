@@ -28,17 +28,21 @@ typedef SightingCallback = void Function({
 class BeaconService {
   BeaconService({
     required String userIdSecret,
+    required String userId,
     required String hmacSecret,
     Duration rotationWindow = const Duration(minutes: 15),
     this.onSighting,
   })  : _tokenGenerator = EphemeralTokenGenerator(
           userIdSecret: userIdSecret,
+          userId: userId,
           hmacSecret: hmacSecret,
           rotationWindow: rotationWindow,
         ),
+        _userId = userId,
         _correlationSalt = hmacSecret;
 
   final EphemeralTokenGenerator _tokenGenerator;
+  final String _userId;
   final String _correlationSalt;
 
   /// Optional hook for local encounter store / UI.
@@ -46,6 +50,8 @@ class BeaconService {
 
   bool _isOn = false;
   bool get isOn => _isOn;
+  bool _cloudClaimed = false;
+  bool get cloudClaimed => _cloudClaimed;
 
   EphemeralToken? _currentToken;
   EphemeralToken? get currentToken => _currentToken;
@@ -55,11 +61,12 @@ class BeaconService {
 
   Timer? _rotationTimer;
   Timer? _sightingFlushTimer;
+  Timer? _scanRestartTimer;
   StreamSubscription<List<ScanResult>>? _scanSub;
 
-  final List<SightingRecord> _pendingSightings = [];
   /// One buffered row per corr id (keeps best RSSI).
   final Map<String, SightingRecord> _pendingByCorr = {};
+  static const int _maxPendingSightings = 500;
 
   Future<void> turnOnBeacon({required String rangeType}) async {
     if (_isOn) return;
@@ -70,18 +77,29 @@ class BeaconService {
       );
       throw StateError('Missing crypto secrets; cannot start beacon.');
     }
-    _isOn = true;
+    if (_userId.trim().isEmpty) {
+      throw StateError('Sign in before starting the beacon.');
+    }
     _currentRangeType = rangeType;
 
-    await _refreshClaim(rangeType: rangeType);
+    try {
+      await _refreshClaim(rangeType: rangeType);
+      await _startAdvertising();
+      await _startScanning();
+      _isOn = true;
+    } catch (e) {
+      await _stopBle();
+      _currentToken = null;
+      _currentCorrelationId = null;
+      _currentRangeType = null;
+      rethrow;
+    }
 
     _rotationTimer?.cancel();
     _rotationTimer = Timer.periodic(const Duration(seconds: 90), (_) {
       if (!_isOn) return;
       if (_tokenGenerator.shouldRotate(_currentToken)) {
-        _refreshClaim(rangeType: rangeType).then((_) {
-          if (_isOn) _startAdvertising();
-        });
+        unawaited(_rotateToken(rangeType));
       }
     });
 
@@ -90,9 +108,10 @@ class BeaconService {
       if (!_isOn) return;
       _flushSightings();
     });
-
-    await _startAdvertising();
-    await _startScanning();
+    _scanRestartTimer?.cancel();
+    _scanRestartTimer = Timer.periodic(const Duration(minutes: 55), (_) {
+      if (_isOn) unawaited(_restartScanning());
+    });
 
     if (AppConfig.enableForegroundService) {
       try {
@@ -110,7 +129,8 @@ class BeaconService {
         debugPrint('Foreground service start skipped or failed: $e');
       }
     } else {
-      debugPrint('FGS disabled (INRANGE_ENABLE_FGS=false) — foreground BLE only');
+      debugPrint(
+          'FGS disabled (INRANGE_ENABLE_FGS=false) — foreground BLE only');
     }
   }
 
@@ -120,32 +140,63 @@ class BeaconService {
     _rotationTimer = null;
     _sightingFlushTimer?.cancel();
     _sightingFlushTimer = null;
+    _scanRestartTimer?.cancel();
+    _scanRestartTimer = null;
     _locationRefreshTimer?.cancel();
     _locationRefreshTimer = null;
-    _lastSightingAt.clear();
-    _pendingByCorr.clear();
-
-    await _scanSub?.cancel();
-    _scanSub = null;
-
-    try {
-      await FlutterBluePlus.stopScan();
-    } catch (_) {}
-
-    try {
-      final peripheral = FlutterBlePeripheral();
-      await peripheral.stop();
-    } catch (_) {}
+    await _flushSightings();
+    await _releaseClaim();
+    await _stopBle();
 
     if (AppConfig.enableForegroundService) {
       try {
         final service = FlutterBackgroundService();
         service.invoke('setBeaconActive', {'active': false});
         service.invoke('stopService');
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('Foreground service stop failed: $e');
+      }
     }
 
-    _pendingSightings.clear();
+    _lastSightingAt.clear();
+    _pendingByCorr.clear();
+    _currentToken = null;
+    _currentCorrelationId = null;
+    _currentRangeType = null;
+    _cloudClaimed = false;
+  }
+
+  Future<void> _rotateToken(String rangeType) async {
+    try {
+      await _refreshClaim(rangeType: rangeType);
+      if (_isOn) await _startAdvertising();
+    } catch (e) {
+      debugPrint('Token rotation failed; stopping beacon: $e');
+      await turnOffBeacon();
+    }
+  }
+
+  Future<void> _restartScanning() async {
+    try {
+      await _startScanning();
+    } catch (e) {
+      debugPrint('BLE scan restart failed: $e');
+    }
+  }
+
+  Future<void> _stopBle() async {
+    await _scanSub?.cancel();
+    _scanSub = null;
+    try {
+      await FlutterBluePlus.stopScan();
+    } catch (e) {
+      debugPrint('BLE scan stop failed: $e');
+    }
+    try {
+      await FlutterBlePeripheral().stop();
+    } catch (e) {
+      debugPrint('BLE advertising stop failed: $e');
+    }
   }
 
   // --- BLE Implementation ---
@@ -161,13 +212,11 @@ class BeaconService {
   }
 
   Future<void> _startAdvertising() async {
-    if (_currentToken == null || _currentCorrelationId == null) return;
+    if (_currentToken == null || _currentCorrelationId == null) {
+      throw StateError('No beacon token is available');
+    }
 
     final peripheral = FlutterBlePeripheral();
-    final hexId = _currentCorrelationId!
-        .map((b) => b.toRadixString(16).padLeft(2, '0'))
-        .join();
-
     // Legacy payload only: mfg id + 16-byte corr (fits 31-byte AD).
     final advertiseData = AdvertiseData(
       manufacturerId: _inRangeManufacturerId,
@@ -184,28 +233,28 @@ class BeaconService {
       txPowerLevel: AdvertiseTxPower.advertiseTxPowerMedium,
     );
 
+    final supported = await peripheral.isSupported;
+    if (!supported) {
+      throw StateError('BLE advertising is not supported on this device');
+    }
+    final btOn = await peripheral.isBluetoothOn;
+    if (!btOn) {
+      throw StateError('Bluetooth is off');
+    }
     try {
-      final supported = await peripheral.isSupported;
-      if (!supported) {
-        debugPrint('BLE peripheral advertising not supported on this device');
-        return;
-      }
-      final btOn = await peripheral.isBluetoothOn;
-      if (!btOn) {
-        debugPrint('Bluetooth is off — cannot advertise');
-        return;
-      }
       try {
         if (await peripheral.isAdvertising) {
           await peripheral.stop();
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('Existing advertisement stop failed: $e');
+      }
 
       await peripheral.start(
         advertiseData: advertiseData,
         advertiseSettings: settings,
       );
-      debugPrint('Started BLE advertising correlationId (hex=$hexId)');
+      debugPrint('Started BLE advertising');
     } catch (e) {
       debugPrint('Advertising start failed: $e');
       try {
@@ -226,9 +275,10 @@ class BeaconService {
             interval: intervalHigh,
           ),
         );
-        debugPrint('Started BLE advertising (set+legacy fallback) hex=$hexId');
+        debugPrint('Started BLE advertising (set+legacy fallback)');
       } catch (e2) {
         debugPrint('Advertising fallback also failed: $e2');
+        throw StateError('Could not start BLE advertising');
       }
     }
   }
@@ -239,11 +289,16 @@ class BeaconService {
 
     try {
       await FlutterBluePlus.stopScan();
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Pre-scan stop failed: $e');
+    }
 
     _scanSub = FlutterBluePlus.scanResults.listen(
       _onScanResults,
-      onError: (e) => debugPrint('BLE scan stream error: $e'),
+      onError: (e) {
+        debugPrint('BLE scan stream error: $e');
+        if (_isOn) unawaited(_restartScanning());
+      },
     );
 
     // Balanced + continuousDivisor cuts main-isolate flood on S9.
@@ -308,6 +363,14 @@ class BeaconService {
       return;
     }
     _lastSightingAt[observedCorrelationIdHex] = now;
+    if (_lastSightingAt.length > 1000) {
+      _lastSightingAt.removeWhere(
+        (_, at) => now.difference(at) > const Duration(minutes: 10),
+      );
+      while (_lastSightingAt.length > 1000) {
+        _lastSightingAt.remove(_lastSightingAt.keys.first);
+      }
+    }
 
     _ensureLocationCache();
 
@@ -323,14 +386,20 @@ class BeaconService {
 
     // Keep one pending row per corr (best RSSI).
     final prev = _pendingByCorr[observedCorrelationIdHex];
-    if (prev == null || rssi > prev.rssi) {
-      _pendingByCorr[observedCorrelationIdHex] = record;
+    if (prev == null && _pendingByCorr.length >= _maxPendingSightings) {
+      _pendingByCorr.remove(_pendingByCorr.keys.first);
     }
+    _pendingByCorr[observedCorrelationIdHex] = SightingRecord(
+      observedToken: record.observedToken,
+      rssi: prev == null ? rssi : (rssi > prev.rssi ? rssi : prev.rssi),
+      observerLat: record.observerLat,
+      observerLon: record.observerLon,
+      observedAt: record.observedAt,
+      rangeType: record.rangeType,
+    );
 
     debugPrint(
-      'Sighting rssi=$rssi corr=$observedCorrelationIdHex '
-      '(tracked=${_pendingByCorr.length})',
-    );
+        'Sighting observed rssi=$rssi (tracked=${_pendingByCorr.length})');
 
     // Local encounter store (instant or delayed reveal).
     try {
@@ -352,12 +421,14 @@ class BeaconService {
     _locationRefreshTimer = Timer(Duration.zero, () async {
       try {
         Position? pos = await Geolocator.getLastKnownPosition();
-        pos ??= await Geolocator.getCurrentPosition(
-          locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.low,
-            timeLimit: Duration(seconds: 6),
-          ),
-        );
+        if (pos == null || !_isFreshPosition(pos)) {
+          pos = await Geolocator.getCurrentPosition(
+            locationSettings: const LocationSettings(
+              accuracy: LocationAccuracy.low,
+              timeLimit: Duration(seconds: 6),
+            ),
+          );
+        }
         _cachedLat = pos.latitude;
         _cachedLon = pos.longitude;
         _cachedLocAt = DateTime.now();
@@ -379,25 +450,27 @@ class BeaconService {
     }
 
     final toSend = List<SightingRecord>.from(_pendingByCorr.values);
-    _pendingByCorr.clear();
 
     for (final s in toSend) {
+      if (s.observerLat == null || s.observerLon == null) continue;
       try {
         // Named args match migration signatures (lat/lon required before optionals).
         await InRangeSupabase.client.rpc('record_sighting', params: {
-          'p_observed_token': s.observedToken, // correlation-id hex (matches claim)
-          'p_lat': s.observerLat ?? 0.0,
-          'p_lon': s.observerLon ?? 0.0,
+          'p_observed_token':
+              s.observedToken, // correlation-id hex (matches claim)
+          'p_lat': s.observerLat,
+          'p_lon': s.observerLon,
           'p_rssi': s.rssi,
           'p_observed_at': s.observedAt.toUtc().toIso8601String(),
           'p_range': _mapUiRangeToDb(s.rangeType),
         });
-        debugPrint(
-          'record_sighting OK corr=${s.observedToken.substring(0, 8)}… rssi=${s.rssi}',
-        );
+        debugPrint('record_sighting OK rssi=${s.rssi}');
+        if (identical(_pendingByCorr[s.observedToken], s)) {
+          _pendingByCorr.remove(s.observedToken);
+        }
       } catch (e) {
         debugPrint('Sighting upload failed: $e');
-        // Drop on failure — local store already has the encounter.
+        // Retain for a later bounded retry; the queue is capped above.
       }
     }
   }
@@ -410,13 +483,15 @@ class BeaconService {
     double? lon = _cachedLon;
     if (lat == null) {
       try {
-        final position = await Geolocator.getLastKnownPosition() ??
-            await Geolocator.getCurrentPosition(
-              locationSettings: const LocationSettings(
-                accuracy: LocationAccuracy.low,
-                timeLimit: Duration(seconds: 5),
-              ),
-            );
+        Position? position = await Geolocator.getLastKnownPosition();
+        if (position == null || !_isFreshPosition(position)) {
+          position = await Geolocator.getCurrentPosition(
+            locationSettings: const LocationSettings(
+              accuracy: LocationAccuracy.low,
+              timeLimit: Duration(seconds: 5),
+            ),
+          );
+        }
         lat = position.latitude;
         lon = position.longitude;
         _cachedLat = lat;
@@ -428,6 +503,7 @@ class BeaconService {
     }
 
     if (!AppConfig.hasRealSupabase) {
+      _cloudClaimed = false;
       debugPrint('claim_token skipped (no real Supabase — local BLE mode)');
       return;
     }
@@ -442,10 +518,8 @@ class BeaconService {
       // Always send UTC — local DateTime without offset is misread as UTC by Postgres
       // and expires claims hours early (broke feet correlation after first flush).
       final validUntil = _currentToken!.expiresAt.toUtc();
-      // Floor: at least 20 minutes from now so flush windows always hit active claims.
-      final minUntil = DateTime.now().toUtc().add(const Duration(minutes: 20));
-      final until =
-          validUntil.isAfter(minUntil) ? validUntil : minUntil;
+      // Two-minute transport grace, bounded by the server's 21-minute maximum.
+      final until = validUntil.add(const Duration(minutes: 2));
       await InRangeSupabase.client.rpc('claim_token', params: {
         'p_token': claimToken,
         'p_valid_until': until.toIso8601String(),
@@ -453,12 +527,28 @@ class BeaconService {
         'p_lon': lon,
         'p_range': dbRange,
       });
+      _cloudClaimed = true;
       debugPrint(
-        'claim_token OK corr=${claimToken.substring(0, 8)}… '
-        'range=$dbRange until=${until.toIso8601String()}',
+        'claim_token OK range=$dbRange until=${until.toIso8601String()}',
       );
     } catch (e) {
+      _cloudClaimed = false;
       debugPrint('claim_token RPC failed (continuing local BLE): $e');
+    }
+  }
+
+  bool _isFreshPosition(Position position) {
+    final age = DateTime.now().difference(position.timestamp).abs();
+    return age <= const Duration(minutes: 2);
+  }
+
+  Future<void> _releaseClaim() async {
+    _cloudClaimed = false;
+    if (!AppConfig.hasRealSupabase) return;
+    try {
+      await InRangeSupabase.client.rpc('release_token');
+    } catch (e) {
+      debugPrint('release_token failed: $e');
     }
   }
 

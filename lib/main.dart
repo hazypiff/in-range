@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -48,26 +49,7 @@ Future<void> main() async {
 
   await InRangeSupabase.initFromConfig();
 
-  if (AppConfig.hasRealSupabase) {
-    try {
-      final client = InRangeSupabase.client;
-      if (client.auth.currentSession == null) {
-        // Guest cloud session for BLE tests without full signup; real auth
-        // replaces this from AuthScreen.
-        final res = await client.auth.signInAnonymously();
-        debugPrint(
-          'Anonymous cloud auth OK uid=${res.user?.id}',
-        );
-      } else {
-        debugPrint(
-          'Supabase session present uid=${client.auth.currentUser?.id} '
-          'anon=${client.auth.currentUser?.isAnonymous}',
-        );
-      }
-    } catch (e) {
-      debugPrint('Anonymous auth skipped: $e');
-    }
-  } else {
+  if (!AppConfig.hasRealSupabase) {
     debugPrint('Supabase placeholder — local/guest mode + SQLite sightings');
   }
 
@@ -117,9 +99,35 @@ Future<bool> _onStart(ServiceInstance service) async {
   if (service is AndroidServiceInstance) {
     service.setAsForegroundService();
   }
-  service.on('setBeaconActive').listen((event) {
+  Timer? heartbeat;
+  service.on('setBeaconActive').listen((event) async {
     final active = event?['active'] == true;
-    debugPrint('Background service received setBeaconActive: $active');
+    heartbeat?.cancel();
+    heartbeat = null;
+    if (!active) {
+      await service.stopSelf();
+      return;
+    }
+    if (service is AndroidServiceInstance) {
+      await service.setForegroundNotificationInfo(
+        title: 'In Range Beacon is active',
+        content: 'Bluetooth proximity scanning is running',
+      );
+    }
+    heartbeat = Timer.periodic(const Duration(seconds: 30), (_) async {
+      if (service is AndroidServiceInstance) {
+        await service.setForegroundNotificationInfo(
+          title: 'In Range Beacon is active',
+          content:
+              'Scanning · ${DateTime.now().toLocal().hour.toString().padLeft(2, '0')}:'
+              '${DateTime.now().toLocal().minute.toString().padLeft(2, '0')}',
+        );
+      }
+    });
+  });
+  service.on('stopService').listen((_) async {
+    heartbeat?.cancel();
+    await service.stopSelf();
   });
   return true;
 }

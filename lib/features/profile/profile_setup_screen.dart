@@ -3,9 +3,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:in_range/core/privacy/image_sanitizer.dart';
 import 'package:in_range/core/session/app_session.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+import 'package:in_range/core/session/age_gate.dart';
+import 'package:in_range/shared/services/photo_url_service.dart';
 
 /// Profile: up to 6 local photos, bio, DOB, gender, preference, interests + free text.
 class ProfileSetupScreen extends ConsumerStatefulWidget {
@@ -19,8 +20,8 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
   final _name = TextEditingController();
   final _bio = TextEditingController();
   final _customInterest = TextEditingController();
-  final _year = TextEditingController(
-    text: '${DateTime.now().year - 25}',
+  final _dob = TextEditingController(
+    text: AgeGate.format(DateTime(DateTime.now().year - 25, 1, 1)),
   );
   String _gender = 'prefer-not-to-say';
   String _pref = 'women';
@@ -59,7 +60,7 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
     if (s.displayName != null) _name.text = s.displayName!;
     if (s.bio != null) _bio.text = s.bio!;
     if (s.customInterest != null) _customInterest.text = s.customInterest!;
-    if (s.birthYear != null) _year.text = '${s.birthYear}';
+    if (s.birthDate != null) _dob.text = AgeGate.format(s.birthDate!);
     _photos.addAll(s.photoPaths);
     _selectedInterests.addAll(s.interests);
   }
@@ -69,7 +70,7 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
     _name.dispose();
     _bio.dispose();
     _customInterest.dispose();
-    _year.dispose();
+    _dob.dispose();
     super.dispose();
   }
 
@@ -82,13 +83,12 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
       imageQuality: 85,
     );
     if (x == null) return;
-    final dir = await getApplicationDocumentsDirectory();
-    final dest = p.join(
-      dir.path,
-      'profile_${DateTime.now().millisecondsSinceEpoch}_${_photos.length}.jpg',
+    final clean = await ImageSanitizer.toJpeg(
+      x.path,
+      prefix: 'profile_${_photos.length}',
+      maxWidth: 1200,
     );
-    await File(x.path).copy(dest);
-    setState(() => _photos.add(dest));
+    setState(() => _photos.add(clean.path));
   }
 
   Future<void> _save() async {
@@ -97,25 +97,29 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
       _error = null;
     });
     try {
-      final year = int.tryParse(_year.text.trim());
-      if (year == null) throw StateError('Enter a valid birth year');
+      final birthDate = AgeGate.parseIsoDate(_dob.text);
       final interests = [
         ..._selectedInterests,
-        if (_customInterest.text.trim().isNotEmpty)
-          _customInterest.text.trim(),
+        if (_customInterest.text.trim().isNotEmpty) _customInterest.text.trim(),
       ];
       await ref.read(sessionControllerProvider.notifier).saveProfile(
             displayName: _name.text,
             bio: _bio.text,
             gender: _gender,
             preference: _pref,
-            birthYear: year,
+            birthDate: birthDate,
             interests: interests,
             customInterest: _customInterest.text,
             photoPaths: _photos,
           );
     } catch (e) {
-      setState(() => _error = e.toString().replaceFirst('Bad state: ', ''));
+      debugPrint('Profile save failed: $e');
+      final message = switch (e) {
+        StateError() => e.message.toString(),
+        FormatException() => e.message,
+        _ => 'Profile could not be saved. Please try again.',
+      };
+      setState(() => _error = message);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -148,12 +152,7 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
                             children: [
                               ClipRRect(
                                 borderRadius: BorderRadius.circular(12),
-                                child: Image.file(
-                                  File(_photos[i]),
-                                  width: 88,
-                                  height: 88,
-                                  fit: BoxFit.cover,
-                                ),
+                                child: _profilePhoto(_photos[i]),
                               ),
                               Positioned(
                                 right: 0,
@@ -209,10 +208,10 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
                 ),
                 const SizedBox(height: 12),
                 TextField(
-                  controller: _year,
-                  keyboardType: TextInputType.number,
+                  controller: _dob,
+                  keyboardType: TextInputType.datetime,
                   decoration: const InputDecoration(
-                    labelText: 'Birth year (18+)',
+                    labelText: 'Date of birth (YYYY-MM-DD, 18+)',
                     border: OutlineInputBorder(),
                   ),
                 ),
@@ -274,8 +273,7 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
                 ),
                 if (_error != null) ...[
                   const SizedBox(height: 12),
-                  Text(_error!,
-                      style: TextStyle(color: Colors.red.shade700)),
+                  Text(_error!, style: TextStyle(color: Colors.red.shade700)),
                 ],
                 const SizedBox(height: 24),
               ],
@@ -295,6 +293,26 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _profilePhoto(String path) {
+    if (File(path).existsSync()) {
+      return Image.file(File(path), width: 88, height: 88, fit: BoxFit.cover);
+    }
+    return FutureBuilder<String?>(
+      future: PhotoUrlService.resolve(path),
+      builder: (context, snapshot) {
+        final url = snapshot.data;
+        if (url == null || !url.startsWith('https://')) {
+          return const SizedBox(
+            width: 88,
+            height: 88,
+            child: Icon(Icons.broken_image_outlined),
+          );
+        }
+        return Image.network(url, width: 88, height: 88, fit: BoxFit.cover);
+      },
     );
   }
 }

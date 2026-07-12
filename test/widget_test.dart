@@ -15,17 +15,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 void main() {
   setUpAll(() async {
     TestWidgetsFlutterBinding.ensureInitialized();
-    try {
-      await dotenv.load(fileName: '.env');
-    } catch (_) {
-      dotenv.testLoad(fileInput: '''
-SUPABASE_URL=https://test.supabase.co
-SUPABASE_PUBLISHABLE_KEY=test-key
-INRANGE_USER_ID_SECRET=test-secret
-INRANGE_HMAC_SECRET=test-hmac
-ENCOUNTER_REVEAL_DELAY_HOURS=0
+    dotenv.testLoad(fileInput: '''
+SUPABASE_URL=
+SUPABASE_PUBLISHABLE_KEY=
+INRANGE_USER_ID_SECRET=
+INRANGE_HMAC_SECRET=
+ENCOUNTER_REVEAL_DELAY_HOURS=4
 ''');
-    }
   });
 
   testWidgets('BeaconScreen renders status card + toggle button',

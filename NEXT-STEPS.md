@@ -6,7 +6,7 @@
 ```bash
 flutter build apk --release   # (or --debug)
 adb -s 324c305855433498 install -r build/app/outputs/flutter-apk/app-release.apk
-adb -s 324c305855433498 shell am start -n com.example.in_range/.MainActivity
+adb -s 324c305855433498 shell am start -n io.inrange.app/.MainActivity
 bash scripts/install-and-run.sh
 ```
 

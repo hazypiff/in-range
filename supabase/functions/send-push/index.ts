@@ -7,7 +7,6 @@
  * Secrets (set via `supabase secrets set`):
  *   FCM_PROJECT_ID           — Firebase project id (required for HTTP v1)
  *   FCM_SERVICE_ACCOUNT_JSON — full service account JSON (required for HTTP v1)
- *   FCM_SERVER_KEY           — legacy; kept only for dry-run detection fallback
  *   SUPABASE_SERVICE_ROLE_KEY — auto-injected by Supabase
  *   SUPABASE_URL             — auto-injected
  *
@@ -21,21 +20,14 @@
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { requireServiceRole } from "../_shared/service_auth.ts";
 
 
 
 
 function publicError(e: unknown): string {
-  // Avoid leaking stack traces / internal paths to API clients.
   console.error(e);
-  if (e && typeof e === "object" && "message" in e) {
-    const m = String((e as { message: unknown }).message);
-    // Allow short, non-sensitive messages; reject path-like strings
-    if (m.length < 120 && !m.includes("/") && m.indexOf(String.fromCharCode(92)) < 0) {
-      return m;
-    }
-  }
-  return "internal_error";
+  return "operation_failed";
 }
 
 function newRunKey(source: string): string {
@@ -188,10 +180,11 @@ Deno.serve(async (req) => {
   let runId: string | null = null;
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    const authError = requireServiceRole(req, serviceKey);
+    if (authError) return authError;
     const projectId = Deno.env.get("FCM_PROJECT_ID") ?? "";
     const saJsonRaw = Deno.env.get("FCM_SERVICE_ACCOUNT_JSON") ?? "";
-    const legacyKey = Deno.env.get("FCM_SERVER_KEY") ?? "";
 
     const dryRun =
       !projectId ||
@@ -204,21 +197,21 @@ Deno.serve(async (req) => {
     if (!dryRun) {
       try {
         sa = JSON.parse(saJsonRaw) as ServiceAccount;
+        if (!sa.client_email || !sa.private_key) throw new Error("missing_fields");
       } catch {
-        return json(
-          { ok: false, error: "FCM_SERVICE_ACCOUNT_JSON is not valid JSON" },
-          500,
-        );
+        return json({ ok: false, error: "invalid_fcm_credentials" }, 500);
       }
     }
 
-    supabase = createClient(supabaseUrl, serviceKey);
+    supabase = createClient(supabaseUrl, serviceKey!);
 
     let limit = 50;
     if (req.method === "POST") {
       try {
         const body = await req.json();
-        if (body?.limit) limit = Math.min(200, Number(body.limit) || 50);
+        if (body?.limit) {
+          limit = Math.max(1, Math.min(200, Number(body.limit) || 50));
+        }
       } catch {
         /* empty body ok */
       }
@@ -229,12 +222,10 @@ Deno.serve(async (req) => {
       fcm_configured: !dryRun,
     });
 
-    const { data: rows, error } = await supabase
-      .from("notification_outbox")
-      .select("id,user_id,kind,title,body,payload,attempts")
-      .eq("status", "pending")
-      .order("created_at", { ascending: true })
-      .limit(limit);
+    const { data: rows, error } = await supabase.rpc(
+      "claim_notification_batch",
+      { p_limit: limit },
+    );
 
     if (error) {
       const err = publicError(error);
@@ -244,26 +235,61 @@ Deno.serve(async (req) => {
 
     const results: Array<Record<string, unknown>> = [];
     let failed = 0;
+    let retried = 0;
     let skipped = 0;
     let sent = 0;
+    const claimedRows = (rows ?? []) as unknown as OutboxRow[];
 
-    for (const row of (rows ?? []) as OutboxRow[]) {
+    // Google access tokens are valid for an hour; one batch needs only one.
+    let accessToken: string | null = null;
+    let oauthError: string | null = null;
+    if (!dryRun && claimedRows.length > 0) {
+      try {
+        accessToken = await mintAccessToken(sa!);
+      } catch (e) {
+        oauthError = `oauth_mint: ${publicError(e)}`;
+      }
+    }
+
+    for (const row of claimedRows) {
+      const { data: recipient } = await supabase
+        .from("profiles")
+        .select("is_active,is_paused,account_deleted_at")
+        .eq("id", row.user_id)
+        .maybeSingle();
+      if (
+        !recipient || recipient.is_active !== true || recipient.is_paused === true ||
+        recipient.account_deleted_at != null
+      ) {
+        await supabase.from("notification_outbox").update({
+          status: "skipped",
+          last_error: "recipient_unavailable",
+          processing_at: null,
+          sent_at: new Date().toISOString(),
+        }).eq("id", row.id).eq("status", "processing");
+        results.push({ id: row.id, status: "skipped", reason: "recipient_unavailable" });
+        skipped++;
+        continue;
+      }
+
       // If the notification was triggered by another user (match, message),
-      // skip delivery when the pair is blocked. Payload carries sender_id.
-      const senderId = (row.payload as Record<string, unknown> | null)?.sender_id as string | undefined;
-      if (senderId && typeof senderId === "string") {
+      // skip delivery when the pair is blocked. Encounter jobs use other_user_id.
+      const payload = row.payload as Record<string, unknown> | null;
+      const actorId = payload?.sender_id ?? payload?.other_user_id;
+      if (typeof actorId === "string") {
         const { data: blockedCheck } = await supabase
-          .rpc("is_blocked_pair", { a: senderId, b: row.user_id });
+          .rpc("is_blocked_pair", { a: actorId, b: row.user_id });
         if (blockedCheck === true) {
           await supabase
             .from("notification_outbox")
             .update({
               status: "skipped",
               last_error: "blocked_pair",
-              attempts: row.attempts + 1,
+              processing_at: null,
               sent_at: new Date().toISOString(),
             })
-            .eq("id", row.id);
+            .eq("id", row.id)
+            .eq("status", "processing");
           results.push({ id: row.id, status: "skipped", reason: "blocked" });
           skipped++;
           await logEvent(supabase, runId, {
@@ -290,10 +316,11 @@ Deno.serve(async (req) => {
           .update({
             status: "skipped",
             last_error: "no_device_token",
-            attempts: row.attempts + 1,
+            processing_at: null,
             sent_at: new Date().toISOString(),
           })
-            .eq("id", row.id);
+          .eq("id", row.id)
+          .eq("status", "processing");
         results.push({ id: row.id, status: "skipped", reason: "no_token" });
         skipped++;
         await logEvent(supabase, runId, {
@@ -314,10 +341,11 @@ Deno.serve(async (req) => {
           .update({
             status: "skipped",
             last_error: "dry_run_no_fcm_key",
-            attempts: row.attempts + 1,
+            processing_at: null,
             sent_at: new Date().toISOString(),
           })
-          .eq("id", row.id);
+          .eq("id", row.id)
+          .eq("status", "processing");
         results.push({
           id: row.id,
           status: "dry_run",
@@ -336,26 +364,25 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      let allOk = true;
-      let lastErr: string | null = null;
-
-      // Mint one access token for the whole batch (valid 1h; we use it seconds).
-      let accessToken: string;
-      try {
-        accessToken = await mintAccessToken(sa!);
-      } catch (e) {
-        allOk = false;
-        lastErr = `oauth_mint: ${publicError(e)}`;
+      if (!accessToken) {
+        const lastErr = oauthError ?? "oauth_unavailable";
+        const retrying = row.attempts < 5;
         await supabase
           .from("notification_outbox")
           .update({
-            status: "failed",
+            status: retrying ? "pending" : "failed",
             last_error: lastErr,
-            attempts: row.attempts + 1,
+            processing_at: null,
           })
-          .eq("id", row.id);
-        results.push({ id: row.id, status: "failed", error: lastErr });
-        failed++;
+          .eq("id", row.id)
+          .eq("status", "processing");
+        results.push({
+          id: row.id,
+          status: retrying ? "retrying" : "failed",
+          error: lastErr,
+        });
+        if (retrying) retried++;
+        else failed++;
         await logEvent(supabase, runId, {
           p_event_type: "push_delivery",
           p_subject_table: "notification_outbox",
@@ -368,6 +395,9 @@ Deno.serve(async (req) => {
         });
         continue;
       }
+
+      let allOk = true;
+      let lastErr: string | null = null;
 
       const v1Url = `https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`;
 
@@ -409,20 +439,23 @@ Deno.serve(async (req) => {
       await supabase
         .from("notification_outbox")
         .update({
-          status: allOk ? "sent" : "failed",
+          status: allOk ? "sent" : row.attempts < 5 ? "pending" : "failed",
           last_error: lastErr,
-          attempts: row.attempts + 1,
-          sent_at: new Date().toISOString(),
+          processing_at: null,
+          sent_at: allOk ? new Date().toISOString() : null,
         })
-        .eq("id", row.id);
+        .eq("id", row.id)
+        .eq("status", "processing");
 
       results.push({
         id: row.id,
-        status: allOk ? "sent" : "failed",
+        status: allOk ? "sent" : row.attempts < 5 ? "retrying" : "failed",
         error: lastErr,
       });
       if (allOk) {
         sent++;
+      } else if (row.attempts < 5) {
+        retried++;
       } else {
         failed++;
       }
@@ -438,10 +471,11 @@ Deno.serve(async (req) => {
       });
     }
 
-    await completeRun(supabase, runId, failed > 0 ? "partial" : "succeeded", {
+    await completeRun(supabase, runId, failed + retried > 0 ? "partial" : "succeeded", {
       processed: results.length,
       sent,
       skipped,
+      retried,
       failed,
       dry_run: dryRun,
     });

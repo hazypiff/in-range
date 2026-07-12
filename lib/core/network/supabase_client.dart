@@ -41,9 +41,7 @@ class InRangeSupabase {
       ),
     );
     _initialized = true;
-    debugPrint(
-      'Supabase init: real=${AppConfig.hasRealSupabase} url=${url.substring(0, url.length.clamp(0, 40))}…',
-    );
+    debugPrint('Supabase init: real=${AppConfig.hasRealSupabase}');
   }
 
   static Future<void> initFromConfig() async {

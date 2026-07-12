@@ -23,5 +23,5 @@ REVOKE SELECT (email_hint, phone_hint, dob, gender, sexual_preference, interests
 -- adds block/pause/incognito/photo-verification filters).
 COMMENT ON FUNCTION public.nearby_location_pings(
   p_lat double precision, p_lon double precision,
-  p_radius_meters integer, p_window_minutes integer
+  p_radius_meters integer, p_window_minutes integer, p_limit integer
 ) IS 'DEPRECATED — use get_locals_feed which adds block/pause/incognito/photo-verification filters.';

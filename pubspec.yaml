@@ -14,10 +14,7 @@ dependencies:
 
   # Backend & State (core to Phase 0)
   supabase_flutter: ^2.8.0
-  riverpod: ^2.6.1
   flutter_riverpod: ^2.6.1
-  riverpod_annotation: ^2.6.1
-  freezed_annotation: ^2.4.4
 
   # BLE + Location (per 2026 research - flutter_blue_plus preferred)
   flutter_blue_plus: ^2.3.10
@@ -33,12 +30,11 @@ dependencies:
   # Crypto + Utils
   crypto: ^3.0.6
   uuid: ^4.5.1
-  intl: ^0.19.0
-  collection: ^1.18.0
   shared_preferences: ^2.5.5
   sqflite: ^2.4.3
   path: ^1.9.1
   image_picker: ^1.2.3
+  image: ^4.5.4
   path_provider: ^2.1.6
   flutter_local_notifications: ^22.0.1
 

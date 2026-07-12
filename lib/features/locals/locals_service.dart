@@ -69,11 +69,15 @@ class LocalsController extends StateNotifier<LocalsState> {
   Timer? _timer;
   StreamSubscription<Position>? _sub;
   String _range = 'miles_10';
+  bool _refreshing = false;
+  bool _applyingPosition = false;
 
   void setRange(String range) {
-    _range = range;
+    _range = const {'miles_1', 'miles_5', 'miles_10'}.contains(range)
+        ? range
+        : 'miles_10';
     if (state.hasFix) {
-      _syncServer(state.lat!, state.lon!, state.neighborhood);
+      unawaited(_syncServer(state.lat!, state.lon!, state.neighborhood));
     }
   }
 
@@ -97,7 +101,7 @@ class LocalsController extends StateNotifier<LocalsState> {
           distanceFilter: 50,
         ),
       ).listen((pos) {
-        _applyPosition(pos);
+        unawaited(_applyPosition(pos));
       }, onError: (e) {
         debugPrint('Locals stream error: $e');
       });
@@ -115,32 +119,44 @@ class LocalsController extends StateNotifier<LocalsState> {
   }
 
   Future<void> _refreshOnce() async {
+    if (_refreshing) return;
+    _refreshing = true;
     try {
       Position? pos = await Geolocator.getLastKnownPosition();
-      pos ??= await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.medium,
-          timeLimit: Duration(seconds: 8),
-        ),
-      );
+      if (pos == null || !_isFresh(pos)) {
+        pos = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.medium,
+            timeLimit: Duration(seconds: 8),
+          ),
+        );
+      }
       await _applyPosition(pos);
     } catch (e) {
       state = state.copyWith(error: 'Location unavailable.');
       debugPrint('Locals fix failed: $e');
+    } finally {
+      _refreshing = false;
     }
   }
 
   Future<void> _applyPosition(Position pos) async {
-    final hood = _coarseNeighborhood(pos.latitude, pos.longitude);
-    state = state.copyWith(
-      lat: pos.latitude,
-      lon: pos.longitude,
-      updatedAt: DateTime.now(),
-      neighborhood: hood,
-      clearError: true,
-      broadcasting: true,
-    );
-    await _syncServer(pos.latitude, pos.longitude, hood);
+    if (_applyingPosition || !state.broadcasting) return;
+    _applyingPosition = true;
+    try {
+      final hood = _coarseNeighborhood();
+      state = state.copyWith(
+        lat: pos.latitude,
+        lon: pos.longitude,
+        updatedAt: pos.timestamp,
+        neighborhood: hood,
+        clearError: true,
+        broadcasting: true,
+      );
+      await _syncServer(pos.latitude, pos.longitude, hood);
+    } finally {
+      _applyingPosition = false;
+    }
   }
 
   Future<void> _syncServer(double lat, double lon, String hood) async {
@@ -179,17 +195,17 @@ class LocalsController extends StateNotifier<LocalsState> {
       debugPrint('Locals server sync: $e');
       state = state.copyWith(
         usingServer: false,
-        lastSyncError: e.toString(),
+        lastSyncError: 'sync_failed',
       );
     }
   }
 
-  /// Neighborhood-level label only (privacy). No reverse-geocode dependency.
-  static String _coarseNeighborhood(double lat, double lon) {
-    final cellLat = (lat * 100).floor() / 100;
-    final cellLon = (lon * 100).floor() / 100;
-    return 'Area ${cellLat.toStringAsFixed(2)}, ${cellLon.toStringAsFixed(2)}';
-  }
+  /// Avoid encoding coordinates into a human-readable field or notification.
+  static String _coarseNeighborhood() => 'Nearby';
+
+  static bool _isFresh(Position position) =>
+      DateTime.now().difference(position.timestamp).abs() <=
+      const Duration(minutes: 2);
 
   @override
   void dispose() {

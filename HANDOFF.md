@@ -190,7 +190,7 @@ The background updaters use `nohup` + `disown` so they run independently of this
 
 **Next (execute immediately on APK success):**
 1. `adb -s 324c305855433498 install -r build/app/outputs/flutter-apk/app-release.apk`
-2. Launch: `adb -s 324c305855433498 shell am start -n com.example.in_range/.MainActivity`
+2. Launch: `adb -s 324c305855433498 shell am start -n io.inrange.app/.MainActivity`
 3. `adb logcat | grep -E 'Beacon|Encounter|flutter|In Range'`
 4. On device: grant perms (location when-in-use + always), toggle Beacon ON (pick feet_10), verify notification + scanning.
 5. Test with 2+ devices for real BLE sightings/encounters.
@@ -201,12 +201,12 @@ The background updaters use `nohup` + `disown` so they run independently of this
 
 **Blockers cleared:** SDK version, Gradle DSL/Kotlin target, previous freezes (LLM killed).
 
-**Status:** ✅ Core issue found & fixed: MainActivity ClassNotFound on device (installed APK crashed on launch with "Didn't find class com.example.in_range.MainActivity").
+**Historical status:** the original example-package MainActivity mismatch was fixed; the app now uses production package `io.inrange.app`.
 
 Root cause: Kotlin source was in `com/inrange/in_range/MainActivity.kt` (package com.inrange.in_range) while Gradle namespace + manifest relative name + applicationId used `com.example.in_range`.
 
 Fix applied:
-- Created correct `android/app/src/main/kotlin/com/example/in_range/MainActivity.kt` with matching `package com.example.in_range`
+- MainActivity now lives at `android/app/src/main/kotlin/io/inrange/app/MainActivity.kt` with matching package/application ID.
 - Removed mismatched source tree.
 - Manifest already cleaned of legacy `package=` attr (was causing one assembleRelease failure).
 

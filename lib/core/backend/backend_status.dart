@@ -87,13 +87,11 @@ class BackendStatusController extends StateNotifier<BackendStatus> {
         return;
       }
 
-      // Lightweight reachability: auth user id is enough; optional head request
+      // A cached session is not proof of network reachability.
+      await client.rpc('backend_health');
       final isAnon = session.user.isAnonymous;
-      // Treat anonymous cloud sessions as online for banner (no orange "offline").
-      // Subtle guest hint only when we want it — product prefers green connected.
       state = BackendStatus(
-        mode: BackendMode.cloudOnline,
-        message: isAnon ? 'Cloud connected (guest)' : null,
+        mode: isAnon ? BackendMode.cloudAnonymous : BackendMode.cloudOnline,
         lastChecked: DateTime.now(),
       );
     } catch (e) {
@@ -110,7 +108,7 @@ class BackendStatusController extends StateNotifier<BackendStatus> {
     if (!AppConfig.hasRealSupabase) return;
     state = BackendStatus(
       mode: BackendMode.cloudUnreachable,
-      message: error.toString(),
+      message: 'Cloud connection unavailable.',
       lastChecked: DateTime.now(),
     );
   }

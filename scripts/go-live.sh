@@ -16,7 +16,7 @@ fi
 echo "==> Linking project $SUPABASE_PROJECT_REF"
 supabase link --project-ref "$SUPABASE_PROJECT_REF"
 
-echo "==> Pushing migrations 0001–0010"
+echo "==> Pushing migrations 0001–0019"
 supabase db push
 
 echo "==> Deploying edge functions"
@@ -26,8 +26,8 @@ supabase functions deploy photo-review
 supabase functions deploy maintenance
 
 echo "==> Optional secrets (skip if not ready)"
-echo "  supabase secrets set FCM_SERVER_KEY=..."
-echo "  supabase secrets set STUB_AUTO_APPROVE=true"
+echo "  supabase secrets set FCM_PROJECT_ID=... FCM_SERVICE_ACCOUNT_JSON=..."
+echo "  Photo stub auto-approval is disabled outside localhost; configure manual review."
 
 echo "==> Seed (optional)"
 echo "  Run supabase/seed/seed_test_data.sql in SQL Editor"

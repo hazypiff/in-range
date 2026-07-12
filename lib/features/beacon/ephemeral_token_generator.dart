@@ -10,7 +10,7 @@ import 'package:crypto/crypto.dart';
 ///
 ///   `user_hash_8bytes|epoch_4bytes|random_16bytes|hmac_8bytes`
 ///
-/// - user_hash: first 8 bytes of HMAC-SHA256(user_id_secret, "inrange-token-v1")
+/// - user_hash: first 8 bytes of HMAC-SHA256(user_id_secret, version|user_id)
 ///   (never the raw user UUID).
 /// - epoch: Unix seconds rounded down to the rotation window (default 15 min).
 /// - random: 16 bytes from Random.secure().
@@ -21,15 +21,18 @@ import 'package:crypto/crypto.dart';
 class EphemeralTokenGenerator {
   EphemeralTokenGenerator({
     required String userIdSecret,
+    required String userId,
     required String hmacSecret,
     Duration rotationWindow = const Duration(minutes: 15),
     DateTime Function() now = DateTime.now,
   })  : _userIdSecret = userIdSecret,
+        _userId = userId,
         _hmacSecret = hmacSecret,
         _rotationWindow = rotationWindow,
         _now = now;
 
   final String _userIdSecret;
+  final String _userId;
   final String _hmacSecret;
   final Duration _rotationWindow;
   final DateTime Function() _now;
@@ -74,14 +77,15 @@ class EphemeralTokenGenerator {
 
   /// Returns true if the previously issued token has expired (or is within
   /// the refresh margin) and should be rotated.
-  bool shouldRotate(EphemeralToken? current, {Duration grace = const Duration(minutes: 1)}) {
+  bool shouldRotate(EphemeralToken? current,
+      {Duration grace = const Duration(minutes: 1)}) {
     if (current == null) return true;
-    return DateTime.now().isAfter(current.expiresAt.subtract(grace));
+    return _now().isAfter(current.expiresAt.subtract(grace));
   }
 
   List<int> _userHash() {
     final h = Hmac(sha256, utf8.encode(_userIdSecret));
-    final digest = h.convert(utf8.encode(_tokenVersion));
+    final digest = h.convert(utf8.encode('$_tokenVersion|$_userId'));
     return digest.bytes.sublist(0, 8);
   }
 
@@ -97,7 +101,7 @@ class EphemeralTokenGenerator {
   }
 
   static List<int> _int32BigEndian(int value) {
-    final data = ByteData(4)..setInt32(0, value, Endian.big);
+    final data = ByteData(4)..setUint32(0, value, Endian.big);
     return data.buffer.asUint8List().toList();
   }
 }

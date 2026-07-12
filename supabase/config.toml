@@ -46,13 +46,13 @@ enable_signup = true
 enable_confirmations = true
 
 [functions.send-push]
-verify_jwt = false
+verify_jwt = true
 
 [functions.miles-correlate]
-verify_jwt = false
+verify_jwt = true
 
 [functions.photo-review]
-verify_jwt = false
+verify_jwt = true
 
 [functions.maintenance]
-verify_jwt = false
+verify_jwt = true

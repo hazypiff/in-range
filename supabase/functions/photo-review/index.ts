@@ -2,14 +2,14 @@
  * Edge Function: photo-review
  *
  * Processes photo_verifications in `ai_review` state.
- * STUB: no real AI model — scores random/heuristic, then either:
- *   - STUB_AUTO_APPROVE=true  → full approve (dev/lab)
+ * STUB: no real AI model — validates file type, then either:
+ *   - STUB_AUTO_APPROVE=true  → full approve (localhost lab only)
  *   - else                    → advance to manual_review for human mods
  *
  * Real AI: replace `stubAiScore()` with Vision API / face-match provider.
  *
  * Secrets:
- *   STUB_AUTO_APPROVE=true|false  (default true in non-prod)
+ *   STUB_AUTO_APPROVE=true|false  (default false; ignored outside localhost)
  *   PHOTO_AI_API_KEY              (optional, unused in stub)
  *   SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL
  *
@@ -17,21 +17,14 @@
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { requireServiceRole } from "../_shared/service_auth.ts";
 
 
 
 
 function publicError(e: unknown): string {
-  // Avoid leaking stack traces / internal paths to API clients.
   console.error(e);
-  if (e && typeof e === "object" && "message" in e) {
-    const m = String((e as { message: unknown }).message);
-    // Allow short, non-sensitive messages; reject path-like strings
-    if (m.length < 120 && !m.includes("/") && m.indexOf(String.fromCharCode(92)) < 0) {
-      return m;
-    }
-  }
-  return "internal_error";
+  return "operation_failed";
 }
 
 function newRunKey(source: string): string {
@@ -108,11 +101,15 @@ Deno.serve(async (req) => {
   let runId: string | null = null;
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const autoApprove =
-      (Deno.env.get("STUB_AUTO_APPROVE") ?? "true").toLowerCase() === "true";
+    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    const authError = requireServiceRole(req, serviceKey);
+    if (authError) return authError;
+    const host = new URL(supabaseUrl).hostname;
+    const isLocal = host === "127.0.0.1" || host === "localhost";
+    const autoApprove = isLocal &&
+      (Deno.env.get("STUB_AUTO_APPROVE") ?? "false").toLowerCase() === "true";
 
-    supabase = createClient(supabaseUrl, serviceKey);
+    supabase = createClient(supabaseUrl, serviceKey!);
     const runKey = newRunKey("photo-review");
 
     let onlyId: string | null = null;
@@ -141,6 +138,7 @@ Deno.serve(async (req) => {
         .from("photo_verifications")
         .select("id,user_id,photo_path,state")
         .eq("id", onlyId)
+        .eq("state", "ai_review")
         .limit(1);
     }
 
@@ -155,8 +153,17 @@ Deno.serve(async (req) => {
     let failures = 0;
 
     for (const row of rows ?? []) {
-      // Stub AI: pass if path looks like an image; score 0.85–0.99
-      const { score, passed, notes } = stubAiScore(row.photo_path as string);
+      // This is format validation only, not identity, face, or liveness AI.
+      const { data: photo, error: downloadError } = await supabase.storage
+        .from("profile_photos")
+        .download(row.photo_path as string);
+      const header = downloadError || !photo
+        ? new Uint8Array()
+        : new Uint8Array(await photo.slice(0, 16).arrayBuffer());
+      const { score, passed, notes } = stubAiScore(
+        row.photo_path as string,
+        header,
+      );
 
       const { error: aiErr } = await supabase.rpc("complete_ai_photo_review", {
         p_verification_id: row.id,
@@ -251,24 +258,30 @@ Deno.serve(async (req) => {
   }
 });
 
-function stubAiScore(path: string): {
+function stubAiScore(path: string, header: Uint8Array): {
   score: number;
   passed: boolean;
   notes: string;
 } {
   const lower = (path ?? "").toLowerCase();
-  const looksImage = /\.(jpe?g|png|webp|heic)$/.test(lower) || lower.length > 0;
-  // Deterministic-ish score from path length
-  const score = looksImage
-    ? Math.min(0.99, 0.82 + (path.length % 17) / 100)
-    : 0.2;
+  const extensionMatches = /\.(jpe?g|png|webp|heic)$/.test(lower);
+  const jpeg = header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff;
+  const png = header[0] === 0x89 && header[1] === 0x50 &&
+    header[2] === 0x4e && header[3] === 0x47;
+  const webp = header[0] === 0x52 && header[1] === 0x49 &&
+    header[2] === 0x46 && header[3] === 0x46 && header[8] === 0x57 &&
+    header[9] === 0x45 && header[10] === 0x42 && header[11] === 0x50;
+  const heif = header[4] === 0x66 && header[5] === 0x74 &&
+    header[6] === 0x79 && header[7] === 0x70;
+  const looksImage = extensionMatches && (jpeg || png || webp || heif);
+  const score = looksImage ? 0.8 : 0.1;
   const passed = score >= 0.75;
   return {
     score: Number(score.toFixed(4)),
     passed,
     notes: passed
-      ? "stub AI: face/liveness heuristic pass"
-      : "stub AI: failed basic path/image heuristic",
+      ? "format validation passed; manual identity/liveness review required"
+      : "file could not be validated as a supported image",
   };
 }
 
