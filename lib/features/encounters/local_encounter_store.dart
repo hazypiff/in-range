@@ -42,7 +42,9 @@ class LocalEncounter {
 
   DateTime? get expiresAt {
     if (rangeType.startsWith('feet')) {
-      return firstSeenAt.add(feetLifespan);
+      // From LAST seen: a peer you're still standing next to must not
+      // expire mid-conversation because you first met 24h ago.
+      return lastSeenAt.add(feetLifespan);
     }
     return null;
   }
@@ -94,7 +96,9 @@ class LocalEncounter {
 
   String get neighborhoodLabel {
     if (rangeType.startsWith('feet')) {
-      return 'Near you · ~$estimatedFeet ft · RSSI $bestRssi';
+      // "Closest:" — this is the best moment ever observed, not a live
+      // distance; qualitative until the mid tier is field-calibrated.
+      return 'Closest: ${rangeBandLabel(bestBand)} · RSSI $bestRssi';
     }
     return 'Nearby area';
   }

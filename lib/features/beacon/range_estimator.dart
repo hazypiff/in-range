@@ -158,6 +158,23 @@ class RangeEstimator {
   void clear() => _peers.clear();
 }
 
+/// User-facing band labels — deliberately qualitative until the middle
+/// tier is field-calibrated (walk #4). The S9 data supports "very close"
+/// and "in range" with confidence; exact-feet claims would overpromise.
+String rangeBandLabel(String band) {
+  switch (band) {
+    case 'feet_10':
+      return 'Very close';
+    case 'feet_20':
+    case 'feet_30':
+      return 'Near';
+    case 'feet_60':
+      return 'In range';
+    default:
+      return 'Nearby';
+  }
+}
+
 /// Band ordering for filters: an encounter in a narrower band always
 /// satisfies a wider filter (feet_10 counts under a feet_60 filter).
 int rangeBandRank(String band) {

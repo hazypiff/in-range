@@ -233,9 +233,9 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
             children: [
               for (final e in const [
                 ('any', 'Any'),
-                ('feet_10', '10 ft'),
-                ('feet_30', '30 ft'),
-                ('feet_60', '60 ft'),
+                ('feet_10', 'Very close'),
+                ('feet_30', 'Near'),
+                ('feet_60', 'In range'),
               ])
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -531,7 +531,7 @@ class _Empty extends StatelessWidget {
                   ? 'Run-in logged — not revealed yet'
                   : band == 'any'
                       ? 'No one to swipe'
-                      : 'No one in $band band',
+                      : 'No one in this band yet',
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 8),

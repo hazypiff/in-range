@@ -92,7 +92,13 @@ class BeaconState {
 class BeaconController extends StateNotifier<BeaconState> {
   /// Lazy: BeaconService (BLE plugins) is only created when [toggle] turns ON.
   /// Keeps widget tests / cold UI free of platform BLE init side-effects.
-  BeaconController(this._ref, this._service) : super(const BeaconState());
+  BeaconController(this._ref, this._service) : super(const BeaconState()) {
+    // Internal stops (failed token rotation etc.) must reach the UI —
+    // otherwise the screen shows a green beacon over dead BLE.
+    _service.onBeaconStopped = () {
+      if (mounted && state.isOn) state = const BeaconState();
+    };
+  }
 
   final Ref _ref;
   final BeaconService _service;

@@ -50,6 +50,10 @@ class BeaconService {
   /// Optional hook for local encounter store / UI.
   SightingCallback? onSighting;
 
+  /// Fired whenever the service turns itself off internally (e.g. a failed
+  /// token rotation) so the UI never shows a green beacon over dead BLE.
+  void Function()? onBeaconStopped;
+
   bool _isOn = false;
   bool get isOn => _isOn;
   bool _cloudClaimed = false;
@@ -85,6 +89,10 @@ class BeaconService {
   /// no-op instead of resurrecting a stale advertiser after stop.
   bool _advertisingWanted = false;
 
+  /// Bumped on every turn-on/off. In-flight async work (rotation, claims)
+  /// compares its captured generation and aborts if the session changed.
+  int _sessionGeneration = 0;
+
   Future<T> _serialAdvOp<T>(Future<T> Function() op) {
     final run = _advOpChain.then((_) => op());
     _advOpChain = run.then((_) {}, onError: (_) {});
@@ -108,6 +116,7 @@ class BeaconService {
       throw StateError('Sign in before starting the beacon.');
     }
     _currentRangeType = rangeType;
+    _sessionGeneration++;
     _advertisingWanted = true;
 
     try {
@@ -158,17 +167,20 @@ class BeaconService {
         }));
       }
     });
-    // Zombie-scanner watchdog: field test 2026-07-13 — a beacon reported ON
-    // but yielded zero scan results for the whole walk. If the scanner goes
-    // silent, restart it (also flushes the stack's stale-advert cache).
+    // Zombie-scanner watchdog. Silence usually means the user is simply
+    // alone — NOT a broken scanner — so this is a slow safety net, not a
+    // health probe: one restart per 15 silent minutes at most (audit
+    // 2026-07-13 #4; the aggressive 3-min version burned battery and
+    // punched scan gaps for every solo user).
     _lastForeignScanAt = DateTime.now();
     _scanWatchdogTimer?.cancel();
-    _scanWatchdogTimer = Timer.periodic(const Duration(minutes: 2), (_) {
+    _scanWatchdogTimer = Timer.periodic(const Duration(minutes: 15), (_) {
       if (!_isOn) return;
       final last = _lastForeignScanAt;
       if (last == null ||
-          DateTime.now().difference(last) > const Duration(minutes: 3)) {
-        debugPrint('Scan watchdog: no foreign adverts ≥3min — restarting scan');
+          DateTime.now().difference(last) > const Duration(minutes: 15)) {
+        debugPrint(
+            'Scan watchdog: no foreign adverts ≥15min — precautionary scan restart');
         unawaited(_restartScanning());
       }
     });
@@ -196,6 +208,7 @@ class BeaconService {
 
   Future<void> turnOffBeacon() async {
     _isOn = false;
+    _sessionGeneration++;
     _advertisingWanted = false;
     _rotationTimer?.cancel();
     _rotationTimer = null;
@@ -229,15 +242,33 @@ class BeaconService {
     _currentCorrelationId = null;
     _currentRangeType = null;
     _cloudClaimed = false;
+
+    try {
+      onBeaconStopped?.call();
+    } catch (e) {
+      debugPrint('onBeaconStopped callback error: $e');
+    }
   }
 
   Future<void> _rotateToken(String rangeType) async {
+    final gen = _sessionGeneration;
     try {
+      // Drain buffered sightings FIRST: the server keeps one claim per user,
+      // so rows still referencing the outgoing token would fail after the
+      // new claim replaces it (audit 2026-07-13 #3).
+      await _flushSightings();
+      if (!_isOn || gen != _sessionGeneration) return;
       await _refreshClaim(rangeType: rangeType);
-      if (_isOn) await _startAdvertising();
+      // A rotation that straddled turnOffBeacon must not resurrect the
+      // claim or the advertiser.
+      if (!_isOn || gen != _sessionGeneration) {
+        await _releaseClaim();
+        return;
+      }
+      await _startAdvertising();
     } catch (e) {
       debugPrint('Token rotation failed; stopping beacon: $e');
-      await turnOffBeacon();
+      if (gen == _sessionGeneration) await turnOffBeacon();
     }
   }
 
@@ -507,13 +538,19 @@ class BeaconService {
     _ensureLocationCache();
 
     final range = _currentRangeType ?? 'feet_10';
+    // Uploaded sightings carry the ESTIMATED band, not the fixed beacon
+    // range — the server derives encounter bands from it (migration 0022).
+    final estimated = rangeEstimator.classify(observedCorrelationIdHex);
+    final uploadRange = (range.startsWith('feet') && estimated != 'none')
+        ? estimated
+        : range;
     final record = SightingRecord(
       observedToken: observedCorrelationIdHex,
       rssi: rssi,
       observerLat: _cachedLat,
       observerLon: _cachedLon,
       observedAt: now,
-      rangeType: range,
+      rangeType: uploadRange,
     );
 
     // Keep one pending row per corr (best RSSI).
@@ -530,7 +567,7 @@ class BeaconService {
       rangeType: record.rangeType,
     );
 
-    final band = rangeEstimator.classify(observedCorrelationIdHex);
+    final band = estimated;
     debugPrint(
         'Sighting observed rssi=$rssi band=$band (tracked=${_pendingByCorr.length})');
 

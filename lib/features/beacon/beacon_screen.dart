@@ -123,7 +123,7 @@ class _BeaconScreenState extends ConsumerState<BeaconScreen> {
           InputDecorator(
             decoration: const InputDecoration(border: OutlineInputBorder()),
             child: Text(
-              'Up to ~60 ft (BLE · 24h) — encounters auto-tagged 10/30/60 ft',
+              'Up to ~60 ft (BLE · 24h) — encounters tagged Very close / Near / In range',
               style: Theme.of(context).textTheme.bodyMedium,
             ),
           ),
