@@ -63,9 +63,12 @@ class _BeaconScreenState extends ConsumerState<BeaconScreen> {
     } catch (e) {
       debugPrint('Beacon toggle failed: $e');
       if (mounted) {
+        // Surface the real reason. Config/crypto/sign-in failures are
+        // StateErrors and are NOT permission problems — don't mislabel them.
         setState(() {
-          _lastError =
-              'Could not start the Beacon. Check Bluetooth, location, and app permissions.';
+          _lastError = e is StateError
+              ? 'Beacon could not start: ${e.message}'
+              : 'Could not start the Beacon. Check Bluetooth, location, and app permissions.';
         });
       }
     }

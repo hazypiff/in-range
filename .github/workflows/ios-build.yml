@@ -1,0 +1,51 @@
+name: iOS build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'ios/**'
+      - 'lib/**'
+      - 'pubspec.yaml'
+      - '.github/workflows/ios-build.yml'
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Build iOS (release, unsigned)
+        # Unsigned compile-check + installable-after-resign artifact.
+        # Secrets come from repo Actions secrets when set; falls back to
+        # .env.example placeholders (app then runs in local/offline mode).
+        run: |
+          flutter build ios --release --no-codesign \
+            --dart-define=SUPABASE_URL="${{ secrets.SUPABASE_URL }}" \
+            --dart-define=SUPABASE_PUBLISHABLE_KEY="${{ secrets.SUPABASE_PUBLISHABLE_KEY }}" \
+            --dart-define=INRANGE_HMAC_SECRET="${{ secrets.INRANGE_HMAC_SECRET }}" \
+            --dart-define=INRANGE_USER_ID_SECRET="${{ secrets.INRANGE_USER_ID_SECRET }}" \
+            --dart-define=ENCOUNTER_REVEAL_DELAY_HOURS="0"
+
+      - name: Package Runner.app
+        run: |
+          cd build/ios/iphoneos
+          mkdir -p Payload
+          cp -r Runner.app Payload/
+          zip -qry InRange-unsigned.ipa Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: InRange-unsigned-ipa
+          path: build/ios/iphoneos/InRange-unsigned.ipa
+          retention-days: 14

@@ -19,9 +19,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
   final _password = TextEditingController();
   final _phone = TextEditingController();
   final _otp = TextEditingController();
-  final _birthDate = TextEditingController(
-    text: AgeGate.format(DateTime(DateTime.now().year - 25, 1, 1)),
-  );
+  DateTime _birth = DateTime(DateTime.now().year - 25, 1, 1);
   bool _busy = false;
   bool _otpSent = false;
   bool _isSignUp = false;
@@ -42,12 +40,11 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
     _password.dispose();
     _phone.dispose();
     _otp.dispose();
-    _birthDate.dispose();
     super.dispose();
   }
 
-  DateTime _assertAgeGate() {
-    final birthDate = AgeGate.parseIsoDate(_birthDate.text);
+  DateTime _assertAgeGate([DateTime? fromController]) {
+    final birthDate = fromController ?? _birth;
     if (!AgeGate.isAdult(birthDate)) {
       throw StateError('You must be 18 or older to use In Range');
     }
@@ -94,7 +91,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
         }
         final session = ref.read(sessionControllerProvider.notifier);
         if (_isSignUp) {
-          final birthDate = _assertAgeGate();
+          final birthDate = _assertAgeGate(_birth);
           await session.signUpEmail(
             email: email,
             password: pass,
@@ -209,24 +206,26 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
                   _EmailTab(
                     email: _email,
                     password: _password,
-                    birthDate: _birthDate,
+                    birth: _birth,
                     isSignUp: _isSignUp,
                     confirm18: _confirm18,
                     busy: _busy,
                     onConfirm18: (v) => setState(() => _confirm18 = v),
                     onToggleMode: () => setState(() => _isSignUp = !_isSignUp),
                     onSubmit: _emailAuth,
+                    onBirthChanged: (d) => setState(() => _birth = d),
                   ),
                   _PhoneTab(
                     phone: _phone,
                     otp: _otp,
-                    birthDate: _birthDate,
+                    birth: _birth,
                     confirm18: _confirm18,
                     otpSent: _otpSent,
                     busy: _busy,
                     onConfirm18: (v) => setState(() => _confirm18 = v),
                     onSend: _sendOtp,
                     onVerify: _verifyOtp,
+                    onBirthChanged: (d) => setState(() => _birth = d),
                   ),
                 ],
               ),
@@ -266,13 +265,10 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
               ],
             ),
             const SizedBox(height: 12),
-            TextField(
-              controller: _birthDate,
-              keyboardType: TextInputType.datetime,
-              decoration: const InputDecoration(
-                labelText: 'Date of birth (YYYY-MM-DD, 18+ required)',
-                border: OutlineInputBorder(),
-              ),
+            _DatePickerTile(
+              birth: _birth,
+              busy: _busy,
+              onChanged: (d) => setState(() => _birth = d),
             ),
             CheckboxListTile(
               contentPadding: EdgeInsets.zero,
@@ -337,24 +333,26 @@ class _EmailTab extends StatelessWidget {
   const _EmailTab({
     required this.email,
     required this.password,
-    required this.birthDate,
+    required this.birth,
     required this.isSignUp,
     required this.confirm18,
     required this.busy,
     required this.onConfirm18,
     required this.onToggleMode,
     required this.onSubmit,
+    required this.onBirthChanged,
   });
 
   final TextEditingController email;
   final TextEditingController password;
-  final TextEditingController birthDate;
+  final DateTime birth;
   final bool isSignUp;
   final bool confirm18;
   final bool busy;
   final ValueChanged<bool> onConfirm18;
   final VoidCallback onToggleMode;
   final VoidCallback onSubmit;
+  final ValueChanged<DateTime> onBirthChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -381,13 +379,10 @@ class _EmailTab extends StatelessWidget {
           ),
           if (isSignUp) ...[
             const SizedBox(height: 12),
-            TextField(
-              controller: birthDate,
-              keyboardType: TextInputType.datetime,
-              decoration: const InputDecoration(
-                labelText: 'Date of birth (YYYY-MM-DD, 18+)',
-                border: OutlineInputBorder(),
-              ),
+            _DatePickerTile(
+              birth: birth,
+              busy: busy,
+              onChanged: onBirthChanged,
             ),
             CheckboxListTile(
               contentPadding: EdgeInsets.zero,
@@ -434,24 +429,26 @@ class _PhoneTab extends StatelessWidget {
   const _PhoneTab({
     required this.phone,
     required this.otp,
-    required this.birthDate,
+    required this.birth,
     required this.confirm18,
     required this.otpSent,
     required this.busy,
     required this.onConfirm18,
     required this.onSend,
     required this.onVerify,
+    required this.onBirthChanged,
   });
 
   final TextEditingController phone;
   final TextEditingController otp;
-  final TextEditingController birthDate;
+  final DateTime birth;
   final bool confirm18;
   final bool otpSent;
   final bool busy;
   final ValueChanged<bool> onConfirm18;
   final VoidCallback onSend;
   final VoidCallback onVerify;
+  final ValueChanged<DateTime> onBirthChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -469,13 +466,10 @@ class _PhoneTab extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
-          TextField(
-            controller: birthDate,
-            keyboardType: TextInputType.datetime,
-            decoration: const InputDecoration(
-              labelText: 'Date of birth (YYYY-MM-DD, 18+)',
-              border: OutlineInputBorder(),
-            ),
+          _DatePickerTile(
+            birth: birth,
+            busy: busy,
+            onChanged: onBirthChanged,
           ),
           CheckboxListTile(
             contentPadding: EdgeInsets.zero,
@@ -518,6 +512,54 @@ class _PhoneTab extends StatelessWidget {
             style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Tappable field that opens the native date picker for date of birth —
+/// avoids typing YYYY-MM-DD (and the missing dash) on a phone keyboard.
+class _DatePickerTile extends StatelessWidget {
+  const _DatePickerTile({
+    required this.birth,
+    required this.busy,
+    required this.onChanged,
+  });
+
+  final DateTime birth;
+  final bool busy;
+  final ValueChanged<DateTime> onChanged;
+
+  Future<void> _pick(BuildContext context) async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: birth,
+      firstDate: DateTime(1900),
+      lastDate: DateTime(now.year, now.month, now.day),
+      helpText: 'Select your date of birth',
+      initialEntryMode: DatePickerEntryMode.calendar,
+    );
+    if (picked != null) onChanged(picked);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final adult = AgeGate.isAdult(birth);
+    return InkWell(
+      onTap: busy ? null : () => _pick(context),
+      borderRadius: BorderRadius.circular(4),
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: 'Date of birth (18+ required)',
+          border: const OutlineInputBorder(),
+          suffixIcon: const Icon(Icons.calendar_today, size: 20),
+          errorText: adult ? null : 'You must be 18 or older',
+        ),
+        child: Text(
+          AgeGate.format(birth),
+          style: const TextStyle(fontSize: 16),
+        ),
       ),
     );
   }

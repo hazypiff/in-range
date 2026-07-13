@@ -74,6 +74,27 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
     super.dispose();
   }
 
+  Future<void> _pickDob() async {
+    final now = DateTime.now();
+    DateTime initial;
+    try {
+      initial = AgeGate.parseIsoDate(_dob.text);
+    } catch (_) {
+      initial = DateTime(now.year - 25, 1, 1);
+    }
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(1900),
+      lastDate: DateTime(now.year, now.month, now.day),
+      helpText: 'Select your date of birth',
+      initialEntryMode: DatePickerEntryMode.calendar,
+    );
+    if (picked != null) {
+      setState(() => _dob.text = AgeGate.format(picked));
+    }
+  }
+
   Future<void> _addPhoto() async {
     if (_photos.length >= 6) return;
     final picker = ImagePicker();
@@ -209,10 +230,12 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
                 const SizedBox(height: 12),
                 TextField(
                   controller: _dob,
-                  keyboardType: TextInputType.datetime,
+                  readOnly: true,
+                  onTap: _busy ? null : _pickDob,
                   decoration: const InputDecoration(
-                    labelText: 'Date of birth (YYYY-MM-DD, 18+)',
+                    labelText: 'Date of birth (18+ required)',
                     border: OutlineInputBorder(),
+                    suffixIcon: Icon(Icons.calendar_today, size: 20),
                   ),
                 ),
                 const SizedBox(height: 12),
