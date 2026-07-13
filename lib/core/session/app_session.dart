@@ -506,9 +506,13 @@ class SessionController extends StateNotifier<AppSession> {
   }
 
   Future<void> setIncognito(bool enabled) async {
+    // Cloud gate first, like setPaused above — it throws when Incognito
+    // requires a subscription. Persisting before the gate left free users
+    // locally-incognito (prefs key is shared with SafetyStore) with the
+    // beacon silently blocked after restart.
+    await _profileSync.setIncognito(enabled);
     await _prefs.setBool('incognito', enabled);
     state = state.copyWith(incognito: enabled);
-    await _profileSync.setIncognito(enabled);
   }
 
   Future<void> deleteAccountLocal() async {
