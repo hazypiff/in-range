@@ -15,8 +15,12 @@ class AppPrefs {
   Future<void> setBeaconRange(String range) =>
       _prefs.setString(_rangeKey, range);
 
-  /// any | feet_10 | feet_20 | feet_30
-  String get swipeBandFilter => _prefs.getString(_bandKey) ?? 'any';
+  /// any | feet_10 | feet_30 | feet_60
+  String get swipeBandFilter {
+    final stored = _prefs.getString(_bandKey) ?? 'any';
+    // Pre-calibration builds offered feet_20; it ranks with feet_30 now.
+    return stored == 'feet_20' ? 'feet_30' : stored;
+  }
 
   Future<void> setSwipeBandFilter(String band) =>
       _prefs.setString(_bandKey, band);

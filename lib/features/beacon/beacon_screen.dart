@@ -118,30 +118,14 @@ class _BeaconScreenState extends ConsumerState<BeaconScreen> {
           const SizedBox(height: 12),
           Text('Range', style: Theme.of(context).textTheme.titleSmall),
           const SizedBox(height: 8),
-          DropdownButtonFormField<String>(
-            initialValue: range,
+          // Fixed range (no user picker for now): beacon runs wide and the
+          // RangeEstimator tags every encounter 10/30/60 ft automatically.
+          InputDecorator(
             decoration: const InputDecoration(border: OutlineInputBorder()),
-            items: const [
-              DropdownMenuItem(
-                  value: 'feet_10', child: Text('10 ft (BLE · 24h)')),
-              DropdownMenuItem(
-                  value: 'feet_20', child: Text('20 ft (BLE · 24h)')),
-              DropdownMenuItem(
-                  value: 'feet_30', child: Text('30 ft (BLE · 24h)')),
-              DropdownMenuItem(
-                  value: 'miles_1', child: Text('1 mi (GPS · keep)')),
-              DropdownMenuItem(
-                  value: 'miles_5', child: Text('5 mi (GPS · keep)')),
-              DropdownMenuItem(
-                  value: 'miles_10', child: Text('10 mi (GPS · keep)')),
-            ],
-            onChanged: state.isOn
-                ? null
-                : (v) {
-                    if (v != null) {
-                      ref.read(selectedRangeProvider.notifier).set(v);
-                    }
-                  },
+            child: Text(
+              'Up to ~60 ft (BLE · 24h) — encounters auto-tagged 10/30/60 ft',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
           ),
           const SizedBox(height: 8),
           Text(

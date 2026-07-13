@@ -1,4 +1,5 @@
 import 'package:in_range/core/config/app_config.dart';
+import 'package:in_range/features/beacon/range_estimator.dart';
 import 'package:in_range/features/encounters/local_encounter_store.dart';
 
 /// Unified swipe deck item — local BLE run-in or server encounter.
@@ -49,6 +50,11 @@ class SwipeCard {
   bool matchesBandFilter(String band) {
     if (band == 'any') return true;
     if (local != null) return local!.matchesBandFilter(band);
+    // Server cards use the same narrower-satisfies-wider rank rule as
+    // local encounters; miles rows only match their exact filter.
+    if (rangeType.startsWith('feet') && band.startsWith('feet')) {
+      return rangeBandRank(rangeType) <= rangeBandRank(band);
+    }
     return rangeType == band || rangeType.startsWith(band);
   }
 

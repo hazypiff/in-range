@@ -10,12 +10,14 @@ import 'package:geolocator/geolocator.dart';
 import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/core/network/supabase_client.dart';
 import 'package:in_range/features/beacon/ephemeral_token_generator.dart';
+import 'package:in_range/features/beacon/range_estimator.dart';
 
 /// Called when we observe another In Range beacon (throttled).
 typedef SightingCallback = void Function({
   required String correlationId,
   required int rssi,
   required String rangeType,
+  required String estimatedBand,
 });
 
 /// BeaconService — BLE advertise + scan + optional server upload.
@@ -62,7 +64,32 @@ class BeaconService {
   Timer? _rotationTimer;
   Timer? _sightingFlushTimer;
   Timer? _scanRestartTimer;
+  Timer? _advPowerTimer;
   StreamSubscription<List<ScanResult>>? _scanSub;
+
+  /// Calibrated 10/30/60 ft classifier fed by every fresh foreign advert.
+  final RangeEstimator rangeEstimator = RangeEstimator();
+
+  /// Dual-power advertising: mostly high TX for range, periodic medium
+  /// slots as the physical mid-distance gate (see RangeEstimator).
+  AdvertPower _advPower = AdvertPower.high;
+  int _advTick = 0;
+
+  /// Serializes every advertising start/stop. Concurrent restarts (power
+  /// timer vs token rotation vs turn-off) orphan Android advertisements —
+  /// the plugin swaps its callback on each start and Android stops by
+  /// callback identity, so an interleaved start can never be stopped again.
+  Future<void> _advOpChain = Future.value();
+
+  /// False the moment turnOffBeacon begins: queued advertising starts
+  /// no-op instead of resurrecting a stale advertiser after stop.
+  bool _advertisingWanted = false;
+
+  Future<T> _serialAdvOp<T>(Future<T> Function() op) {
+    final run = _advOpChain.then((_) => op());
+    _advOpChain = run.then((_) {}, onError: (_) {});
+    return run;
+  }
 
   /// One buffered row per corr id (keeps best RSSI).
   final Map<String, SightingRecord> _pendingByCorr = {};
@@ -81,6 +108,7 @@ class BeaconService {
       throw StateError('Sign in before starting the beacon.');
     }
     _currentRangeType = rangeType;
+    _advertisingWanted = true;
 
     try {
       await _refreshClaim(rangeType: rangeType);
@@ -88,6 +116,7 @@ class BeaconService {
       await _startScanning();
       _isOn = true;
     } catch (e) {
+      _advertisingWanted = false;
       await _stopBle();
       _currentToken = null;
       _currentCorrelationId = null;
@@ -111,6 +140,23 @@ class BeaconService {
     _scanRestartTimer?.cancel();
     _scanRestartTimer = Timer.periodic(const Duration(minutes: 55), (_) {
       if (_isOn) unawaited(_restartScanning());
+    });
+    // Dual-power cycle: 20 s high / 10 s medium. Medium slots are the
+    // physical feet_30 gate — medium-power packets die at mid-range while
+    // high carries past 60 ft.
+    _advTick = 0;
+    _advPower = AdvertPower.high;
+    _advPowerTimer?.cancel();
+    _advPowerTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (!_isOn) return;
+      _advTick = (_advTick + 1) % 3;
+      final next = _advTick == 2 ? AdvertPower.medium : AdvertPower.high;
+      if (next != _advPower) {
+        _advPower = next;
+        unawaited(_startAdvertising().catchError((Object e) {
+          debugPrint('Power-slot advertise restart failed: $e');
+        }));
+      }
     });
     // Zombie-scanner watchdog: field test 2026-07-13 — a beacon reported ON
     // but yielded zero scan results for the whole walk. If the scanner goes
@@ -150,12 +196,15 @@ class BeaconService {
 
   Future<void> turnOffBeacon() async {
     _isOn = false;
+    _advertisingWanted = false;
     _rotationTimer?.cancel();
     _rotationTimer = null;
     _sightingFlushTimer?.cancel();
     _sightingFlushTimer = null;
     _scanRestartTimer?.cancel();
     _scanRestartTimer = null;
+    _advPowerTimer?.cancel();
+    _advPowerTimer = null;
     _scanWatchdogTimer?.cancel();
     _scanWatchdogTimer = null;
     _locationRefreshTimer?.cancel();
@@ -209,7 +258,9 @@ class BeaconService {
       debugPrint('BLE scan stop failed: $e');
     }
     try {
-      await FlutterBlePeripheral().stop();
+      // Serialized: runs after any in-flight advertising start, and queued
+      // starts behind it no-op via _advertisingWanted.
+      await _serialAdvOp(() => FlutterBlePeripheral().stop());
     } catch (e) {
       debugPrint('BLE advertising stop failed: $e');
     }
@@ -227,28 +278,42 @@ class BeaconService {
     return Uint8List.fromList(digest.bytes.sublist(0, 16));
   }
 
-  Future<void> _startAdvertising() async {
+  Future<void> _startAdvertising() => _serialAdvOp(_startAdvertisingLocked);
+
+  Future<void> _startAdvertisingLocked() async {
+    // Beacon turned off while this op sat in the queue — do not resurrect.
+    if (!_advertisingWanted) return;
     if (_currentToken == null || _currentCorrelationId == null) {
       throw StateError('No beacon token is available');
     }
 
     final peripheral = FlutterBlePeripheral();
-    // Legacy payload only: mfg id + 16-byte corr (fits 31-byte AD).
+    // Legacy payload: mfg id + 16-byte corr + 1 flag byte (fits 31-byte AD).
+    // Flag bit0 = medium-power slot. Field test 2026-07-13: Samsung's stack
+    // does NOT update the TX Power Level AD when settings change, so the
+    // slot marker must live in our own payload. Remaining flag bits are
+    // reserved (future mesh relay bit). 16-byte adverts = legacy = high.
+    final payload = Uint8List(17)
+      ..setRange(0, 16, _currentCorrelationId!)
+      ..[16] = _advPower == AdvertPower.medium ? 0x01 : 0x00;
     final advertiseData = AdvertiseData(
       manufacturerId: _inRangeManufacturerId,
-      manufacturerData: _currentCorrelationId!,
+      manufacturerData: payload,
       includeDeviceName: false,
     );
 
     // Balanced mode — lowLatency was aggressive on S9 dual-phone tests.
-    // txPowerHigh: walk #2 proved medium (≈ −7 dBm) kills the link at ~25 ft
-    // with a perfect scanner; high buys ~8 dB — range AND body-block headroom.
+    // Power alternates high/medium (see _advPowerTimer): high carries past
+    // 60 ft (walk #3); "heard on medium" is the physical feet_30 gate.
+    final txPower = _advPower == AdvertPower.medium
+        ? AdvertiseTxPower.advertiseTxPowerMedium
+        : AdvertiseTxPower.advertiseTxPowerHigh;
     final settings = AdvertiseSettings(
       advertiseSet: false,
       connectable: false,
       timeout: 0,
       advertiseMode: AdvertiseMode.advertiseModeBalanced,
-      txPowerLevel: AdvertiseTxPower.advertiseTxPowerHigh,
+      txPowerLevel: txPower,
     );
 
     final supported = await peripheral.isSupported;
@@ -272,7 +337,7 @@ class BeaconService {
         advertiseData: advertiseData,
         advertiseSettings: settings,
       );
-      debugPrint('Started BLE advertising');
+      debugPrint('Started BLE advertising (power=${_advPower.name})');
     } catch (e) {
       debugPrint('Advertising start failed: $e');
       try {
@@ -283,17 +348,20 @@ class BeaconService {
             connectable: false,
             timeout: 0,
             advertiseMode: AdvertiseMode.advertiseModeBalanced,
-            txPowerLevel: AdvertiseTxPower.advertiseTxPowerHigh,
+            txPowerLevel: txPower,
           ),
           advertiseSetParameters: AdvertiseSetParameters(
             connectable: false,
             legacyMode: true,
             scannable: true,
-            txPowerLevel: txPowerHigh,
+            txPowerLevel: _advPower == AdvertPower.medium
+                ? txPowerMedium
+                : txPowerHigh,
             interval: intervalHigh,
           ),
         );
-        debugPrint('Started BLE advertising (set+legacy fallback)');
+        debugPrint(
+            'Started BLE advertising (set+legacy fallback, power=${_advPower.name})');
       } catch (e2) {
         debugPrint('Advertising fallback also failed: $e2');
         throw StateError('Could not start BLE advertising');
@@ -363,11 +431,15 @@ class BeaconService {
 
       final adv = r.advertisementData;
       Uint8List? observedCorrelationId;
+      bool mediumFlag = false;
 
       if (adv.manufacturerData.isNotEmpty) {
         final bytes = adv.manufacturerData[_inRangeManufacturerId];
-        if (bytes != null && bytes.length == 16) {
-          observedCorrelationId = Uint8List.fromList(bytes);
+        // 16 bytes = legacy corr-only advert (implies high power);
+        // 17 bytes = corr + flag byte (bit0 = medium-power slot).
+        if (bytes != null && (bytes.length == 16 || bytes.length == 17)) {
+          observedCorrelationId = Uint8List.fromList(bytes.sublist(0, 16));
+          mediumFlag = bytes.length == 17 && (bytes[16] & 0x01) != 0;
         }
       }
 
@@ -391,9 +463,17 @@ class BeaconService {
       // for an entire field test (2026-07-13 walk).
       if (_ownCorrHexes.contains(hexId)) continue;
 
+      // Which power slot sent this advert: flag byte in our payload
+      // (Samsung's TX Power Level AD proved unreliable). Missing flag =
+      // legacy advert = high — the safe direction: feet_30 can only
+      // under-fire, never claim mid-range falsely.
+      final power = mediumFlag ? AdvertPower.medium : AdvertPower.high;
+      rangeEstimator.addSample(hexId, r.rssi, power);
+
       // One line per fresh foreign advert — the calibration ground truth
       // (logcat timestamp + live RSSI). Cheap: filtered scan = only our beacons.
-      debugPrint('Advert corr=${hexId.substring(0, 8)} rssi=${r.rssi}');
+      debugPrint(
+          'Advert corr=${hexId.substring(0, 8)} rssi=${r.rssi} pw=${power == AdvertPower.medium ? "M" : "H"}');
 
       _lastForeignScanAt = DateTime.now();
       _recordLocalSighting(hexId, r.rssi);
@@ -450,8 +530,9 @@ class BeaconService {
       rangeType: record.rangeType,
     );
 
+    final band = rangeEstimator.classify(observedCorrelationIdHex);
     debugPrint(
-        'Sighting observed rssi=$rssi (tracked=${_pendingByCorr.length})');
+        'Sighting observed rssi=$rssi band=$band (tracked=${_pendingByCorr.length})');
 
     // Local encounter store (instant or delayed reveal).
     try {
@@ -459,6 +540,7 @@ class BeaconService {
         correlationId: observedCorrelationIdHex,
         rssi: rssi,
         rangeType: range,
+        estimatedBand: band,
       );
     } catch (e) {
       debugPrint('onSighting callback error: $e');

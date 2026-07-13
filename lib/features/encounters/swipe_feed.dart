@@ -234,8 +234,8 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
               for (final e in const [
                 ('any', 'Any'),
                 ('feet_10', '10 ft'),
-                ('feet_20', '20 ft'),
                 ('feet_30', '30 ft'),
+                ('feet_60', '60 ft'),
               ])
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 4),

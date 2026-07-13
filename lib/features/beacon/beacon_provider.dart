@@ -14,20 +14,26 @@ final selectedRangeProvider =
 });
 
 class SelectedRangeController extends StateNotifier<String> {
-  SelectedRangeController(this._prefs) : super(_validated(_prefs.beaconRange));
+  // Range is fixed at feet_60 for now (product call 2026-07-13): users don't
+  // pick a range; the RangeEstimator classifies every encounter into
+  // 10/30/60 ft bands regardless. Stored prefs are ignored until the
+  // post-calibration UX decides whether a picker returns.
+  SelectedRangeController(this._prefs) : super(fixedRange);
   final AppPrefs _prefs;
+
+  static const String fixedRange = 'feet_60';
 
   static const _allowed = <String>{
     'feet_10',
-    'feet_20',
     'feet_30',
+    'feet_60',
     'miles_1',
     'miles_5',
     'miles_10',
   };
 
   static String _validated(String value) =>
-      _allowed.contains(value) ? value : 'feet_10';
+      _allowed.contains(value) ? value : fixedRange;
 
   Future<void> set(String range) async {
     final safe = _validated(range);
@@ -47,11 +53,13 @@ final beaconServiceProvider = Provider<BeaconService>((ref) {
       required String correlationId,
       required int rssi,
       required String rangeType,
+      required String estimatedBand,
     }) {
       store.noteSighting(
         correlationId: correlationId,
         rssi: rssi,
         rangeType: rangeType,
+        estimatedBand: estimatedBand,
       );
     },
   );

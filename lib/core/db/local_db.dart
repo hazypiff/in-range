@@ -13,7 +13,8 @@ class LocalDb {
         first_seen_ms INTEGER NOT NULL,
         last_seen_ms INTEGER NOT NULL,
         best_rssi INTEGER NOT NULL,
-        range_type TEXT NOT NULL
+        range_type TEXT NOT NULL,
+        best_band TEXT NOT NULL DEFAULT ''
       )
     ''');
     await db.execute('''
@@ -27,13 +28,24 @@ class LocalDb {
     );
   }
 
+  static Future<void> _onUpgrade(
+      Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      // v2: persist the narrowest estimator band per peer.
+      await db.execute(
+        "ALTER TABLE sightings ADD COLUMN best_band TEXT NOT NULL DEFAULT ''",
+      );
+    }
+  }
+
   static Future<LocalDb> open() async {
     final dir = await getDatabasesPath();
     final path = p.join(dir, 'in_range_local.db');
     final database = await openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: _onCreate,
+      onUpgrade: _onUpgrade,
     );
     return LocalDb._(database);
   }
@@ -42,8 +54,9 @@ class LocalDb {
   static Future<LocalDb> openInMemory() async {
     final database = await openDatabase(
       inMemoryDatabasePath,
-      version: 1,
+      version: 2,
       onCreate: _onCreate,
+      onUpgrade: _onUpgrade,
     );
     return LocalDb._(database);
   }
@@ -57,6 +70,7 @@ class LocalDb {
     required int lastSeenMs,
     required int bestRssi,
     required String rangeType,
+    String bestBand = '',
   }) async {
     await db.insert(
       'sightings',
@@ -66,6 +80,7 @@ class LocalDb {
         'last_seen_ms': lastSeenMs,
         'best_rssi': bestRssi,
         'range_type': rangeType,
+        'best_band': bestBand,
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );

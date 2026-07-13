@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/core/db/local_db.dart';
 import 'package:in_range/core/prefs/app_prefs.dart';
+import 'package:in_range/features/beacon/range_estimator.dart';
 import 'package:in_range/features/matches/match_store.dart';
 
 /// Local BLE run-in with 24h feet lifespan + reveal delay.
@@ -14,7 +15,9 @@ class LocalEncounter {
     required this.rangeType,
     DateTime? lastSeenAt,
     this.alias,
-  }) : lastSeenAt = lastSeenAt ?? firstSeenAt;
+    String? bestBand,
+  })  : lastSeenAt = lastSeenAt ?? firstSeenAt,
+        bestBand = bestBand ?? _bandFromRssi(bestRssi);
 
   final String correlationId;
   final DateTime firstSeenAt;
@@ -22,6 +25,16 @@ class LocalEncounter {
   int bestRssi;
   final String rangeType;
   final String? alias;
+
+  /// Narrowest RangeEstimator band this peer ever achieved (feet_10 |
+  /// feet_30 | feet_60). Persisted so restarts don't forget a close pass.
+  final String bestBand;
+
+  /// Fallback for rows persisted before the estimator existed. −75 best-RSSI
+  /// ≈ the walk #3 in-hand floor; anything weaker can't claim NEAR, and
+  /// without power-slot data mid-range can't be proven → widest band.
+  static String _bandFromRssi(int bestRssi) =>
+      bestRssi >= -75 ? 'feet_10' : 'feet_60';
 
   static const feetLifespan = Duration(hours: 24);
 
@@ -50,26 +63,25 @@ class LocalEncounter {
     return d.isNegative ? Duration.zero : d;
   }
 
-  String get estimatedFeetBand {
-    if (bestRssi >= -55) return 'feet_10';
-    if (bestRssi >= -70) return 'feet_20';
-    return 'feet_30';
-  }
+  String get estimatedFeetBand => bestBand;
 
   int get estimatedFeet {
     switch (estimatedFeetBand) {
       case 'feet_10':
         return 10;
-      case 'feet_20':
-        return 20;
-      default:
+      case 'feet_20': // legacy rows
+      case 'feet_30':
         return 30;
+      default:
+        return 60;
     }
   }
 
+  /// Narrower bands satisfy wider filters: a feet_10 encounter shows under
+  /// a feet_60 filter, never the reverse.
   bool matchesBandFilter(String band) {
     if (band == 'any') return true;
-    return estimatedFeetBand == band;
+    return rangeBandRank(estimatedFeetBand) <= rangeBandRank(band);
   }
 
   String get displayName {
@@ -129,6 +141,7 @@ class LocalEncounterStore extends StateNotifier<Map<String, LocalEncounter>> {
       final map = <String, LocalEncounter>{};
       for (final r in rows) {
         final id = r['correlation_id']! as String;
+        final storedBand = r['best_band'] as String?;
         final enc = LocalEncounter(
           correlationId: id,
           firstSeenAt: DateTime.fromMillisecondsSinceEpoch(
@@ -140,6 +153,8 @@ class LocalEncounterStore extends StateNotifier<Map<String, LocalEncounter>> {
           bestRssi: r['best_rssi']! as int,
           rangeType: r['range_type']! as String,
           alias: _aliases[id],
+          bestBand:
+              (storedBand == null || storedBand.isEmpty) ? null : storedBand,
         );
         if (!enc.isExpired) {
           map[id] = enc;
@@ -158,6 +173,7 @@ class LocalEncounterStore extends StateNotifier<Map<String, LocalEncounter>> {
     required String correlationId,
     required int rssi,
     required String rangeType,
+    String? estimatedBand,
   }) async {
     final existing = state[correlationId];
     final now = DateTime.now();
@@ -169,6 +185,7 @@ class LocalEncounterStore extends StateNotifier<Map<String, LocalEncounter>> {
         bestRssi: rssi,
         rangeType: rangeType,
         alias: _aliases[correlationId],
+        bestBand: _validBand(estimatedBand),
       );
       debugPrint(
         'Local encounter first-seen corr=$correlationId '
@@ -183,6 +200,7 @@ class LocalEncounterStore extends StateNotifier<Map<String, LocalEncounter>> {
         rangeType: existing.rangeType,
         lastSeenAt: now,
         alias: existing.alias ?? _aliases[correlationId],
+        bestBand: _narrowest(existing.bestBand, _validBand(estimatedBand)),
       );
     }
     state = {...state, correlationId: next};
@@ -192,7 +210,17 @@ class LocalEncounterStore extends StateNotifier<Map<String, LocalEncounter>> {
       lastSeenMs: next.lastSeenAt.millisecondsSinceEpoch,
       bestRssi: next.bestRssi,
       rangeType: next.rangeType,
+      bestBand: next.bestBand,
     );
+  }
+
+  /// Estimator can return 'none' (window raced empty) — treat as widest.
+  static String? _validBand(String? band) =>
+      (band == null || rangeBandRank(band) > 2) ? null : band;
+
+  static String _narrowest(String a, String? b) {
+    if (b == null) return a;
+    return rangeBandRank(b) < rangeBandRank(a) ? b : a;
   }
 
   Future<void> setAlias(String correlationId, String alias) async {
@@ -214,6 +242,7 @@ class LocalEncounterStore extends StateNotifier<Map<String, LocalEncounter>> {
           rangeType: e.rangeType,
           lastSeenAt: e.lastSeenAt,
           alias: _aliases[correlationId],
+          bestBand: e.bestBand,
         ),
       };
     }
