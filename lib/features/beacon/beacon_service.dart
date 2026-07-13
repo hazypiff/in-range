@@ -317,15 +317,23 @@ class BeaconService {
       },
     );
 
-    // Balanced + continuousDivisor cuts main-isolate flood on S9.
+    // Hardware msd filter (our manufacturer id) — required, not an
+    // optimization: Android ≥8.1 suppresses UNFILTERED scans while the
+    // screen is off. Walk #1 (2026-07-13) proved it: 100% of scan
+    // deliveries on both phones landed inside screen-awake windows.
+    // The filter also confines results to In Range beacons, so the old
+    // continuousDivisor flood guard is no longer needed.
+    final calib = AppConfig.calibScanMode;
     await FlutterBluePlus.startScan(
       timeout: const Duration(hours: 1),
       androidUsesFineLocation: true,
       continuousUpdates: true,
-      continuousDivisor: 5,
-      androidScanMode: AndroidScanMode.balanced,
+      withMsd: [MsdFilter(_inRangeManufacturerId)],
+      androidScanMode:
+          calib ? AndroidScanMode.lowLatency : AndroidScanMode.balanced,
     );
-    debugPrint('BLE scan started (balanced, divisor=5)');
+    debugPrint(
+        'BLE scan started (filtered msd=0xFFFF, ${calib ? "lowLatency/calib" : "balanced"})');
   }
 
   /// Every correlation id we've ever advertised this process — self-sighting guard.
@@ -333,9 +341,24 @@ class BeaconService {
   DateTime? _lastForeignScanAt;
   Timer? _scanWatchdogTimer;
 
+  /// Last delivered timeStamp per device — the plugin re-emits its FULL
+  /// accumulated list on every update, so old entries (with old RSSI)
+  /// reappear on each callback. Walk #1: the app re-reported a frozen
+  /// −81/−68 pair for 12 minutes this way. Process fresh results only.
+  final Map<String, DateTime> _lastAdvertTsByDevice = {};
+
   void _onScanResults(List<ScanResult> results) {
     if (!_isOn) return;
     for (final r in results) {
+      final deviceId = r.device.remoteId.str;
+      final prevTs = _lastAdvertTsByDevice[deviceId];
+      if (prevTs != null && !r.timeStamp.isAfter(prevTs)) continue; // stale
+      _lastAdvertTsByDevice[deviceId] = r.timeStamp;
+      if (_lastAdvertTsByDevice.length > 500) {
+        final cutoff = DateTime.now().subtract(const Duration(minutes: 20));
+        _lastAdvertTsByDevice.removeWhere((_, ts) => ts.isBefore(cutoff));
+      }
+
       final adv = r.advertisementData;
       Uint8List? observedCorrelationId;
 
@@ -365,6 +388,10 @@ class BeaconService {
       // token after off→on, and we self-sighted it at a rock-constant RSSI
       // for an entire field test (2026-07-13 walk).
       if (_ownCorrHexes.contains(hexId)) continue;
+
+      // One line per fresh foreign advert — the calibration ground truth
+      // (logcat timestamp + live RSSI). Cheap: filtered scan = only our beacons.
+      debugPrint('Advert corr=${hexId.substring(0, 8)} rssi=${r.rssi}');
 
       _lastForeignScanAt = DateTime.now();
       _recordLocalSighting(hexId, r.rssi);

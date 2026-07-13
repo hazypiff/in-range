@@ -25,6 +25,8 @@ class AppConfig {
           const String.fromEnvironment('INRANGE_ENABLE_FGS'),
         'INRANGE_PREFER_SERVER' =>
           const String.fromEnvironment('INRANGE_PREFER_SERVER'),
+        'INRANGE_CALIB_SCAN' =>
+          const String.fromEnvironment('INRANGE_CALIB_SCAN'),
         'AUTH_REDIRECT_URL' =>
           const String.fromEnvironment('AUTH_REDIRECT_URL'),
         'GOOGLE_WEB_CLIENT_ID' =>
@@ -104,6 +106,16 @@ class AppConfig {
     final raw = (_env('INRANGE_ENABLE_FGS').isEmpty
             ? 'false'
             : _env('INRANGE_ENABLE_FGS'))
+        .toLowerCase();
+    return raw == 'true' || raw == '1' || raw == 'yes';
+  }
+
+  /// Calibration scan mode: low-latency scanning for dense per-advert RSSI
+  /// during range walks. Battery-heavy — leave off outside field tests.
+  static bool get calibScanMode {
+    final raw = (_env('INRANGE_CALIB_SCAN').isEmpty
+            ? 'false'
+            : _env('INRANGE_CALIB_SCAN'))
         .toLowerCase();
     return raw == 'true' || raw == '1' || raw == 'yes';
   }
