@@ -61,3 +61,4 @@ docs/smoke/
 *.aab
 
 android/app/src/main/AndroidManifest.xml.bak
+graphify-out/
