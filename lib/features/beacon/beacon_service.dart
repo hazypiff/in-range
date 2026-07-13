@@ -241,12 +241,14 @@ class BeaconService {
     );
 
     // Balanced mode — lowLatency was aggressive on S9 dual-phone tests.
+    // txPowerHigh: walk #2 proved medium (≈ −7 dBm) kills the link at ~25 ft
+    // with a perfect scanner; high buys ~8 dB — range AND body-block headroom.
     final settings = AdvertiseSettings(
       advertiseSet: false,
       connectable: false,
       timeout: 0,
       advertiseMode: AdvertiseMode.advertiseModeBalanced,
-      txPowerLevel: AdvertiseTxPower.advertiseTxPowerMedium,
+      txPowerLevel: AdvertiseTxPower.advertiseTxPowerHigh,
     );
 
     final supported = await peripheral.isSupported;
@@ -281,7 +283,7 @@ class BeaconService {
             connectable: false,
             timeout: 0,
             advertiseMode: AdvertiseMode.advertiseModeBalanced,
-            txPowerLevel: AdvertiseTxPower.advertiseTxPowerMedium,
+            txPowerLevel: AdvertiseTxPower.advertiseTxPowerHigh,
           ),
           advertiseSetParameters: AdvertiseSetParameters(
             connectable: false,
