@@ -31,7 +31,7 @@ for S in $(adb devices | awk 'NR>1 && $2=="device" {print $1}'); do
   for X in $EXCLUDE; do [ "$S" = "$X" ] && skip=true; done
   $skip && { echo "skip (excluded): $S"; continue; }
   MODEL=$(adb -s "$S" shell getprop ro.product.model 2>/dev/null | tr -d '\r' | tr ' ' '_')
-  LABEL="${MODEL:-$S}-${S: -4}"
+  LABEL="${MODEL:-$S}-${S: -6}"
   echo "monitoring: $LABEL ($S)"
   adb -s "$S" logcat -T 1 -s flutter:I 2>/dev/null \
     | grep --line-buffered -E "$PATTERN" \

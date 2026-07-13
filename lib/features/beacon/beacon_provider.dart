@@ -88,8 +88,21 @@ class BeaconController extends StateNotifier<BeaconState> {
 
   final Ref _ref;
   final BeaconService _service;
+  bool _busy = false;
 
   Future<void> toggle() async {
+    // Re-entrancy guard: rapid double-taps interleaved on/off mid-flight and
+    // null-crashed turnOnBeacon in the 2026-07-13 field test.
+    if (_busy) return;
+    _busy = true;
+    try {
+      await _toggleInner();
+    } finally {
+      _busy = false;
+    }
+  }
+
+  Future<void> _toggleInner() async {
     if (state.isOn) {
       await _service.turnOffBeacon();
       state = const BeaconState();

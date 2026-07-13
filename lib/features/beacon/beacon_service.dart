@@ -112,6 +112,20 @@ class BeaconService {
     _scanRestartTimer = Timer.periodic(const Duration(minutes: 55), (_) {
       if (_isOn) unawaited(_restartScanning());
     });
+    // Zombie-scanner watchdog: field test 2026-07-13 — a beacon reported ON
+    // but yielded zero scan results for the whole walk. If the scanner goes
+    // silent, restart it (also flushes the stack's stale-advert cache).
+    _lastForeignScanAt = DateTime.now();
+    _scanWatchdogTimer?.cancel();
+    _scanWatchdogTimer = Timer.periodic(const Duration(minutes: 2), (_) {
+      if (!_isOn) return;
+      final last = _lastForeignScanAt;
+      if (last == null ||
+          DateTime.now().difference(last) > const Duration(minutes: 3)) {
+        debugPrint('Scan watchdog: no foreign adverts ≥3min — restarting scan');
+        unawaited(_restartScanning());
+      }
+    });
 
     if (AppConfig.enableForegroundService) {
       try {
@@ -142,6 +156,8 @@ class BeaconService {
     _sightingFlushTimer = null;
     _scanRestartTimer?.cancel();
     _scanRestartTimer = null;
+    _scanWatchdogTimer?.cancel();
+    _scanWatchdogTimer = null;
     _locationRefreshTimer?.cancel();
     _locationRefreshTimer = null;
     await _flushSightings();
@@ -312,6 +328,11 @@ class BeaconService {
     debugPrint('BLE scan started (balanced, divisor=5)');
   }
 
+  /// Every correlation id we've ever advertised this process — self-sighting guard.
+  final Set<String> _ownCorrHexes = {};
+  DateTime? _lastForeignScanAt;
+  Timer? _scanWatchdogTimer;
+
   void _onScanResults(List<ScanResult> results) {
     if (!_isOn) return;
     for (final r in results) {
@@ -339,11 +360,13 @@ class BeaconService {
           .map((b) => b.toRadixString(16).padLeft(2, '0'))
           .join();
 
-      final selfHex = _currentCorrelationId
-          ?.map((b) => b.toRadixString(16).padLeft(2, '0'))
-          .join();
-      if (selfHex != null && hexId == selfHex) continue;
+      // Filter ALL of our own tokens, not just the current one — a leaked
+      // advertiser from a prior beacon session kept broadcasting the OLD
+      // token after off→on, and we self-sighted it at a rock-constant RSSI
+      // for an entire field test (2026-07-13 walk).
+      if (_ownCorrHexes.contains(hexId)) continue;
 
+      _lastForeignScanAt = DateTime.now();
       _recordLocalSighting(hexId, r.rssi);
     }
   }
@@ -478,6 +501,14 @@ class BeaconService {
   Future<void> _refreshClaim({required String rangeType}) async {
     _currentToken = _tokenGenerator.generate();
     _currentCorrelationId = _deriveCorrelationId(_currentToken!.token);
+    // Remember every token we advertise so the scanner never self-sights a
+    // stale one (leaked advertiser after off→on). Bounded to stay tiny.
+    _ownCorrHexes.add(_currentCorrelationId!
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join());
+    if (_ownCorrHexes.length > 16) {
+      _ownCorrHexes.remove(_ownCorrHexes.first);
+    }
 
     double? lat = _cachedLat;
     double? lon = _cachedLon;
