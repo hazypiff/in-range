@@ -1,0 +1,11 @@
+name: ci probe
+on: workflow_dispatch
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo linux ok
+  mac:
+    runs-on: macos-latest
+    steps:
+      - run: echo mac ok
