@@ -77,7 +77,16 @@ class BeaconService {
 
   /// WiFi venue layer: resolves BLE's core ambiguity (a weak signal is either
   /// "far" or "close but body-blocked" — only a second radio can tell).
-  final WifiScanner wifiScanner = WifiScanner();
+  ///
+  /// Calibration walks poll every 30s — the fastest Android's scan throttle
+  /// allows (4 per 2 min) — so a 90-second stop yields ~3 fingerprints instead
+  /// of one. Production stays at 60s: a venue changes on the scale of minutes,
+  /// and WiFi shares the 2.4GHz antenna with the BLE scanner that matters more.
+  final WifiScanner wifiScanner = WifiScanner(
+    scanInterval: AppConfig.calibScanMode
+        ? const Duration(seconds: 30)
+        : const Duration(seconds: 60),
+  );
 
   /// Our latest WiFi fingerprint, hashed for upload/comparison.
   Map<String, int>? _wifiFingerprint;
@@ -631,6 +640,21 @@ class BeaconService {
     }
   }
 
+  /// Calibration ground truth for the GPS layer. Coordinates are logged only
+  /// when INRANGE_CALIB_SCAN is set (our own test phones): comparing the two
+  /// phones' fixes is the ONLY way to measure what the GPS veto is really
+  /// doing, and accuracy alone cannot do it. Production logs accuracy only.
+  void _logGpsFix(Position p, {String? tag}) {
+    final suffix = tag == null ? '' : ' ($tag)';
+    if (AppConfig.calibScanMode) {
+      debugPrint('GpsFix lat=${p.latitude.toStringAsFixed(6)} '
+          'lon=${p.longitude.toStringAsFixed(6)} '
+          'acc=${p.accuracy.toStringAsFixed(1)}m$suffix');
+    } else {
+      debugPrint('GpsFix acc=${p.accuracy.toStringAsFixed(1)}m$suffix');
+    }
+  }
+
   void _ensureLocationCache() {
     // Calibration: refresh every 30s so a 90-second stop yields several fixes
     // to average. Production: 120s — GPS is a coarse veto, not a live signal.
@@ -643,7 +667,14 @@ class BeaconService {
     if (_locationRefreshTimer != null) return;
     _locationRefreshTimer = Timer(Duration.zero, () async {
       try {
-        Position? pos = await Geolocator.getLastKnownPosition();
+        // Calibration takes a REAL fix every time. getLastKnownPosition can
+        // keep re-serving a stale coarse fix (observed: one phone stuck at
+        // 100 m while the other resolved to 15 m), which would make half the
+        // GPS data worthless. Production still prefers the cached fix — it is
+        // only feeding a coarse plausibility veto and battery matters more.
+        Position? pos = AppConfig.calibScanMode
+            ? null
+            : await Geolocator.getLastKnownPosition();
         if (pos == null || !_isFreshPosition(pos)) {
           // Calibration walks request a real fix (sub-5 m outdoors) so we can
           // measure GPS's actual error against known distances. Production
@@ -665,7 +696,11 @@ class BeaconService {
         // Android's accuracy figure is a 68%-confidence radius — ~1 fix in 3
         // is worse than it claims — and indoors it degrades to tens of metres.
         // Log it: it is the input to the server's correlation radius gate.
-        debugPrint('GpsFix acc=${pos.accuracy.toStringAsFixed(1)}m');
+        //
+        // Coordinates are logged ONLY in calibration mode, and only on our own
+        // test phones: without them the two phones' fixes cannot be compared,
+        // so the GPS layer could not be evaluated at all. Never in production.
+        _logGpsFix(pos);
       } catch (e) {
         debugPrint('Location cache refresh failed: $e');
       } finally {
@@ -728,7 +763,9 @@ class BeaconService {
     double? lon = _cachedLon;
     if (lat == null) {
       try {
-        Position? position = await Geolocator.getLastKnownPosition();
+        Position? position = AppConfig.calibScanMode
+            ? null
+            : await Geolocator.getLastKnownPosition();
         if (position == null || !_isFreshPosition(position)) {
           position = await Geolocator.getCurrentPosition(
             locationSettings: LocationSettings(
@@ -745,7 +782,7 @@ class BeaconService {
         _cachedLon = lon;
         _cachedAccuracy = position.accuracy;
         _cachedLocAt = DateTime.now();
-        debugPrint('GpsFix acc=${position.accuracy.toStringAsFixed(1)}m (claim)');
+        _logGpsFix(position, tag: 'claim');
       } catch (e) {
         debugPrint('Geolocator failed at claim time: $e');
       }

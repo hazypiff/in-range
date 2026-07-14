@@ -93,6 +93,21 @@ void main() {
       expect(a.keys.first, b.keys.first); // case-insensitive, salt-stable
     });
 
+    test('excludes STALE cache entries — the room you already left', () {
+      // Android serves cached scan results; an entry minutes old would assert
+      // you are still in the previous room. Worse than no entry at all.
+      final f = Fingerprint(
+        const [
+          ApSighting(bssid: 'AA:AA:AA:AA:AA:AA', rssi: -40, freq: 2412, ageMs: 2000),
+          ApSighting(bssid: 'BB:BB:BB:BB:BB:BB', rssi: -40, freq: 2412, ageMs: 300000),
+        ],
+        takenAt: DateTime(2026),
+      );
+      final usable = f.usable({});
+      expect(usable.length, 1);
+      expect(usable.first.bssid, 'AA:AA:AA:AA:AA:AA');
+    });
+
     test('excludes travelling hotspot BSSIDs', () {
       final f = Fingerprint(
         const [

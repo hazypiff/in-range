@@ -9,6 +9,7 @@ class ApSighting {
     required this.bssid,
     required this.rssi,
     required this.freq,
+    this.ageMs = 0,
   });
 
   /// Raw BSSID — NEVER leaves the device. Hash before upload (see [Fingerprint.hashed]).
@@ -16,7 +17,17 @@ class ApSighting {
   final int rssi;
   final int freq;
 
+  /// How old this result is in the platform's scan cache. Android refreshes on
+  /// its own schedule, so a "current" scan can contain minutes-old entries —
+  /// which would silently attribute the previous room's APs to this one.
+  final int ageMs;
+
   bool get is5GHz => freq >= 4900;
+
+  /// A stale entry is worse than no entry for venue matching: it asserts you
+  /// are somewhere you have already left.
+  bool get isStale => ageMs > staleAfterMs;
+  static const int staleAfterMs = 90 * 1000;
 }
 
 /// A phone's view of the surrounding access points at one moment.
@@ -44,10 +55,12 @@ class Fingerprint {
   /// strong signals and respects the logarithmic nature of RSS.
   static final double _beta = math.e;
 
-  /// Usable APs: strong enough, and not our own travelling hotspot.
+  /// Usable APs: strong enough, fresh, and not our own travelling hotspot.
   List<ApSighting> usable(Set<String> excludedBssids) => aps
       .where((a) =>
-          a.rssi >= minRssi && !excludedBssids.contains(a.bssid.toLowerCase()))
+          a.rssi >= minRssi &&
+          !a.isStale &&
+          !excludedBssids.contains(a.bssid.toLowerCase()))
       .toList();
 
   static double powed(int rssi) {
