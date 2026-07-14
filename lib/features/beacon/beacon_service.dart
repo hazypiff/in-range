@@ -11,6 +11,7 @@ import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/core/network/supabase_client.dart';
 import 'package:in_range/features/beacon/ephemeral_token_generator.dart';
 import 'package:in_range/features/beacon/range_estimator.dart';
+import 'package:in_range/features/beacon/wifi_scanner.dart';
 
 /// Called when we observe another In Range beacon (throttled).
 typedef SightingCallback = void Function({
@@ -73,6 +74,14 @@ class BeaconService {
 
   /// Calibrated 10/30/60 ft classifier fed by every fresh foreign advert.
   final RangeEstimator rangeEstimator = RangeEstimator();
+
+  /// WiFi venue layer: resolves BLE's core ambiguity (a weak signal is either
+  /// "far" or "close but body-blocked" — only a second radio can tell).
+  final WifiScanner wifiScanner = WifiScanner();
+
+  /// Our latest WiFi fingerprint, hashed for upload/comparison.
+  Map<String, int>? _wifiFingerprint;
+  Map<String, int>? get wifiFingerprint => _wifiFingerprint;
 
   /// Dual-power advertising: mostly high TX for range, periodic medium
   /// slots as the physical mid-distance gate (see RangeEstimator).
@@ -190,6 +199,13 @@ class BeaconService {
       }
     });
 
+    // WiFi venue layer — 60s cadence: a venue changes on the scale of minutes,
+    // and WiFi shares the 2.4GHz antenna with the BLE scanner that matters more.
+    wifiScanner.onFingerprint = (fp) {
+      _wifiFingerprint = fp.hashed(_correlationSalt);
+    };
+    wifiScanner.start();
+
     if (AppConfig.enableForegroundService) {
       try {
         final service = FlutterBackgroundService();
@@ -227,6 +243,8 @@ class BeaconService {
     _scanWatchdogTimer = null;
     _locationRefreshTimer?.cancel();
     _locationRefreshTimer = null;
+    wifiScanner.stop();
+    _wifiFingerprint = null;
     await _flushSightings();
     await _releaseClaim();
     await _stopBle();
@@ -539,6 +557,7 @@ class BeaconService {
 
   double? _cachedLat;
   double? _cachedLon;
+  double? _cachedAccuracy;
   DateTime? _cachedLocAt;
   Timer? _locationRefreshTimer;
 
@@ -575,6 +594,7 @@ class BeaconService {
       rssi: rssi,
       observerLat: _cachedLat,
       observerLon: _cachedLon,
+      observerAccuracyM: _cachedAccuracy,
       observedAt: now,
       rangeType: uploadRange,
     );
@@ -589,6 +609,7 @@ class BeaconService {
       rssi: prev == null ? rssi : (rssi > prev.rssi ? rssi : prev.rssi),
       observerLat: record.observerLat,
       observerLon: record.observerLon,
+      observerAccuracyM: record.observerAccuracyM,
       observedAt: record.observedAt,
       rangeType: record.rangeType,
     );
@@ -611,24 +632,40 @@ class BeaconService {
   }
 
   void _ensureLocationCache() {
-    final stale = _cachedLocAt == null ||
-        DateTime.now().difference(_cachedLocAt!) > const Duration(seconds: 120);
+    // Calibration: refresh every 30s so a 90-second stop yields several fixes
+    // to average. Production: 120s — GPS is a coarse veto, not a live signal.
+    final maxAge = AppConfig.calibScanMode
+        ? const Duration(seconds: 30)
+        : const Duration(seconds: 120);
+    final stale =
+        _cachedLocAt == null || DateTime.now().difference(_cachedLocAt!) > maxAge;
     if (!stale) return;
     if (_locationRefreshTimer != null) return;
     _locationRefreshTimer = Timer(Duration.zero, () async {
       try {
         Position? pos = await Geolocator.getLastKnownPosition();
         if (pos == null || !_isFreshPosition(pos)) {
+          // Calibration walks request a real fix (sub-5 m outdoors) so we can
+          // measure GPS's actual error against known distances. Production
+          // stays on low accuracy — GPS is only a coarse plausibility veto,
+          // and a high-accuracy fix is not worth the battery for that job.
           pos = await Geolocator.getCurrentPosition(
-            locationSettings: const LocationSettings(
-              accuracy: LocationAccuracy.low,
-              timeLimit: Duration(seconds: 6),
+            locationSettings: LocationSettings(
+              accuracy: AppConfig.calibScanMode
+                  ? LocationAccuracy.high
+                  : LocationAccuracy.low,
+              timeLimit: const Duration(seconds: 6),
             ),
           );
         }
         _cachedLat = pos.latitude;
         _cachedLon = pos.longitude;
+        _cachedAccuracy = pos.accuracy;
         _cachedLocAt = DateTime.now();
+        // Android's accuracy figure is a 68%-confidence radius — ~1 fix in 3
+        // is worse than it claims — and indoors it degrades to tens of metres.
+        // Log it: it is the input to the server's correlation radius gate.
+        debugPrint('GpsFix acc=${pos.accuracy.toStringAsFixed(1)}m');
       } catch (e) {
         debugPrint('Location cache refresh failed: $e');
       } finally {
@@ -660,6 +697,9 @@ class BeaconService {
           'p_rssi': s.rssi,
           'p_observed_at': s.observedAt.toUtc().toIso8601String(),
           'p_range': _mapUiRangeToDb(s.rangeType),
+          // Sizes the server's GPS plausibility veto from real uncertainty
+          // instead of a fixed guess (migration 0024).
+          'p_accuracy': s.observerAccuracyM,
         });
         debugPrint('record_sighting OK rssi=${s.rssi}');
         if (identical(_pendingByCorr[s.observedToken], s)) {
@@ -691,9 +731,11 @@ class BeaconService {
         Position? position = await Geolocator.getLastKnownPosition();
         if (position == null || !_isFreshPosition(position)) {
           position = await Geolocator.getCurrentPosition(
-            locationSettings: const LocationSettings(
-              accuracy: LocationAccuracy.low,
-              timeLimit: Duration(seconds: 5),
+            locationSettings: LocationSettings(
+              accuracy: AppConfig.calibScanMode
+                  ? LocationAccuracy.high
+                  : LocationAccuracy.low,
+              timeLimit: const Duration(seconds: 5),
             ),
           );
         }
@@ -701,7 +743,9 @@ class BeaconService {
         lon = position.longitude;
         _cachedLat = lat;
         _cachedLon = lon;
+        _cachedAccuracy = position.accuracy;
         _cachedLocAt = DateTime.now();
+        debugPrint('GpsFix acc=${position.accuracy.toStringAsFixed(1)}m (claim)');
       } catch (e) {
         debugPrint('Geolocator failed at claim time: $e');
       }
@@ -731,6 +775,7 @@ class BeaconService {
         'p_lat': lat,
         'p_lon': lon,
         'p_range': dbRange,
+        'p_accuracy': _cachedAccuracy,
       });
       _cloudClaimed = true;
       debugPrint(
@@ -772,6 +817,7 @@ class SightingRecord {
     required this.observerLat,
     required this.observerLon,
     required this.rangeType,
+    this.observerAccuracyM,
   });
 
   final String observedToken;
@@ -780,4 +826,7 @@ class SightingRecord {
   final double? observerLat;
   final double? observerLon;
   final String rangeType;
+
+  /// Reported GPS accuracy (metres) — sizes the server's plausibility veto.
+  final double? observerAccuracyM;
 }
