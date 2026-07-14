@@ -1,0 +1,272 @@
+{
+ "question": "GPS / Android fused location for a proximity-detection app \u2014 accuracy, permission policy, and fusion with BLE+WiFi signals. Context: Android Flutter dating/proximity app (In Range) already uses BLE (RSSI tiers, calibrated) and is adding WiFi fingerprint co-location; location today = Geolocator low-accuracy fixes cached 120s, attached to server claims/sightings for plausibility checks (PostGIS radius gates: feet tiers clamped 50-100m, miles tiers 1-16km), manifest has FINE+COARSE+BACKGROUND location + FGS location type, both test phones (Galaxy S9, Android 10) granted always-allow. Research wanted: (1) Fused Location Provider internals and real accuracy \u2014 how FLP blends GNSS/WiFi/BT/cell, published measured accuracy urban outdoor / indoor / in-pocket (median + p95 error meters), PRIORITY_BALANCED vs HIGH_ACCURACY behavior and battery, how often indoor fixes are actually WiFi-positioning results and their venue-level usefulness, Android 12+ approximate-location user toggle effects on apps holding FINE; (2) comparing TWO phones' fixes for co-location \u2014 error propagation when both have 10-30m error circles, published methods/thresholds for GPS-based encounter detection (contact tracing literature rejected GPS for <10m proximity \u2014 the quantified reasons), what radius gate is statistically sound for 'same venue' from two FLP fixes, staleness handling; (3) Google Play policy on location \u2014 current (2025-2026) rules for ACCESS_BACKGROUND_LOCATION approval for a dating/social proximity app, the declaration/video requirements, common rejection reasons, whether a location-type foreground service avoids needing background permission (our beacon runs an FGS), policy-safe UX flows (progressive disclosure, prominent disclosure requirements), COARSE-first strategies; (4) battery \u2014 measured battery cost of periodic FLP requests at various priorities/intervals vs continuous, WorkManager/passive-listener patterns to piggyback other apps' fixes for free; (5) privacy engineering for a proximity app \u2014 server-side location handling norms (geohash truncation, rounding meters, retention), what our current approx lat/lon upload should become; (6) fusion architecture \u2014 published or industry decision architectures where GPS/FLP provides the outermost 'same area' gate above WiFi 'same venue' and BLE 'feet' tiers, including how Google's own Nearby/Exposure Notifications treated GPS (they famously avoided it \u2014 the documented reasons), and dual-frequency GNSS (L5) improvements on modern phones for the future fleet. Conclusion needed: (a) recommended role for FLP in our stack (gate radii, fix cadence, priority, staleness rules) as the outermost tier of a GPS>WiFi>BLE fusion table, (b) a Play-policy-compliant permission flow for a dating proximity app (exact permission set and ask sequence), (c) privacy-preserving upload format, (d) what NOT to use GPS for (with the quantified reasons).",
+ "summary": "Synthesis step was skipped or failed \u2014 returning 4 verified claims unmerged.",
+ "findings": [],
+ "confirmed": [
+  {
+   "claim": "The 'accuracy' value Android reports with each fix is the Fused Location Provider's own 68%-confidence horizontal radius (blending GNSS, cellular PCIs, and Wi-Fi BSSIDs), meaning roughly 1 in 3 fixes has true error larger than the reported circle \u2014 so a co-location radius gate built on reported accuracy must inflate it (e.g., toward ~2x for ~95%).",
+   "source": "https://arxiv.org/pdf/2603.26706",
+   "quote": "this accuracy value represents the horizontal radius of a circle centered at the reported coordinates, within which the device's true location lies with a 68% confidence level [11]. Moreover, Android utilizes the Fused Location Provider [12] which combines signals from GNSS satellites, cellular PCIs, and Wi-Fi BSSIDs: Consequently, the reported accuracy values reflect the most refined localization estimate the device can produce, even in locations where GNSS performance may be suboptimal.",
+   "vote": "3-0"
+  },
+  {
+   "claim": "Indoors, fused-location accuracy collapses from single-digit meters to tens of meters: walking inside a 28-story Las Vegas hotel-casino gave median reported accuracy of 41.67 m (Galaxy S22), 28.75 m (S24), and 47.89 m (Pixel 10), versus sub-5 m medians for the same Samsung phones walking outdoors \u2014 directly bounding how tight a 'same venue' GPS gate can be indoors.",
+   "source": "https://arxiv.org/pdf/2603.26706",
+   "quote": "For indoor walking (Fig. 2b), GPS accuracy degrades substantially across all devices. Under these conditions, the Samsung models diverge more noticeably (41.67 m for S22 vs. 28.75 m for S24), and the P10 yields the largest error (47.89 m).",
+   "vote": "3-0"
+  },
+  {
+   "claim": "Consumer-grade GPS receivers have a nominal accuracy of ~10 m and can suffer substantially larger errors due to environmental factors, making GPS accuracy coarser than the distance over which disease transmission (close proximity) occurs.",
+   "source": "https://www.jmir.org/2024/1/e38170",
+   "quote": "Consumer-grade GPS receivers typically have a nominal accuracy of 10 m (32.8 ft) but can be subject to substantially larger errors due to environmental factors.",
+   "vote": "3-0"
+  },
+  {
+   "claim": "GPS is prone to false-positive proximity detections because the transmission-relevant distance is smaller than the accuracy threshold of commodity GPS devices \u2014 a quantified rationale for why GPS fails at sub-10m proximity.",
+   "source": "https://www.jmir.org/2024/1/e38170",
+   "quote": "GPS is prone to false positives for detecting the proximity of communicable pathogens because the distance over which transmission can occur is smaller than the accuracy threshold for commodity devices.",
+   "vote": "3-0"
+  }
+ ],
+ "refuted": [],
+ "unverified": [
+  {
+   "claim": "Environment, not phone hardware, is the dominant error driver, and merely standing adjacent to a building roughly doubles median error: at Notre Dame, a path hugging a building wall had 8.40 m median accuracy vs 4.07 m only ~15 m away, and moving indoors degraded it further to 10.34 m; at semi-rural Iowa State, indoor median was 16.38 m vs 3.90 m outdoor.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://arxiv.org/pdf/2603.26706"
+  },
+  {
+   "claim": "GPS loses signal or accuracy indoors, producing false-negative contacts by reporting no location or inaccurate positions \u2014 directly relevant to indoor venue-level co-location reliability.",
+   "erroredVotes": 2,
+   "validVotes": 1,
+   "source": "https://www.jmir.org/2024/1/e38170"
+  },
+  {
+   "claim": "Human body absorption and handset orientation change BLE RSSI by roughly 20dB at a fixed 1m distance: about -60dB when a person with a phone in their front trouser pocket faces the other handset vs about -80dB with their back to it.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://arxiv.org/pdf/2006.06822"
+  },
+  {
+   "claim": "BLE RSSI cannot reliably distinguish 1m from 2m separation when people walk one behind the other outdoors: side-by-side at 1m gave ~-75dB\u00b110dB but one-behind-the-other at 1m gave ~-92dB\u00b110dB, essentially identical to the 2m-behind reading.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://arxiv.org/pdf/2006.06822"
+  },
+  {
+   "claim": "In complex indoor environments BLE RSSI need not decrease with distance and can even increase (observed reproducibly from 2m to 2.5m in a domestic space); in a large supermarket RSSI was essentially the same whether two people walked close together or 2m apart.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://arxiv.org/pdf/2006.06822"
+  },
+  {
+   "claim": "Google's Exposure Notifications system does not use device location data at all for proximity detection, and Healthcare Authority apps built on the EN API are contractually barred from using location APIs or storing device location \u2014 GPS was excluded by design, not blended in as a proximity signal.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://github.com/google/exposure-notifications-internals/blob/main/en-risks-and-mitigations-faq.md"
+  },
+  {
+   "claim": "The stated reason for avoiding location/centralized data was privacy: a decentralized BLE design lets non-positive users share nothing with a central service, which Google presents as the rationale rather than GPS accuracy limits in this document.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://github.com/google/exposure-notifications-internals/blob/main/en-risks-and-mitigations-faq.md"
+  },
+  {
+   "claim": "In a light-rail tram, BLE received signal strength shows little correlation with inter-handset distance, undermining RSSI-based proximity/distance estimation in metal-walled environments (relevant to In Range's BLE RSSI tiers and why a fusion stack needs non-RSSI gates).",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0239943"
+  },
+  {
+   "claim": "Contact-tracing apps overwhelmingly adopted BLE (mostly via the GAEN specification) instead of GPS/location technologies, and the documented reason in this paper is privacy, not measurement accuracy \u2014 GPS was rejected as a proximity signal because it is less privacy-preserving.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://pmc.ncbi.nlm.nih.gov/articles/PMC8475095/"
+  },
+  {
+   "claim": "Google Play only permits ACCESS_BACKGROUND_LOCATION when the feature is core to the app's main purpose, prominently documented in the store description, and never solely for advertising or analytics \u2014 a dating/proximity app must show the app is 'broken or rendered unusable' without it.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://support.google.com/googleplay/android-developer/answer/9799150"
+  },
+  {
+   "claim": "A location-type foreground service does NOT automatically avoid background-location policy review: if FGS location use is equivalent to background access (i.e., not initiated by an in-app user action and terminated when the use case completes), the app is treated as requiring ACCESS_BACKGROUND_LOCATION review \u2014 directly relevant to In Range's persistent beacon FGS.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://support.google.com/googleplay/android-developer/answer/9799150"
+  },
+  {
+   "claim": "Approval requires a Permissions Declaration Form declaring exactly ONE location-based background feature, plus a demonstration video of 30 seconds or less showing the feature, the prominent in-app disclosure dialog, and the runtime permission prompt.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://support.google.com/googleplay/android-developer/answer/9799150"
+  },
+  {
+   "claim": "The prominent disclosure must be shown in normal app flow BEFORE the runtime permission request, must contain the word 'location', explicitly indicate background use ('when the app is closed' / 'when the app is not in use'), and list all features using background location \u2014 the recommended template is prescriptive.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://support.google.com/googleplay/android-developer/answer/9799150"
+  },
+  {
+   "claim": "Google Play policy requires apps to request only the minimum location permission scope necessary for core functionality, covering both precision (coarse vs. fine) and persistence (one-time vs. continuous) \u2014 directly supporting a COARSE-first, escalate-only-when-needed permission strategy.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://support.google.com/googleplay/android-developer/answer/17033915"
+  },
+  {
+   "claim": "Running a location-type foreground service does NOT exempt an app from background-location restrictions; FGS location access is separately reviewed and must meet the Permissions for Foreground Services policy requirements.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://support.google.com/googleplay/android-developer/answer/17033915"
+  },
+  {
+   "claim": "All apps requesting ACCESS_FINE_LOCATION must complete a Play Console declaration stating which user-facing features require fine location and why coarse location or the location button is insufficient.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://support.google.com/googleplay/android-developer/answer/17033915"
+  },
+  {
+   "claim": "Google Play requires that the prominent disclosure for sensitive permissions be shown inside the app immediately before the runtime permission request \u2014 disclosure only in the store listing or on a website does not satisfy the policy. For In Range this means an in-app explainer screen must precede the location (and especially background-location) system dialog.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://support.google.com/googleplay/android-developer/answer/11150561"
+  },
+  {
+   "claim": "Background Location Permission (ACCESS_BACKGROUND_LOCATION) is explicitly named by Google as one of the sensitive permissions/APIs that require a separate in-app prominent disclosure and consent flow, alongside Accessibility Service APIs and Package Visibility.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://support.google.com/googleplay/android-developer/answer/11150561"
+  },
+  {
+   "claim": "The disclosure content must cover why the capability is needed, what data types are collected, and how the data is used in the context of core features \u2014 mapping directly to what a dating/proximity app's location disclosure screen must say.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://support.google.com/googleplay/android-developer/answer/11150561"
+  },
+  {
+   "claim": "Google Play policy restricts ACCESS_BACKGROUND_LOCATION to apps where background location is critical to core functionality, and following Google's own best practices does not guarantee Play approval of background location usage.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://developer.android.com/develop/sensors-and-location/location/background"
+  },
+  {
+   "claim": "On Android 8.0 (API 26) and higher, an app running in the background can receive location updates only a few times per hour due to system-imposed background location limits, regardless of requested interval.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://developer.android.com/develop/sensors-and-location/location/background"
+  }
+ ],
+ "sources": [
+  {
+   "url": "https://arxiv.org/pdf/2603.26706",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://www.jmir.org/2024/1/e38170",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://arxiv.org/pdf/2006.06822",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://github.com/google/exposure-notifications-internals/blob/main/en-risks-and-mitigations-faq.md",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0239943",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://www.eff.org/deeplinks/2020/04/apple-and-googles-covid-19-exposure-notification-api-questions-and-answers",
+   "quality": "secondary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC8475095/",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://support.google.com/googleplay/android-developer/answer/9799150",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://support.google.com/googleplay/android-developer/answer/17033915",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://support.google.com/googleplay/android-developer/answer/11150561",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://developer.android.com/develop/sensors-and-location/location/background",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://developer.android.com/develop/sensors-and-location/location/battery/optimize",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://developer.android.com/develop/sensors-and-location/location/battery",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://developer.android.com/develop/sensors-and-location/location/battery/scenarios",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://www.researchgate.net/publication/321114795_Private_and_Flexible_Proximity_Detection_Based_on_Geohash",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://www.eecis.udel.edu/~ruizhang/CISC859/S17/Paper/p26.pdf",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://www.mdpi.com/1099-4300/25/12/1569",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://arxiv.org/pdf/2303.02838",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://arxiv.org/pdf/1502.03407",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://gdprlocal.com/privacy-dating-sites-and-apps/",
+   "quality": "blog",
+   "claimCount": 4
+  }
+ ],
+ "stats": {
+  "angles": 5,
+  "sources": 20,
+  "claims": 99,
+  "verified": 25,
+  "confirmed": 4,
+  "killed": 0,
+  "unverified": 21,
+  "afterSynthesis": 0
+ }
+}

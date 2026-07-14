@@ -1,0 +1,283 @@
+{
+ "question": "How to make a Bluetooth Low Energy radio link between Android smartphones work optimally \u2014 engineering-depth research to level up a proximity app's BLE stack. Context: Flutter Android app (In Range) on Galaxy S9s today (more models later): legacy 31-byte advertising at ADVERTISE_MODE_BALANCED (~250ms interval), alternating TX power high (20s) / medium (10s) as a distance gate, hardware manufacturer-ID scan filter, lowLatency scanning during calibration / balanced in production, 2.4GHz coexistence with WiFi hotspot active on the same phones. Research wanted: (1) BLE advertising physics and mechanics \u2014 the 3 primary advertising channels (37/38/39: frequencies, placement between WiFi channels, per-channel fading), advertising interval + random delay rules, how scan window/interval duty cycles interact with advert intervals to determine discovery latency and packet-reception rate (formulas or measured curves), optimal advertise-interval vs scan-duty-cycle pairings; (2) Android specifics \u2014 what ADVERTISE_MODE_LOW_POWER/BALANCED/LOW_LATENCY and SCAN_MODE_* actually map to in AOSP (ms numbers), hardware offload (filters, batching, onFound/onLost), screen-state and Doze effects on scanning/advertising, per-OEM throttling (Samsung), scan-downgrade after 30 minutes, the 5-scans-per-30s app limit, multiple concurrent advertising sets (BLE 5), max TX power per chipset and regulatory limits; (3) BLE 5 features usable phone-to-phone on Android \u2014 extended advertising (255-byte), 2M PHY vs Coded PHY S=2/S=8 (sensitivity gains in dB, real range multipliers, device support matrices), periodic advertising, which of these Galaxy S9 supports vs modern phones; (4) 2.4GHz RF engineering for phones \u2014 WiFi/BLE coexistence interference (same-antenna time-slicing on combo chips, impact of active hotspot on BLE RX/TX), body absorption numbers at 2.4GHz, antenna polarization/orientation effects, ground reflection/multipath outdoors vs indoors, Fresnel zone at phone heights; (5) techniques from production beacon/proximity systems \u2014 iBeacon/Eddystone advertising best practices (intervals, calibrated TX power byte), Apple/Google Nearby and Find My network radio strategies, BLE channel-selective scanning tricks, RSSI smoothing filters used in industry (Kalman, EWMA window sizes), packet-rate-based distance estimation literature, and Bluetooth 6.0 Channel Sounding (phase-based ranging accuracy, phone support timeline); (6) battery numbers \u2014 measured mA/mW cost of advertising modes and scan duty cycles on Android so we can pick production settings rationally. Conclusion needed: a concrete tuning recommendation for our app (advertising interval, scan mode schedule, power-alternation cadence, PHY choices, coexistence mitigations like turning hotspot off during field tests) ranked by expected impact on detection rate, range accuracy, and battery.",
+ "summary": "Synthesis step was skipped or failed \u2014 returning 21 verified claims unmerged.",
+ "findings": [],
+ "confirmed": [
+  {
+   "claim": "RSSI measured on a smartphone at a fixed distance differs by up to 15 dB depending on which of the 3 BLE advertising channels (37/38/39) the packet arrived on, even at distances below 2 m, which can cause distance-estimation errors of tens of meters.",
+   "source": "https://arxiv.org/pdf/2006.09099",
+   "quote": "As can be seen, for a given distance, the RSSI differs significantly among the 3 channels. In particular, we could observe differences of up to 15 dB. This occurred even for distances below 2 m, which are the most relevant ones for contact tracing. ... an attenuation of 15 dB due to the channel-dependent multipath propagation can lead to distance estimation errors in the order of tens of meters.",
+   "vote": "3-0"
+  },
+  {
+   "claim": "Android automatically downgrades SCAN_MODE_LOW_LATENCY to SCAN_MODE_OPPORTUNISTIC after 30 minutes of continuous scanning, so long-running scans must be restarted; continuous LOW_LATENCY scanning also drains phone battery 5-20% faster than with Bluetooth off.",
+   "source": "https://arxiv.org/pdf/2006.09099",
+   "quote": "Scanning was re-started every 30 min. This re-starting was necessary because the Android operating system automatically switches from the SCAN_MODE_LOW_LATENCY to the SCAN_MODE_OPPORTUNISTIC setting after 30 min of continuous scanning. ... Recent results [13] show that - depending on the smartphone model - the battery of the smartphone is drained by between 5 % and 20 % earlier compared to when Bluetooth is switched off, if the SCAN_MODE_LOW_LATENCY setting is used during all times.",
+   "vote": "3-0"
+  },
+  {
+   "claim": "Each BLE advertising event sends 3 packets in a row on channels 37 (2.402 GHz), 38 (2.426 GHz) and 39 (2.480 GHz), scheduled once per advertising interval Ta composed of a static part plus a random delay of 0-10 ms; the scanner toggles its listening channel 37->38->39 round-robin after every scan window, and most Android (Ta, Ts, ds) combinations satisfy Ta < ds so at least one beacon is guaranteed per scan window.",
+   "source": "https://arxiv.org/pdf/2006.09099",
+   "quote": "Ta is called the advertising interval and is composed of a static part Ta,0 plus a random delay \u03c1 \u2208 [0, 10 ms]. In each such event, three beacons in a row are sent. The first of them is sent on channel 37 (which corresponds to a center frequency of 2.402 GHz), the second one on channel 38 (2.426 GHz) and the third one on channel 39 (2.480 GHz) ... Most values for (Ta, Ts, ds) supported by Android fulfill Ta < ds ... and hence, the reception of at least one beacon is guaranteed in each scan window.",
+   "vote": "3-0"
+  },
+  {
+   "claim": "BLE neighbor discovery uses a slotless, periodic-interval scheme with 3 free parameters (advertising interval, scan interval, scan window), and the discovery latency between an advertiser and scanner is determined by a random process over these continuous-time periods \u2014 directly formalizing how the app's advertise-interval vs scan-duty-cycle pairings determine discovery latency.",
+   "source": "https://arxiv.org/abs/1509.04366",
+   "quote": "many recent protocols, such as ANT/ANT+ and Bluetooth Low Energy (BLE) use a slotless, periodic-interval based scheme for neighbor discovery. Here, one device periodically broadcasts packets, whereas the other device periodically listens to the channel. Both periods are independent from each other and drawn over continuous time. Such protocols provide 3 degrees of freedom (viz., the intervals for advertising and scanning and the duration of each scan phase).",
+   "vote": "3-0"
+  },
+  {
+   "claim": "The paper presents the first mathematical theory that can compute BLE neighbor discovery latencies for all possible advertiser/scanner parametrizations \u2014 i.e., closed-form latency formulas exist rather than only measured curves, which can be used to pick optimal interval/duty-cycle settings.",
+   "source": "https://arxiv.org/abs/1509.04366",
+   "quote": "In this paper, we for the first time present a mathematical theory which can compute the neighbor discovery latencies for all possible parametrizations.",
+   "vote": "3-0"
+  },
+  {
+   "claim": "Upper bounds on BLE discovery latency can be guaranteed for all parameter choices except a finite set of singular (pathological) advertising-interval/scan-interval combinations \u2014 meaning some interval pairings can produce unbounded or degenerate discovery latency and should be avoided when tuning.",
+   "source": "https://arxiv.org/abs/1509.04366",
+   "quote": "our theory shows that upper bounds on the latency can be guaranteed for all parametrizations, except for a finite number of singularities.",
+   "vote": "3-0"
+  },
+  {
+   "claim": "The BLE spec constrains the advertising interval to 20 ms\u201310.24 s in multiples of 0.625 ms, with a per-event random AdvDelay of 0\u201310 ms added to avoid persistent collisions.",
+   "source": "https://pmc.ncbi.nlm.nih.gov/articles/PMC4327007/",
+   "quote": "the AdvInterval should be an integer multiple of 0.625 ms in the range of 20 ms to 10.24 s ... the AdvDelay should be within the range of 0 ms to 10 ms",
+   "vote": "3-0"
+  },
+  {
+   "claim": "Mean discovery latency increases approximately linearly with the advertising interval (\u03c4AI), so shortening the advertising interval is the direct lever for faster discovery.",
+   "source": "https://pmc.ncbi.nlm.nih.gov/articles/PMC4327007/",
+   "quote": "the mean discovery latency linearly increases with \u03c4_AI_",
+   "vote": "3-0"
+  },
+  {
+   "claim": "There exists an optimal advertising interval R_min that minimizes the time for a scanner to discover ALL surrounding advertisers, and this optimum grows with the number of advertisers N (shown for N = 10 to 10,000); for small N the optimum saturates at the spec floor of 20 ms, and for very large N it saturates at the spec ceiling of 10.24 s \u2014 implying that shorter advertising intervals are not always better once collisions matter.",
+   "source": "https://ieeexplore.ieee.org/document/8320046/",
+   "quote": "Proposition 1: There exists an optimal advInterval value to minimize T_discover ... Fig. 5 shows the R_min obtained by varying the number of advertisers (N). As shown in Fig. 5, we can see that R_min exists for every N, and it increases as N increases. ... Proposition 2: When R_min <= 0.02s for a given N, then the advInterval value to minimize T_discover, R_min, is 0.02s.",
+   "vote": "3-0"
+  },
+  {
+   "claim": "Each advertising event transmits the same ADV_PDU sequentially on the three advertising channels 37, 38, 39 with at most 10 ms between consecutive PDUs, and the scanner listens to channels 37/38/39 in round-robin with scanWindow <= scanInterval <= 10.24 s (BLE 4.2; extended to 40.96 s in BLE 5.0); a PDU can only be received when advertiser channel and scanner channel coincide, so channel misalignment across the 3-channel rotation is a distinct loss mechanism from collisions.",
+   "source": "https://ieeexplore.ieee.org/document/8320046/",
+   "quote": "The scanner periodically scans an advertising channel in the sequence of channel indexes 37, 38, and 39 in a round-robin manner. ... According to the BLE specification 4.2 [4], the scanWindow and scanInterval should be less than or equal to 10.24 s. In BLE specification 5.0 [5], the range of scanWindow and scanInterval are extended to 40.96s. ... The time between two consecutive ADV_PDUs, pduInterval, is at most 10 ms.",
+   "vote": "3-0"
+  },
+  {
+   "claim": "Packet-count-based localization (PC-MCL) achieves ~1.2m average indoor localization error, 53% lower than a baseline range-free Monte-Carlo localization algorithm, and ~0.4m within an aisle \u2014 demonstrating that BLE packet reception rate alone (no RSSI) can estimate distance/location.",
+   "source": "https://arxiv.org/pdf/1708.08144",
+   "quote": "our approach has an average error of \u223c 1.2m, 53% lower than the baseline Monte-Carlo localization algorithm. Our localization errors within an aisle are even better at \u223c 0.4m",
+   "vote": "3-0"
+  },
+  {
+   "claim": "BLE packet reception probability can be modeled as log-quadratic in distance (log p = b0 + b1\u00b7d + b2\u00b7d\u00b2), and the empirically fitted free-space model was log p0 = \u22120.101 \u2212 0.012f + 0.056r \u2212 0.272d + 0.189rd (f = advertising frequency in Hz, r = TX power relative to \u221212 dBm, d = distance in meters) \u2014 a concrete formula linking packet count to distance usable for packet-rate ranging.",
+   "source": "https://arxiv.org/pdf/1708.08144",
+   "quote": "log p0 = \u22120.101 \u2212 0.012f + 0.056r \u2212 0.272d + 0.189rd",
+   "vote": "3-0"
+  },
+  {
+   "claim": "TX power selection acts as a coverage/distance gate with an optimal middle setting: \u221240 dBm gave ~3 m line-of-sight range and +5 dBm up to ~150 m on their iBeek beacons; in localization experiments \u221215 dB was 'just right' because \u221220 dB gave too little coverage and \u221212 dB caused confusion from hearing all beacons everywhere \u2014 empirical backing for the app's alternating-TX-power distance-gate design.",
+   "source": "https://arxiv.org/pdf/1708.08144",
+   "quote": "Error is least for \u221215dB power. In a sense, \u221215db is \"just right\": \u221220dB has low beacon coverage of physical space and \u221212dB increases confusion with high coverage.",
+   "vote": "3-0"
+  },
+  {
+   "claim": "Since Android 6.0, BLE scan filtering and filter-matching are offloaded to the Bluetooth controller (hardware offload), meaning the app's manufacturer-ID scan filter can be evaluated in the BT chip without waking the application processor.",
+   "source": "https://source.android.com/docs/core/connect/bluetooth/ble",
+   "quote": "Android 6.0 and higher includes BLE scanning and filter-matching on the Bluetooth controller.",
+   "vote": "3-0"
+  },
+  {
+   "claim": "Android supports hardware OnFound/OnLost events: the application processor wakes only when a filtered device is first discovered (OnFound) or when it can no longer be found (OnLost), rather than on every received advertisement.",
+   "source": "https://source.android.com/docs/core/connect/bluetooth/ble",
+   "quote": "For an `OnFound` event, the main AP wakes up upon the discovery of a specific device. For an `OnLost` event, the AP wakes up when a specific device can't be found.",
+   "vote": "3-0"
+  },
+  {
+   "claim": "Bluetooth 5 advertising features (extended advertising, new PHYs) are available on Android starting with Android 8.0, and are exposed automatically when the phone's Bluetooth controller/chipset supports them \u2014 meaning OS version alone is not sufficient, controller support gates the feature set (directly relevant to whether a Galaxy S9 can use them).",
+   "source": "https://source.android.com/docs/core/connect/bluetooth/ble_advertising",
+   "quote": "Android 8.0 supports Bluetooth 5, which provides broadcasting improvements and flexible data advertisement for BLE. ... New Bluetooth 5 features are automatically available for devices running Android 8.0 with compatible Bluetooth controllers.",
+   "vote": "3-0"
+  },
+  {
+   "claim": "Android provides per-device runtime capability checks for each BLE 5 radio feature via BluetoothAdapter: isLe2MPhySupported(), isLeCodedPhySupported(), isLeExtendedAdvertisingSupported(), and isLePeriodicAdvertisingSupported() \u2014 so an app can build its own device support matrix (e.g., S9 vs newer models) at runtime instead of assuming support.",
+   "source": "https://source.android.com/docs/core/connect/bluetooth/ble_advertising",
+   "quote": "The page lists these BluetoothAdapter methods for checking device support: isLe2MPhySupported(), isLeCodedPhySupported(), isLeExtendedAdvertisingSupported(), isLePeriodicAdvertisingSupported()",
+   "vote": "3-0"
+  },
+  {
+   "claim": "Extended (non-legacy) advertising on Android can carry advertisement payloads far beyond the 31-byte legacy limit \u2014 up to 1650 bytes as reported by getLeMaximumAdvertisingDataLength() \u2014 which legacy advertising cannot do (note: this exceeds the 251/255-byte single-PDU figure because extended advertising chains PDUs).",
+   "source": "https://source.android.com/docs/core/connect/bluetooth/ble_advertising",
+   "quote": "You can fit large amounts of data up to maxDataLength. This goes up to 1650 bytes. For legacy advertising this would not work.",
+   "vote": "3-0"
+  },
+  {
+   "claim": "BLE RSSI is intrinsically noisy with fluctuations of \u00b15dB or more even under line-of-sight conditions, and packet reception typically fails below about -90dB (the receiver noise floor), setting a hard floor for RSSI-based ranging and packet-rate distance estimation.",
+   "source": "https://arxiv.org/pdf/2006.06822",
+   "quote": "It is worth noting that this RSSI measurement is intrinsically noisy, with fluctuations of \u00b15dB or greater common even in situations with simple line-of-sight radio transmission... Typically this occurs when the received signal strength is below around -90dB (the noise floor of the receiver).",
+   "vote": "3-0"
+  },
+  {
+   "claim": "Human body absorption at 2.4GHz causes ~20dB RSSI swings at fixed 1m distance depending on body orientation: about -60dB when the person faces the other handset vs about -80dB with their back to it; a torso directly on the signal path costs roughly 10-15dB.",
+   "source": "https://arxiv.org/pdf/2006.06822",
+   "quote": "the received signal strength varies by around 20dB as the person rotates... substantially higher (around -60dB) when the person is facing the fixed handset than when they have their back to it (around -80dB), again presumably due to signal absorption by the person's body",
+   "vote": "2-0"
+  },
+  {
+   "claim": "Handset antenna orientation alone (edge-on vs face-on vs lying flat) changes received signal strength by roughly 20dB at a fixed 1m separation, meaning phone pose can dwarf distance-driven RSSI changes.",
+   "source": "https://arxiv.org/pdf/2006.06822",
+   "quote": "Handsets are placed 1m apart and the received signal strength recorded when (a) one handset is oriented edge on to the screen of the other handset, (b) when both handsets are oriented edge on to one another and (c) when both handsets are lying flat. These changes in orientation result in a change in received signal strength of around 20dB.",
+   "vote": "3-0"
+  }
+ ],
+ "refuted": [
+  {
+   "claim": "Android's BLE parameterizations map to concrete values: SCAN_MODE_LOW_POWER = 5.12 s scan interval / 0.512 s scan window; SCAN_MODE_BALANCED = 4.096 s / 1.024 s; SCAN_MODE_LOW_LATENCY = 4.096 s / 4.096 s (continuous); ADVERTISE_MODE_LOW_POWER = 1.0 s, BALANCED = 0.25 s, LOW_LATENCY = 0.1 s advertising interval; these values are undocumented and were obtained from AOSP source code.",
+   "vote": "1-2",
+   "source": "https://arxiv.org/pdf/2006.09099"
+  },
+  {
+   "claim": "Per-scan discovery probability rises with scan window only up to about 100 ms and then plateaus \u2014 scan windows longer than ~100 ms yield diminishing returns on discovery probability per scan event.",
+   "vote": "0-3",
+   "source": "https://pmc.ncbi.nlm.nih.gov/articles/PMC4327007/"
+  },
+  {
+   "claim": "The BLE specification constrains advertising timing as follows: advInterval must be an integer multiple of 0.625 ms in the range 20 ms to 10.24 s (BLE 4.2; extended to 10485.759375 s in BLE 5.0); for scannable-undirected or non-connectable-undirected advertising events the interval must be at least 100 ms; and each advertising event is delayed by a pseudo-random advDelay of 0-10 ms.",
+   "vote": "0-3",
+   "source": "https://ieeexplore.ieee.org/document/8320046/"
+  },
+  {
+   "claim": "The probability that a scanner successfully receives an advertiser's ADV_PDU is captured by a closed-form model: collision probability p_coll = 2*Tp / (R + E[Td]) (Eq. 1), and success probability p_succ = (1 - (2*Tpi + Tp)/(3*Ts)) * (1 - p_coll)^(N-1) (Eq. 2), where R is the advertising interval, Td the random delay, Tp the packet transmission time, Tpi the inter-channel PDU interval, Ts the scanInterval, and N the number of advertisers \u2014 i.e., packet-reception rate falls both with more advertisers (collisions) and with longer scan intervals (channel mismatch).",
+   "vote": "0-3",
+   "source": "https://ieeexplore.ieee.org/document/8320046/"
+  }
+ ],
+ "unverified": [],
+ "sources": [
+  {
+   "url": "https://arxiv.org/pdf/2006.09099",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://arxiv.org/abs/1509.04366",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC4327007/",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://ieeexplore.ieee.org/document/8320046/",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://punchthrough.com/ble-connection-parameters-guide/",
+   "quality": "blog",
+   "claimCount": 5
+  },
+  {
+   "url": "https://arxiv.org/pdf/1708.08144",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "http://ai2inventor.blogspot.com/2017/06/android-aosp-definition-of-scan.html",
+   "quality": "blog",
+   "claimCount": 5
+  },
+  {
+   "url": "https://punchthrough.com/android-ble-guide/",
+   "quality": "blog",
+   "claimCount": 3
+  },
+  {
+   "url": "https://github.com/AltBeacon/android-beacon-library/issues/526",
+   "quality": "forum",
+   "claimCount": 5
+  },
+  {
+   "url": "https://source.android.com/docs/core/connect/bluetooth/ble",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://github.com/NordicSemiconductor/Android-BLE-Library/issues/166",
+   "quality": "forum",
+   "claimCount": 5
+  },
+  {
+   "url": "https://blog.nordicsemi.com/getconnected/bluetooth-5-in-smartphones",
+   "quality": "blog",
+   "claimCount": 5
+  },
+  {
+   "url": "https://novelbits.io/bluetooth-5-advertisements/",
+   "quality": "blog",
+   "claimCount": 5
+  },
+  {
+   "url": "https://source.android.com/docs/core/connect/bluetooth/ble_advertising",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://devzone.nordicsemi.com/f/nordic-q-a/33060/is-there-any-smartphone-with-supporting-of-bluetooth-5-long-range-feature",
+   "quality": "forum",
+   "claimCount": 5
+  },
+  {
+   "url": "https://blog.nordicsemi.com/getconnected/bluetooth-5-advertising-extensions",
+   "quality": "secondary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://hubble.com/community/guides/ble-coexistence-when-wifi-and-bluetooth-fight/",
+   "quality": "blog",
+   "claimCount": 5
+  },
+  {
+   "url": "https://arxiv.org/pdf/2006.06822",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://en.wikipedia.org/wiki/Two-ray_ground-reflection_model",
+   "quality": "secondary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://bleadvertiserapp.medium.com/why-your-ble-app-is-draining-battery-and-the-scan-strategy-that-fixes-it-2a10d904febf",
+   "quality": "blog",
+   "claimCount": 4
+  },
+  {
+   "url": "https://bleadvertiserapp.medium.com/ble-power-consumption-on-android-how-your-advertising-interval-is-silently-draining-batteries-5b7687270d58",
+   "quality": "blog",
+   "claimCount": 5
+  },
+  {
+   "url": "https://novelbits.io/ble-power-consumption-optimization/",
+   "quality": "blog",
+   "claimCount": 5
+  },
+  {
+   "url": "https://arxiv.org/pdf/2001.02396",
+   "quality": "primary",
+   "claimCount": 5
+  }
+ ],
+ "stats": {
+  "angles": 5,
+  "sources": 23,
+  "claims": 112,
+  "verified": 25,
+  "confirmed": 21,
+  "killed": 4,
+  "unverified": 0,
+  "afterSynthesis": 0
+ }
+}

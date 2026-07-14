@@ -1,0 +1,292 @@
+{
+ "question": "WiFi-based smartphone co-location and proximity detection \u2014 algorithms, accuracy, and Android implementation constraints \u2014 to fuse with an existing BLE proximity system. Context: Android Flutter app (In Range) detects nearby users phone-to-phone via BLE (RSSI median tiers + dual-TX-power gates + packet presence, 90s rolling windows); we want to add WiFi as a second signal to (a) detect \"same room/venue\" co-location, (b) disambiguate weak-BLE-because-blocked vs weak-because-far, (c) opportunistically get true meter-accurate ranging. Research wanted: (1) WiFi fingerprint co-location algorithms \u2014 comparing two phones' AP scan lists (BSSID + RSSI vectors) for same-room/same-venue decisions: published similarity metrics (Jaccard on BSSID sets, cosine/Euclidean on RSSI vectors, rank-order metrics like Spearman/Kendall, Tanimoto), published accuracy numbers for same-room vs adjacent-room discrimination, how many APs are needed, threshold values used in real systems/papers (e.g., NearMe, Wi-Fi co-location for contact tracing research 2020-2023), temporal stability of fingerprints; (2) Android WiFi scanning constraints \u2014 WifiManager scan throttling exact rules (foreground app 4 scans/2min, background limits), Android 10+ changes, ways around throttling (WifiRttManager? passive scans? ScanResult freshness), location permission requirements, whether scans work screen-off, hotspot/tethering interaction with scanning (our test phones tether via a mobile hotspot), and AP-side complications: BSSID randomization at the AP?, multiple BSSIDs per AP, 5GHz vs 2.4GHz bands in fingerprints, mobile hotspots polluting fingerprints; (3) WiFi Aware (NAN) and WiFi RTT (802.11mc/802.11az FTM) phone-to-phone \u2014 device support matrices (which Samsung/Pixel models support Aware publish/subscribe and Aware-based RTT ranging; does Galaxy S9 support either), measured ranging accuracy phone-to-phone, power cost, coexistence with hotspot mode, API pitfalls; (4) sensor fusion algorithms for proximity \u2014 published methods fusing BLE RSSI + WiFi fingerprints (Bayesian fusion, weighted evidence, Dempster-Shafer, particle/Kalman filters for proximity classes rather than coordinates), contact-tracing literature that combined BLE+WiFi and reported accuracy gains, simple robust decision-fusion rules (e.g., WiFi-same-venue gate before BLE distance tiers), recommended EWMA/Kalman parameters for RSSI streams; (5) privacy engineering \u2014 hashing/truncating BSSIDs before upload, k-anonymity concerns of fingerprints, what Apple/Google allow re: WiFi scan data; (6) UWB as the endgame \u2014 Android UWB (androidx.core.uwb) and iPhone NearbyInteraction accuracy, device support timeline, whether it's worth architecting for now. Conclusion needed: concrete algorithm recommendations with formulas and starting thresholds: a same-venue score from two AP scan lists, a block-vs-far disambiguation rule combining WiFi similarity with BLE tier, scan cadence that respects Android throttling and BLE coexistence, and a fusion decision table (BLE tier x WiFi similarity \u2192 final proximity class) we can implement directly.",
+ "summary": "Synthesis step was skipped or failed \u2014 returning 9 verified claims unmerged.",
+ "findings": [],
+ "confirmed": [
+  {
+   "claim": "Adding BLE fingerprints on top of WiFi fingerprints yields no clear accuracy gain \u2014 WiFi-only and WiFi+BLE fusion give comparable proximity-detection results.",
+   "source": "https://www.researchgate.net/publication/364042974_Smartphone_Proximity_Detection_Using_WiFi_and_BLE_Fingerprinting",
+   "quote": "On the other hand, there is no clear winner between using WiFi alone or combining WiFi and BLE, as both provide comparable results.",
+   "vote": "2-0"
+  },
+  {
+   "claim": "An extended fingerprint-comparison feature set (subjected to feature selection) improves proximity-detection performance by about 4.6 percentage points over a rudimentary two-feature set.",
+   "source": "https://www.researchgate.net/publication/364042974_Smartphone_Proximity_Detection_Using_WiFi_and_BLE_Fingerprinting",
+   "quote": "Our results show that the use of a more complex set of features that can be subjected to further feature selection procedures can provide a performance benefit of about 4.6 percentage points.",
+   "vote": "3-0"
+  },
+  {
+   "claim": "A custom weighted proximity parameter comparing two phones' radio fingerprints (WiFi+BLE+cellular), which separately weights transmitters seen by both receivers vs only one, achieves indoor proximity-class accuracy of roughly 94-96% across near/medium/far classes.",
+   "source": "https://pmc.ncbi.nlm.nih.gov/articles/PMC9370947/",
+   "quote": "average accuracy for near is 95.8%, medium is 93.4%, far is 96.2%",
+   "vote": "3-0"
+  },
+  {
+   "claim": "The same fingerprint-comparison method degrades substantially outdoors, dropping to roughly 70-74% accuracy per proximity class, indicating fingerprint co-location works best in transmitter-dense indoor venues.",
+   "source": "https://pmc.ncbi.nlm.nih.gov/articles/PMC9370947/",
+   "quote": "average accuracy for near is 73.7%, medium is 70.0%, far is 73.4%",
+   "vote": "3-0"
+  },
+  {
+   "claim": "Rather than Jaccard/cosine similarity, the paper uses a weighted score Prox(m,n) = w_vv * Prox_vv + w_nv * Prox_nv with signal-strength gates of -70 dBm for WiFi and -90 dBm for BLE, and technology-specific weights (WiFi w_vv=1, w_nv=0.5; BLE w_vv=1.3, w_nv=0.8) plus decision thresholds T1=30/T2=55 indoor and T1=20/T2=30 outdoor.",
+   "source": "https://pmc.ncbi.nlm.nih.gov/articles/PMC9370947/",
+   "quote": "Prox(m,n) = w_vv \u00d7 Prox(m,n)_vv + w_nv \u00d7 Prox(m,n)_nv",
+   "vote": "3-0"
+  },
+  {
+   "claim": "For comparing Wi-Fi RSSI fingerprint vectors with k-NN, S\u00f8rensen (Bray-Curtis) distance with the 'powed' non-linear data representation achieved 94.78% building+floor success and 6.86 m mean error on the UJIIndoorLoc database, the best configuration tested among 51 distance/similarity measures.",
+   "source": "https://www.researchgate.net/publication/281203729_Comprehensive_Analysis_of_Distance_and_Similarity_Measures_for_Wi-Fi_Fingerprinting_Indoor_Positioning_Systems",
+   "quote": "S\u00f8rensen (and group 3 measures) provided a success rate of 94.78% and an error of 6.86 meters with the powed representation. In those two last cases, the difference with respect to the Euclidean distance and positive representation is remarkably high.",
+   "vote": "2-0"
+  },
+  {
+   "claim": "The commonly-default Euclidean distance on linear RSSI values is measurably inferior: 89.92% success and 7.90 m error, vs 92.17% / 7.33 m for S\u00f8rensen on the same linear representation \u2014 so a co-location similarity score built on Euclidean RSSI comparison leaves accuracy on the table.",
+   "source": "https://www.researchgate.net/publication/281203729_Comprehensive_Analysis_of_Distance_and_Similarity_Measures_for_Wi-Fi_Fingerprinting_Indoor_Positioning_Systems",
+   "quote": "The Euclidean distance combined with the positive representation (and the zero-to-one normalized) has a success rate of 89.92% and an error of 7.90 meters. However, this positioning accuracy was improved by S\u00f8rensen (and group 3 measures) with a success rate of 92.17% and an error of 7.33 meters.",
+   "vote": "2-0"
+  },
+  {
+   "claim": "Non-linear transforms of dBm RSSI (the paper's 'exponential' and 'powed' representations) outperform linear/normalized representations for nearly all distance measures, because they penalize fluctuations near strong signals and reflect the logarithmic nature of RSS.",
+   "source": "https://www.researchgate.net/publication/281203729_Comprehensive_Analysis_of_Distance_and_Similarity_Measures_for_Wi-Fi_Fingerprinting_Indoor_Positioning_Systems",
+   "quote": "In general, the best result for each measurement is provided by the exponential representation or the powed representation considering the success and the error. ... The exponential and powed data representations tend to represent the RSS values as they really are, and they also tend to highly penalize fluctuations related to good signal intensities.",
+   "vote": "3-0"
+  },
+  {
+   "claim": "Comparing two phones' WiFi RSSI fingerprints with ML classifiers can distinguish pairs recorded within ~2 m from pairs recorded farther apart (but still in Bluetooth range) with balanced accuracy of only 66.8%-77.8%, and only when classifiers are specialized per AP-density regime \u2014 a realistic accuracy ceiling for WiFi-only 'immediate proximity' decisions.",
+   "source": "https://arxiv.org/pdf/2106.02777",
+   "quote": "These classifiers distinguish between pairs of RSSI fingerprints recorded 2 or fewer meters apart and pairs recorded further apart but still in Bluetooth range. We characterize their balanced accuracy for this task to be between 66.8% and 77.8%.",
+   "vote": "2-0"
+  }
+ ],
+ "refuted": [
+  {
+   "claim": "Fusing ambient-scan fingerprints, BLE-only proximity detection performs significantly worse than WiFi-only or combined WiFi+BLE \u2014 WiFi fingerprints carry most of the discriminative signal for device co-location.",
+   "vote": "0-3",
+   "source": "https://www.researchgate.net/publication/364042974_Smartphone_Proximity_Detection_Using_WiFi_and_BLE_Fingerprinting"
+  }
+ ],
+ "unverified": [
+  {
+   "claim": "A single generic classifier trained across environments fails to generalize: it averaged only 59.27% balanced accuracy (63.75% true positives, 54.72% true negatives) across eight datasets, so any deployed WiFi-similarity threshold/model must be conditioned on AP density (they used three bands: ~5-15, ~30-70, and ~70-90 APs per scan).",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://arxiv.org/pdf/2106.02777"
+  },
+  {
+   "claim": "The effective feature set for pairwise fingerprint similarity includes Jaccard similarity on AP sets, Manhattan/Euclidean distance on RSSI values, a 'shared top AP within Z dBm' indicator (Z = 1..15 dBm), and cosine, Pearson, Spearman, and Kendall similarity computed on shared-AP RSSI vectors, pairwise-difference vectors, ratio vectors, and normalized rank vectors \u2014 a directly implementable menu of metrics for a same-room/same-venue score.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://arxiv.org/pdf/2106.02777"
+  },
+  {
+   "claim": "BLE-RSSI-only proximity detectors (mean-RSSI and M-out-of-N over a 144,581-sample NIST dataset including NLOS scenarios) produce ROC curves only marginally better than random guessing, meaning BLE tiering alone cannot reliably separate 'too close' from 'not close' and needs a second signal.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://nvlpubs.nist.gov/nistpubs/ir/2022/NIST.IR.8437.pdf"
+  },
+  {
+   "claim": "A human body on the direct path at 50 cm from one device attenuates BLE RSSI by about 11.55 dB on average (median 11.04 dB, SD 5.52 dB), giving a concrete magnitude for the 'weak-because-blocked' signature versus 'weak-because-far' in fusion logic.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://nvlpubs.nist.gov/nistpubs/ir/2022/NIST.IR.8437.pdf"
+  },
+  {
+   "claim": "WiFi-fingerprint-based co-location classification (deciding whether two devices' WiFi fingerprints indicate they are within 2 m) achieves only about 70% balanced accuracy even with an ensemble of three classifiers tuned to low/medium/high AP density, while WiFi-signal contact tracing simulations report up to 95% tracing accuracy depending on area size.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://nvlpubs.nist.gov/nistpubs/ir/2022/NIST.IR.8437.pdf"
+  },
+  {
+   "claim": "The paper defines a fingerprint similarity between two WiFi scan lists as the product of (a) a Gaussian RSS likelihood over common APs, s_r = prod_n exp(-(f_k,n - f_l,n)^2 / (2*sigma_r^2)), with the RSS variance parameter sigma_r^2 fixed at 36 dBm, and (b) a detection-likelihood penalty for APs seen in only one scan \u2014 i.e., the final score s = s_tau * (s_r)^(1/H) * H/(H + M_k + M_l), where H is the number of common APs and M_k, M_l are the counts of extra APs in each fingerprint. This gives a concrete, implementable same-place score for comparing two phones' AP scan lists.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://arxiv.org/pdf/2110.06541"
+  },
+  {
+   "claim": "Penalizing APs that appear in only one of the two fingerprints (extra-AP / detection-likelihood term) measurably beats plain cosine and Gaussian RSS similarity: with sigma_tau = 4 the proposed measure achieved 3.261 m and 3.364 m localization accuracy on two test sets, a 10.8% and 8.1% improvement over the Gaussian similarity model (3.656 m and 3.661 m), with cosine similarity worse still (best ~4.563 m / ~3.838 m in Table I). This supports using set-overlap-aware metrics rather than pure RSSI-vector cosine for co-location decisions.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://arxiv.org/pdf/2110.06541"
+  },
+  {
+   "claim": "Physical distance between two fingerprint locations can be regressed directly from the similarity score by a trained binned model: expected distance d\u0302(s) and variance \u03c3\u0302\u00b2(s) are computed as bin averages of odometry-annotated (similarity, distance) training pairs with bin size r = 0.05; the resulting model maps similarity monotonically to distance (their scatter plot spans ~0-100 m, with high similarity corresponding to under ~10 m). This is a template for turning a two-phone WiFi similarity score into a meters-scale proximity estimate.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://arxiv.org/pdf/2110.06541"
+  },
+  {
+   "claim": "An ensemble of three AP-density-specialized ML classifiers comparing two phones' WiFi RSSI fingerprints can classify whether the phones were within ~2 m of each other with balanced accuracy between 66.8% and 77.8% (roughly 70% on average), where 'Close' pairs were recorded within 2.25 m and 'Far' pairs 3.25-20 m apart.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://arxiv.org/abs/2106.02777"
+  },
+  {
+   "claim": "The classifier input features are exactly the similarity metrics the research question asks about: Jaccard similarity on detected BSSID sets, Manhattan and Euclidean distance on RSSI vectors, and cosine similarity plus Pearson, Spearman, and Kendall correlation on shared-AP RSSI value, pair-difference, pair-ratio, and rank vectors (~80 base features).",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://arxiv.org/abs/2106.02777"
+  },
+  {
+   "claim": "A single generic classifier does not generalize across environments with different AP counts (average balanced accuracy only 59.27% across 8 datasets); performance requires specializing by AP density regime: low = 5-15 APs per scan, medium = 30-70 APs, high = 70-90 APs per fingerprint.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://arxiv.org/abs/2106.02777"
+  },
+  {
+   "claim": "BLE RSSI is a very noisy phone-to-phone distance estimator, dramatically affected by carriage location, body position, physical barriers, and multipath \u2014 directly supporting the premise that weak-BLE-because-blocked vs weak-because-far cannot be distinguished from RSSI alone.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://arxiv.org/pdf/2203.04307"
+  },
+  {
+   "claim": "Body blockage alone can make a sub-1m contact read as weak signal: prior work cited found phone-in-pocket subjects received low RSSI despite sitting within 1m, and little RSSI-distance correlation on a tram due to metal-structure reflections \u2014 concrete evidence that a second non-BLE signal is needed for block-vs-far disambiguation.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://arxiv.org/pdf/2203.04307"
+  },
+  {
+   "claim": "BLE is an inherently noisy proximity indicator: signal strength varies with the immediate environment, multipath, device orientation, phone carriage state (hand/pocket/purse), phone model, and user posture \u2014 motivating a second fusion signal.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.1268.pdf"
+  },
+  {
+   "claim": "On Android 9 and higher (including Android 10+), foreground apps are throttled to 4 Wi-Fi scans per 2-minute window, and all background apps combined share a single scan per 30 minutes \u2014 this sets the hard ceiling on WiFi fingerprint refresh cadence for the In Range app.",
+   "erroredVotes": 3,
+   "validVotes": 0,
+   "source": "https://developer.android.com/develop/connectivity/wifi/wifi-scan"
+  }
+ ],
+ "sources": [
+  {
+   "url": "https://www.researchgate.net/publication/364042974_Smartphone_Proximity_Detection_Using_WiFi_and_BLE_Fingerprinting",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC9370947/",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://www.researchgate.net/publication/281203729_Comprehensive_Analysis_of_Distance_and_Similarity_Measures_for_Wi-Fi_Fingerprinting_Indoor_Positioning_Systems",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://arxiv.org/pdf/2106.02777",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://nvlpubs.nist.gov/nistpubs/ir/2022/NIST.IR.8437.pdf",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://arxiv.org/pdf/2110.06541",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://arxiv.org/abs/2106.02777",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://arxiv.org/pdf/2203.04307",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.1268.pdf",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://developer.android.com/develop/connectivity/wifi/wifi-scan",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://github.com/VREMSoftwareDevelopment/WiFiAnalyzer/wiki/Android-Wi%E2%80%90Fi-scanning-throttling",
+   "quality": "secondary",
+   "claimCount": 4
+  },
+  {
+   "url": "https://issuetracker.google.com/issues/112688545",
+   "quality": "forum",
+   "claimCount": 5
+  },
+  {
+   "url": "https://developer.android.com/topic/performance/vitals/bg-wifi",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://github.com/schollz/find3-android-scanner/issues/24",
+   "quality": "forum",
+   "claimCount": 5
+  },
+  {
+   "url": "https://issuetracker.google.com/issues/37060483",
+   "quality": "forum",
+   "claimCount": 5
+  },
+  {
+   "url": "https://developer.android.com/develop/connectivity/wifi/wifi-rtt",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://developer.android.com/develop/connectivity/wifi/wifi-aware",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://source.android.com/docs/core/connect/wifi-rtt",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://www.mdpi.com/1424-8220/23/5/2829",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://play.google.com/store/apps/details?id=com.google.android.apps.location.rtt.wifinanscan",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://arxiv.org/pdf/2303.11220",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://developer.android.com/develop/connectivity/uwb",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://arxiv.org/html/2405.14975v1",
+   "quality": "primary",
+   "claimCount": 5
+  },
+  {
+   "url": "https://petsymposium.org/popets/2025/popets-2025-0103.pdf",
+   "quality": "primary",
+   "claimCount": 5
+  }
+ ],
+ "stats": {
+  "angles": 5,
+  "sources": 24,
+  "claims": 119,
+  "verified": 25,
+  "confirmed": 9,
+  "killed": 1,
+  "unverified": 15,
+  "afterSynthesis": 0
+ }
+}

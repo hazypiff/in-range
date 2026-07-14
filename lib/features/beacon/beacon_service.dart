@@ -147,7 +147,12 @@ class BeaconService {
       _flushSightings();
     });
     _scanRestartTimer?.cancel();
-    _scanRestartTimer = Timer.periodic(const Duration(minutes: 55), (_) {
+    // MUST be < 30 min: Android silently downgrades SCAN_MODE_LOW_LATENCY to
+    // SCAN_MODE_OPPORTUNISTIC after 30 minutes of continuous scanning, and an
+    // opportunistic scanner only piggybacks on other apps' scans — it looks
+    // exactly like a dead radio. At the old 55-minute restart we were demoted
+    // for roughly half of every hour (research/ble-radio-optimization.md).
+    _scanRestartTimer = Timer.periodic(const Duration(minutes: 25), (_) {
       if (_isOn) unawaited(_restartScanning());
     });
     // Dual-power cycle: 20 s high / 10 s medium. Medium slots are the
@@ -400,7 +405,28 @@ class BeaconService {
     }
   }
 
+  /// One-shot radio capability probe. A phone marketed as "Bluetooth 5.0"
+  /// (the S9 is) does NOT necessarily support the long-range Coded PHY —
+  /// spec sheets conflate it with the 2M high-speed PHY, and the feature is
+  /// gated by the Bluetooth controller, not the OS version. Coded PHY would
+  /// buy ~12-20 dB of link budget (a large range/blocking win), so log what
+  /// this device can actually do before designing around it.
+  Future<void> _logRadioCapabilities() async {
+    if (_capsLogged) return;
+    _capsLogged = true;
+    try {
+      final phy = await FlutterBluePlus.getPhySupport();
+      debugPrint(
+          'BLE radio caps: le2M=${phy.le2M} leCoded=${phy.leCoded} (Coded PHY = long range)');
+    } catch (e) {
+      debugPrint('BLE radio capability probe failed: $e');
+    }
+  }
+
+  bool _capsLogged = false;
+
   Future<void> _startScanning() async {
+    await _logRadioCapabilities();
     await _scanSub?.cancel();
     _scanSub = null;
 
