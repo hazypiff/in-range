@@ -19,8 +19,7 @@ lcov.info
 *.iws
 .DS_Store
 
-# Flutter platform folders — KEEP android/ (project scaffolding), ignore the rest
-ios/
+# Flutter platform folders — KEEP android/ and ios/ (project scaffolding), ignore the rest
 linux/
 macos/
 windows/
