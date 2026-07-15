@@ -1,0 +1,196 @@
+schema_version = 1
+
+# ---------------------------------------------------------------------------
+# adb filters for Flutter/Android development.
+# One filter per subcommand; regexes are mutually exclusive so ordering-
+# independent. All match plain `adb ...` and path-prefixed `.../adb ...`.
+# Rule of thumb: NEVER strip W/E/F level lines or anything from the app
+# (flutter tag, stack traces, FATAL blocks).
+# ---------------------------------------------------------------------------
+
+[filters.adb-logcat]
+description = "Compact adb logcat: drop timestamp/PID/TID columns and chatty system tags; keep all W/E/F, flutter, and stack traces"
+match_command = "^(\\S*/)?adb\\b.*\\blogcat\\b"
+strip_ansi = true
+replace = [
+  # drop "07-15 10:23:45.123  4102  4180 " date/time + PID/TID prefix
+  { pattern = "(?m)^\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d{3}\\s+\\d+\\s+\\d+ ", replacement = "" },
+  # collapse logcat's tag padding: "I flutter : msg" -> "I flutter: msg"
+  { pattern = "(?m)^([VDIWEF]) (\\S+)\\s*: ", replacement = "$1 $2: " },
+]
+strip_lines_matching = [
+  "^\\s*$",
+  "^--------- beginning of",
+  # log-rate collapse notices
+  "^[VDI] chatty\\b",
+  # graphics / rendering / emulator noise
+  "^[VDI] (EGL_emulation|HostConnection|libEGL|OpenGLRenderer|GraphicsEnvironment|Gralloc\\d?|BufferQueue\\w*|BLASTBufferQueue|SurfaceView|SurfaceControl|HWUI|AdrenoGLES\\S*|vulkan\\S*|VRI\\S*|ViewRootImpl\\S*):",
+  # IME / input / window plumbing
+  "^[VDI] (InsetsController|ImeTracker|ImeFocusController|InputMethodManager|InputTransport|InputEventReceiver|WindowOnBackDispatcher):",
+  # runtime / loader / profiling plumbing
+  "^[VDI] (CompatibilityChangeReporter|nativeloader|GraphicsEnvironment|ProfileInstaller|ApplicationLoaders|ziparchive|Zygote|StrictMode|Looper|System|Process|TrafficStats|NetworkSecurityConfig|WifiManager|CameraManagerGlobal):",
+  # audio/media chatter
+  "^[VDI] (AudioTrack|AudioCapabilities|VideoCapabilities|MediaCodec|CCodec\\w*|Codec2Client):",
+  # analytics chatter (Firebase)
+  "^[VDI] (FA|FA-SVC|FirebaseApp|FirebaseInitProvider|DynamiteModule):",
+  # only INFO/DEBUG Choreographer; W 'Skipped N frames' survives
+  "^[VDI] Choreographer:",
+]
+truncate_lines_at = 300
+on_empty = "logcat: no notable lines (all filtered as routine system noise)"
+
+[filters.adb-devices]
+description = "Compact adb devices: drop header/daemon lines, collapse padding"
+match_command = "^(\\S*/)?adb\\b.*\\bdevices\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^List of devices attached",
+  "^\\* daemon",
+]
+replace = [
+  { pattern = "\\s{2,}", replacement = " " },
+]
+on_empty = "adb devices: none attached"
+
+[filters.adb-dumpsys-battery]
+description = "Compact dumpsys battery: strip indentation and charging-hw trivia"
+match_command = "^(\\S*/)?adb\\b.*\\bdumpsys\\s+battery\\b"
+strip_ansi = true
+replace = [
+  { pattern = "(?m)^\\s+", replacement = "" },
+]
+strip_lines_matching = [
+  "^\\s*$",
+  "^Max charging (current|voltage):",
+  "^Charge counter:",
+  "^(Dock|Wireless) powered: false$",
+]
+
+[filters.adb-dumpsys-activity]
+description = "dumpsys activity: keep task/activity records, focus, state, oom-top and crash/ANR lines only"
+match_command = "^(\\S*/)?adb\\b.*\\bdumpsys\\s+activity\\b"
+strip_ansi = true
+keep_lines_matching = [
+  "ACTIVITY MANAGER",
+  "Display #",
+  "\\* Task\\{|\\* TaskFragment|\\* Hist\\b",
+  "ActivityRecord\\{",
+  "topResumedActivity|ResumedActivity|mFocusedApp|mFocusedWindow|mCurrentFocus|mLastPausedActivity|mTopApp|mHomeProcess",
+  "^\\s*(packageName|processName)=",
+  "\\bstate=(RESUMED|PAUSED|STOPPED|STARTED|DESTROYED|INITIALIZING)",
+  "isVisible(Requested)?=|visible=(true|false)",
+  "^\\s*Intent \\{",
+  "launchedFrom|lastLaunchTime|launchCount=",
+  "^\\s*Proc #",
+  "(?i)\\b(ANR|crash|force stop|died|killed)\\b",
+]
+truncate_lines_at = 200
+max_lines = 150
+on_empty = "dumpsys activity: no activity/task/focus lines matched"
+
+[filters.adb-getprop]
+description = "Compact getprop: [k]: [v] -> k=v, drop vendor/radio/qemu/dalvik/init.svc prop noise"
+match_command = "^(\\S*/)?adb\\b.*\\bgetprop\\b"
+strip_ansi = true
+replace = [
+  { pattern = "(?m)^\\[", replacement = "" },
+  { pattern = "\\]: \\[", replacement = "=" },
+  { pattern = "(?m)\\]$", replacement = "" },
+]
+strip_lines_matching = [
+  "^\\s*$",
+  "^(aaudio|apex|audio|bluetooth|boottime|cache|camera|cellbroadcast|dalvik|debug|dev|drm|gsm|hwservicemanager|init|keyguard|log|media|net|nfc|odm|pm|qemu|radio|security|selinux|service|setupwizard|sys|telephony|tombstoned|vold|wifi|wlan|vendor)\\.",
+  "^persist\\.(radio|vendor|rild|odm|dbg)\\.",
+  "^ro\\.(boot|bootimage|boottime|odm|oem|vendor|vndk|postinstall|secure_element|logd|surface_flinger|zygote\\.disable_gl_preload|iorapd|apex|dalvik|gfx|opengles|sf|kernel\\.qemu\\.)",
+]
+
+[filters.adb-install]
+description = "Compact adb install: success -> one line; keep failures (stderr merged)"
+match_command = "^(\\S*/)?adb\\b.*\\binstall\\b"
+strip_ansi = true
+filter_stderr = true
+match_output = [
+  { pattern = "(?m)^Success\\s*$", message = "Success" },
+]
+strip_lines_matching = [
+  "^\\s*$",
+  "^Performing (Streamed|Incremental) Install",
+  "^Serving\\b",
+  "^\\s*\\[ *\\d+%\\]",
+]
+on_empty = "adb install: no output"
+
+# ------------------------------- inline tests -------------------------------
+
+[[tests.adb-logcat]]
+name = "drops noise keeps error and flutter"
+input = """
+07-15 10:23:12.000  4102  4150 D EGL_emulation: eglMakeCurrent: 0xb400 ver 3 1
+07-15 10:23:12.137  4102  4160 I flutter : cart: added item sku=SKU-1234 qty=2
+07-15 10:23:12.274  4102  4102 E AndroidRuntime: FATAL EXCEPTION: main
+"""
+expected = """
+I flutter: cart: added item sku=SKU-1234 qty=2
+E AndroidRuntime: FATAL EXCEPTION: main
+"""
+
+[[tests.adb-devices]]
+name = "drops header collapses spaces"
+input = """
+List of devices attached
+emulator-5554          device product:sdk_gphone64_arm64 model:sdk_gphone64_arm64 device:emu64a transport_id:1
+"""
+expected = """
+emulator-5554 device product:sdk_gphone64_arm64 model:sdk_gphone64_arm64 device:emu64a transport_id:1
+"""
+
+[[tests.adb-dumpsys-battery]]
+name = "dedents and drops charging trivia"
+input = """
+Current Battery Service state:
+  AC powered: false
+  Max charging current: 500000
+  level: 100
+"""
+expected = """
+Current Battery Service state:
+AC powered: false
+level: 100
+"""
+
+[[tests.adb-dumpsys-activity]]
+name = "keeps resumed activity drops config spam"
+input = """
+  topResumedActivity=ActivityRecord{a1b2c3d u0 com.example.myapp/.MainActivity t47}
+      compat={440dpi} labelRes=0x7f0f001d icon=0x7f0d0000 theme=0x7f100008
+      state=RESUMED delayedResume=false finishing=false
+"""
+expected = """
+  topResumedActivity=ActivityRecord{a1b2c3d u0 com.example.myapp/.MainActivity t47}
+      state=RESUMED delayedResume=false finishing=false
+"""
+
+[[tests.adb-getprop]]
+name = "rewrites to k=v and drops vendor noise"
+input = """
+[ro.build.version.sdk]: [34]
+[ro.vendor.blob1.config]: [0x0001]
+[init.svc.vendor.svc1]: [running]
+"""
+expected = """
+ro.build.version.sdk=34
+"""
+
+[[tests.adb-install]]
+name = "success short-circuits to one line"
+input = """
+Performing Streamed Install
+Success
+"""
+expected = "Success"
+
+[[tests.adb-install]]
+name = "failure text survives"
+input = "adb: failed to install app.apk: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE]"
+expected = "adb: failed to install app.apk: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE]"
