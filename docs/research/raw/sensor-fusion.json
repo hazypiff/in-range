@@ -1,0 +1,278 @@
+{
+ "question": "Multi-sensor fusion and confidence weighting for smartphone proximity detection \u2014 how to optimally combine noisy BLE + WiFi + GPS signals into one proximity class with a calibrated confidence. Context: Android/iOS proximity dating app (In Range). We already classify with BLE (windowed median RSSI tiers + dual-TX-power gate + packet presence, 90s window), WiFi fingerprint co-location (Jaccard + S\u00f8rensen/Bray-Curtis venue score), and GPS (coarse plausibility veto only). We just built a PROVISIONAL weighted-confidence fusion: BLE evidence sets a base confidence = 0.4 + 0.3*(samples/20) + 0.3*(dwell/30s); WiFi agreement multiplies confidence up (+0.4*headroom), a BLE-close/WiFi-different-place CONFLICT multiplies it down (*0.5); GPS contributes zero positive weight (veto only). We want research to REPLACE these guessed weights with literature-grounded methods. Specifically: (1) Established sensor-fusion frameworks for combining heterogeneous noisy sensors into a DISCRETE class (not coordinates) with confidence \u2014 Bayesian fusion / naive-Bayes sensor combination, Dempster-Shafer evidence theory (belief/plausibility for 'same tier'), fuzzy logic fusion, weighted majority/confidence voting, and when each is appropriate; formulas and worked examples for proximity/localization; (2) Inverse-variance / reliability weighting \u2014 how to weight each sensor by its measured reliability (e.g. weight \u221d 1/variance, or by per-sensor precision/recall), how to derive the weights empirically from labeled calibration data, and how the COVID contact-tracing / Google Exposure Notification and indoor-positioning literature actually set their fusion weights; (3) Kalman/particle/Bayesian FILTERS applied to proximity-CLASS estimation over time (not xy position) \u2014 recursive confidence update as samples arrive, EWMA vs Kalman for RSSI streams, hidden Markov models for tier transitions with hysteresis, recommended parameters; (4) Conflict handling \u2014 published methods for down-weighting or vetoing when sensors DISAGREE (Dempster's rule conflict mass, robust fusion, outlier/relay detection), and whether our 'close BLE + different-building WiFi => halve confidence' heuristic matches any principled rule; (5) Learned fusion \u2014 logistic regression / gradient-boosted / small-NN classifiers that take (BLE median, BLE variance, sample count, dwell, WiFi similarity, GPS accuracy) and output a proximity class + calibrated probability; published accuracy vs hand-tuned rules for proximity; how much labeled data is needed; calibration of probabilities (Platt scaling, isotonic); (6) Concrete parameter recommendations and pitfalls: how many samples/how long a window before a tier is trustworthy, how to combine bilateral (A->B and B->A) readings, over-counting correlated evidence, and the failure modes of naive weighted-sum fusion. Conclusion needed: a recommended fusion architecture for our BLE-primary / WiFi-corroborator / GPS-veto stack, with concrete starting weights or a training recipe, a confidence-update rule as samples stream in, a principled conflict rule, and what our walk-#4 labeled data should capture to fit the weights properly rather than guess them.",
+ "description": "Synthesis of verified sensor-fusion research for In Range proximity stack",
+ "summary": "The literature converges on a recursive-Bayesian-filter over the RSSI stream as the single highest-value upgrade for a BLE-primary proximity stack: inferring the proximity class from the *entire* observation sequence (Unscented Kalman Smoother/particle/Kalman) rather than per-sample thresholding is the demonstrated winner (UKS ROC-AUC 0.823 vs 0.5 for per-sample gradient boosting; Bayesian filters up to ~30% better than moving averages within 3m; a Kalman prefilter roughly halves RSSI volatility 10.33\u21925.43 dB). For combining the heterogeneous BLE/WiFi/GPS evidence into a discrete class with calibrated confidence, two principled families are both well-supported: (a) Bayesian/naive-Bayes fusion, which converges faster than Dempster-Shafer and handles missing/conflicting reports at least as well, and (b) Dempster-Shafer evidence theory, which is uniquely suited to representing an explicit \"unknown\"/ignorance state and returns a belief-plausibility confidence *interval* rather than a point estimate \u2014 but which produces catastrophic counter-intuitive fusions (0% mass to the correct hypothesis) under high conflict unless the raw rule is replaced by a conflict-aware weighted variant (credibility from mutual BPA support \u00d7 Deng-entropy information volume, then weighted-average + Dempster). Reliability/variance weighting (weight \u221d 1/variance) is empirically validated (1.54m vs 1.66m WKNN), and for the conflict case the \"close BLE + different-building WiFi \u21d2 halve confidence\" heuristic is a crude but directionally correct stand-in for Dempster's conflict-mass renormalization or robust down-weighting. Real contact-tracing weighted-sum rules (B1+0.5\u00b7B2 attenuation buckets) performed near-random in the field (Swiss 0% TPR, Italian 50%/50%), a direct warning against hand-tuned linear weighted-sum fusion \u2014 favoring instead a learned classifier (Conv1D/RF over BLE median, variance, count, dwell, WiFi similarity, GPS accuracy) with Platt/isotonic-calibrated probabilities, which walk-#4 labeled data should be collected to fit.",
+ "findings": [
+  {
+   "claim": "Recursive Bayesian filtering over the whole RSSI sequence (UKS/particle/Kalman) should replace per-sample thresholding for proximity-CLASS estimation; it is the single best-supported architectural upgrade.",
+   "confidence": "high",
+   "sources": [
+    "https://arxiv.org/pdf/2007.05057",
+    "https://arxiv.org/pdf/2001.02396"
+   ],
+   "evidence": "Alan Turing Institute UKS work: inferring proximity Dt from the entire sequence x1..xT rather than xt alone gives ROC-AUC 0.823 vs 0.5 for a per-sample gradient-boosted regressor on the MIT H0H1 set; smoothing is O(T) and supports principled imputation across BLE packet gaps. Independently, Bayesian filters improve proximity accuracy up to ~30% vs simple moving average within 3m.",
+   "vote": "3-0 (claims 8,9,16)"
+  },
+  {
+   "claim": "Non-linear/non-Gaussian filters (particle, non-parametric information) beat the linear Kalman filter on noisy RSSI, especially as distance grows; particle filter was best overall (MAE 0.27m within 3m).",
+   "confidence": "high",
+   "sources": [
+    "https://arxiv.org/pdf/2001.02396"
+   ],
+   "evidence": "Mackey/Spachos/Plataniotis 2020 (IEEE IoT J): particle filtering had lowest average MAE 0.27m vs KF 0.33-0.37m and SMA 0.44m within 3m; both NI and particle filters outperform Kalman as distance increases, attributed to non-parametric approximation of the non-linear/non-Gaussian system.",
+   "vote": "3-0 (claim 17)"
+  },
+  {
+   "claim": "A one-dimensional Kalman prefilter on raw RSSI is a proven, cheap smoothing front-end that roughly halves noise and beats mean/median filters, with concrete published tuning parameters as a starting point.",
+   "confidence": "high",
+   "sources": [
+    "https://pmc.ncbi.nlm.nih.gov/articles/PMC5461075/",
+    "https://arxiv.org/pdf/2505.01185"
+   ],
+   "evidence": "Sensors 2017 (PMC5461075): 1D Kalman gives fewest jumps/variations vs average/median filters, using Q=0.065, R=1.4, init x\u0302=0, P=0 (tuned to their hardware). arXiv 2505.01185 (2025): a forward-only innovation-driven Kalman prefilter cut RSSI volatility 10.33\u21925.43 dB and path-loss RMSE 8.09\u21925.35 dB (R\u00b2 0.82\u21920.89). Parameters are environment-specific and need re-tuning.",
+   "vote": "3-0 (claims 19,20)"
+  },
+  {
+   "claim": "Hidden Markov Models formalize tier/state transitions with hysteresis: proximity can be framed as recursive sequential classification into discrete states via a transition matrix, not coordinate regression.",
+   "confidence": "high",
+   "sources": [
+    "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC8537124/"
+   ],
+   "evidence": "PMC8537124 models sequences of RSSI observations as discrete hidden states (each = a reference point) with an N\u00d7N transition-probability matrix, classifying via temporal state-transition correlations \u2014 a direct precedent for HMM-based tier smoothing with transition hysteresis.",
+   "vote": "3-0 (claim 18)"
+  },
+  {
+   "claim": "Bayesian / naive-Bayes probabilistic fusion is a valid, and arguably preferable, framework for combining heterogeneous sensors into a discrete class: it converges faster than Dempster-Shafer and handles missing and conflicting reports at least as well.",
+   "confidence": "high",
+   "sources": [
+    "https://ieeexplore.ieee.org/document/618256/"
+   ],
+   "evidence": "Buede & Girardi 1997 (IEEE Trans SMC-A), controlled aircraft target-ID comparison: probabilistic results 'converge to a solution much faster than those of evidence theory' and probability theory 'can accommodate all of these issues' including missing and misassociated (conflicting) reports. The 'without needing DS' generalization is hedged and domain-specific (target-ID); the Bayes-vs-DS debate remains contested.",
+   "vote": "3-0 / 2-1 (claims 6,7)"
+  },
+  {
+   "claim": "Dempster-Shafer evidence theory is an established, competitive framework for fusing per-source RSSI evidence into a discrete location/class, and its defining advantage over Bayes is an explicit ignorance ('unknown') state plus a belief-plausibility confidence INTERVAL instead of a single probability.",
+   "confidence": "high",
+   "sources": [
+    "https://www.sciencedirect.com/science/article/abs/pii/S1574119216300864",
+    "https://arxiv.org/abs/2510.16557",
+    "https://www.ias.ac.in/article/fulltext/sadh/029/02/0145-0176"
+   ],
+   "evidence": "Pervasive & Mobile Computing 2016: DS fuses per-AP RSSI-derived probability masses to rank the most probable pre-calibrated location (meter-level 90% of time). arXiv 2510.16557 fuses Wi-Fi/BLE fingerprints via DST + topology features, ~37% over a PF+RF baseline under 10% synthetic noise (preprint, single/unreplicated). Challa & Koks (Sadhana 2004): probability is bracketed by belief Bel(A)=\u03a3_{B\u2286A}m(B) (lower) and plausibility Pl(A)=\u03a3_{B\u2229A\u2260\u2205}m(B) (upper) \u2014 an explicit uncertainty interval Bayes cannot give; DS requires committing mass to union/ignorance sets.",
+   "vote": "3-0 (claims 0,1,5)"
+  },
+  {
+   "claim": "Per-sensor likelihood models should be learned from calibration data, not assumed Gaussian: empirical (SVR/kernel-density) RSSI likelihoods raised accuracy to ~88% vs a Gaussian assumption \u2014 a direct mandate to fit In Range's per-sensor models from walk data.",
+   "confidence": "high",
+   "sources": [
+    "https://www.sciencedirect.com/science/article/abs/pii/S1574119216300864"
+   ],
+   "evidence": "Same 2016 paper: replacing the Gaussian RSSI assumption with SVR-based kernel density estimation before DS fusion improved localization accuracy to ~88%. Single WiFi-only fingerprinting study, so the generalization is stronger than one dataset strictly proves, but the methodological point (data-driven likelihood > assumed parametric) is well-established.",
+   "vote": "3-0 (claim 2)"
+  },
+  {
+   "claim": "Reliability/variance weighting (weight \u221d 1/variance) empirically beats each single estimator, validating weighting each sensor by measured reliability rather than guessing weights.",
+   "confidence": "high",
+   "sources": [
+    "https://pmc.ncbi.nlm.nih.gov/articles/PMC4610424/"
+   ],
+   "evidence": "PMC4610424: variance-weighted fusion (weight = D_i/(D1+D2), variance as reliability proxy) achieved 1.54m vs WKNN 1.66m (~7.2%) and joint-probability 1.93m (~20.2%) over 100 tests. Caveat: the two fused estimators are both WiFi-fingerprint xy-coordinate methods and 'variance' is nearest-fingerprint spread, not per-sensor calibration reliability \u2014 a weaker precedent for heterogeneous discrete-class fusion, but the reliability-weighting principle holds.",
+   "vote": "3-0 (claim 12)"
+  },
+  {
+   "claim": "The raw Dempster's rule is dangerous under high conflict and must be replaced by a conflict-aware weighted variant; the app's 'close BLE + different-building WiFi \u21d2 halve confidence' heuristic is a crude stand-in for principled conflict-mass handling.",
+   "confidence": "high",
+   "sources": [
+    "https://www.ias.ac.in/article/fulltext/sadh/029/02/0145-0176",
+    "https://pmc.ncbi.nlm.nih.gov/articles/PMC5982568/"
+   ],
+   "evidence": "Dempster's rule: m1,2(C)=\u03a3_{A\u2229B=C}m1(A)m2(B) / (1\u2212\u03a3_{A\u2229B=\u2205}m1(A)m2(B)); the empty-intersection 'conflict mass' is stripped by normalization. But a bare zero mass numerically acts as strong disbelief, and in a 5-sensor target-recognition example (PMC5982568) Dempster assigned 0% to the correct target. The fix: weight each evidence by credibility (cosine/mutual support between BPAs) modified by Deng-entropy information volume, then weighted-average before Dempster fusion. The 'halve confidence' rule is directionally consistent with down-weighting conflicting evidence but is not a calibrated rule.",
+   "vote": "3-0 (claims 3,4,21,22)"
+  },
+  {
+   "claim": "Hand-tuned linear weighted-sum attenuation fusion (the app's current guessed-weight approach) failed near-randomly in real deployed contact-tracing apps \u2014 a strong warning to replace it with a filtered/learned pipeline.",
+   "confidence": "high",
+   "sources": [
+    "https://pmc.ncbi.nlm.nih.gov/articles/PMC7526892/"
+   ],
+   "evidence": "Trinity College Dublin GAEN study: deployed B1+0.5\u00b7B2 attenuation-bucket weighted-sum rules gave Swiss 0% detections, German ~9% TPR/FPR, Italian 50%/50% (ROC near the 45\u00b0 chance line). Also: GAEN attenuation = P_TX \u2212 filtered P_RX with per-device TX/offset calibration (Pixel 2: P_TX=-31dB, -6dB offset); and in a metal tram, RSSI had little correlation with distance (multipath) \u2014 pairs <2m and 5m apart showed similar attenuation. Confirms per-device calibration and environment-aware handling are mandatory.",
+   "vote": "3-0 (claims 13,14,15)"
+  },
+  {
+   "claim": "Learned classifiers framing proximity as discrete distance bins outperform regression and rule-based fusion, and fusing BLE with on-device IMU (accel+gyro+magnetometer) beats RSSI-alone, which overfits.",
+   "confidence": "high",
+   "sources": [
+    "https://arxiv.org/pdf/2009.04991"
+   ],
+   "evidence": "MIT/PathCheck (arXiv 2009.04991): proximity as discrete bins (1.2/1.8/3.0/4.5m); a 1D temporal CNN (Conv1D) was best (nDCF 0.58 MITRE, ConvGRU 0.16 NIST); switching a random forest from classifier to regressor worsened nDCF by 0.19. RSSI-only training increased train/test divergence (overfitting); best model used gyroscope+accelerometer+magnetometer+RSSI-BLE. Suggests In Range's fusion features should include IMU/motion where available. IMU gains may partly reflect motion-label correlation.",
+   "vote": "3-0 (claims 10,11)"
+  }
+ ],
+ "caveats": "Several strongest efficacy numbers rest on single or non-peer-reviewed sources: the 37% DST improvement (arXiv 2510.16557) is an unreplicated preprint on synthetic-noise test conditions with an author-defined baseline, and the companion claim of a 20.6% averaged error reduction from the same paper was REFUTED (1-2 vote) \u2014 do not cite that figure. The UKS ROC-AUC 0.823 result (arXiv 2007.05057) beats a gradient-boosted baseline that scored exactly chance (0.5) on only 45 scenarios with no confidence intervals, so 'beats traditional classifiers' means beating a chance-level per-sample model on a tiny set. The variance-weighting result (PMC4610424) fuses two homogeneous WiFi xy-coordinate estimators, not heterogeneous BLE+WiFi+GPS into a discrete class, and its specific fusion-formula worked example was REFUTED (0-3) \u2014 treat it only as a general reliability-weighting precedent, not a copy-able formula. All Kalman parameters (Q=0.065, R=1.4) and the LoRaWAN Kalman-prefilter numbers are environment/hardware-specific and require re-tuning for In Range's BLE hardware. The Bayes-vs-Dempster-Shafer superiority question is genuinely contested in the literature (the 1997 Buede result is disputed by DS proponents); both are defensible, so the choice should be driven by whether you need DS's explicit ignorance/interval semantics. Foundational-math claims (Dempster's rule, belief/plausibility, HMM) are stable and not time-sensitive; the empirical fusion-accuracy figures are dataset- and environment-bound and may not transfer to a phone-to-phone dating-app context.",
+ "openQuestions": [
+  "What is In Range's actual per-tier RSSI variance and per-sensor precision/recall from labeled walk data \u2014 needed to set inverse-variance weights and empirical likelihoods rather than the current guessed 0.4/0.3/0.3 base and *0.5 conflict factor?",
+  "How much labeled proximity data does walk-#4 need to reliably fit a calibrated learned classifier (Conv1D/RF + Platt/isotonic) for phone-to-phone BLE, and does the IMU-augmentation benefit survive when motion labels are not correlated with the ground-truth distance?",
+  "How should bilateral (A\u2192B and B\u2192A) RSSI readings be combined without over-counting correlated evidence \u2014 none of the verified sources gives a principled bilateral-fusion or correlated-evidence de-duplication rule for the two-phone symmetric case?",
+  "For the conflict case specifically, does a calibrated Dempster conflict-mass / credibility-weighted rule (PMC5982568-style) actually outperform the simple *0.5 heuristic on In Range's own conflict scenarios (BLE-close but WiFi-different-building, and relay/multipath cases), and what conflict-mass threshold should trigger a veto vs a soft down-weight?"
+ ],
+ "refuted": [
+  {
+   "claim": "Evidence-theoretic (DST) fusion of complementary Wi-Fi/BLE regressors gives a statistically significant averaged error reduction of 20.6% (4.993 +/- 0.15 m vs 6.292 +/- 0.13 m, p < 0.001) over the non-fused baseline.",
+   "vote": "1-2",
+   "source": "https://arxiv.org/abs/2510.16557"
+  },
+  {
+   "claim": "This WiFi indoor positioning algorithm fuses two independent position estimates by weighting each proportionally to its variance-derived reliability: (X\u0304,\u0232) = [D\u2081/(D\u2081+D\u2082)](X\u2081,Y\u2081) + [D\u2082/(D\u2081+D\u2082)](X\u2082,Y\u2082), where D\u2081,D\u2082 are variances of the two intermediate results \u2014 a concrete worked example of reliability-weighted fusion of heterogeneous noisy estimates.",
+   "vote": "0-3",
+   "source": "https://pmc.ncbi.nlm.nih.gov/articles/PMC4610424/"
+  }
+ ],
+ "unverified": [],
+ "sources": [
+  {
+   "url": "https://arxiv.org/abs/2510.16557",
+   "quality": "primary",
+   "angle": "academic/frameworks",
+   "claimCount": 4
+  },
+  {
+   "url": "https://www.sciencedirect.com/science/article/abs/pii/S1574119216300864",
+   "quality": "primary",
+   "angle": "academic/frameworks",
+   "claimCount": 3
+  },
+  {
+   "url": "https://www.ias.ac.in/article/fulltext/sadh/029/02/0145-0176",
+   "quality": "primary",
+   "angle": "academic/frameworks",
+   "claimCount": 5
+  },
+  {
+   "url": "https://ieeexplore.ieee.org/document/618256/",
+   "quality": "primary",
+   "angle": "academic/frameworks",
+   "claimCount": 4
+  },
+  {
+   "url": "https://developers.google.com/android/exposure-notifications/ble-attenuation-computation",
+   "quality": "unreliable",
+   "angle": "reliability weighting / contact tracing",
+   "claimCount": 0
+  },
+  {
+   "url": "https://developers.google.com/android/exposure-notifications/ble-attenuation-procedure",
+   "quality": "unreliable",
+   "angle": "reliability weighting / contact tracing",
+   "claimCount": 0
+  },
+  {
+   "url": "https://arxiv.org/pdf/2007.05057",
+   "quality": "primary",
+   "angle": "reliability weighting / contact tracing",
+   "claimCount": 5
+  },
+  {
+   "url": "https://arxiv.org/pdf/2009.04991",
+   "quality": "primary",
+   "angle": "reliability weighting / contact tracing",
+   "claimCount": 5
+  },
+  {
+   "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC4610424/",
+   "quality": "primary",
+   "angle": "reliability weighting / contact tracing",
+   "claimCount": 4
+  },
+  {
+   "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7526892/",
+   "quality": "primary",
+   "angle": "reliability weighting / contact tracing",
+   "claimCount": 5
+  },
+  {
+   "url": "https://arxiv.org/pdf/2001.02396",
+   "quality": "primary",
+   "angle": "temporal filtering of class",
+   "claimCount": 5
+  },
+  {
+   "url": "https://doi.org/10.3390/s21216972",
+   "quality": "primary",
+   "angle": "temporal filtering of class",
+   "claimCount": 5
+  },
+  {
+   "url": "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC8537124/",
+   "quality": "primary",
+   "angle": "temporal filtering of class",
+   "claimCount": 4
+  },
+  {
+   "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC5461075/",
+   "quality": "primary",
+   "angle": "temporal filtering of class",
+   "claimCount": 5
+  },
+  {
+   "url": "https://arxiv.org/pdf/2505.01185",
+   "quality": "primary",
+   "angle": "temporal filtering of class",
+   "claimCount": 4
+  },
+  {
+   "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC5982568/",
+   "quality": "primary",
+   "angle": "conflict handling / robust fusion",
+   "claimCount": 5
+  },
+  {
+   "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC6865203/",
+   "quality": "primary",
+   "angle": "conflict handling / robust fusion",
+   "claimCount": 5
+  },
+  {
+   "url": "https://arxiv.org/pdf/1511.00905",
+   "quality": "primary",
+   "angle": "conflict handling / robust fusion",
+   "claimCount": 3
+  },
+  {
+   "url": "https://ar5iv.labs.arxiv.org/html/2012.05940",
+   "quality": "primary",
+   "angle": "learned fusion + calibration",
+   "claimCount": 5
+  },
+  {
+   "url": "https://ar5iv.labs.arxiv.org/html/2201.10401",
+   "quality": "primary",
+   "angle": "learned fusion + calibration",
+   "claimCount": 5
+  },
+  {
+   "url": "https://www.researchgate.net/publication/344197790_Proximity_Sensing_Modeling_and_Understanding_Noisy_RSSI-BLE_Signals_and_Other_Mobile_Sensor_Data_for_Digital_Contact_Tracing",
+   "quality": "primary",
+   "angle": "learned fusion + calibration",
+   "claimCount": 5
+  },
+  {
+   "url": "https://arxiv.org/pdf/2101.09075",
+   "quality": "primary",
+   "angle": "learned fusion + calibration",
+   "claimCount": 5
+  }
+ ],
+ "stats": {
+  "angles": 5,
+  "sourcesFetched": 22,
+  "claimsExtracted": 91,
+  "claimsVerified": 25,
+  "confirmed": 23,
+  "killed": 2,
+  "unverified": 0,
+  "afterSynthesis": 11,
+  "urlDupes": 1,
+  "budgetDropped": 7,
+  "agentCalls": 104
+ }
+}

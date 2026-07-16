@@ -251,3 +251,46 @@ Output: `FusedProximity.confidence ∈ [0,1]`. Drives whether a Close By alert
 fires (a trustworthy alert beats a fast one) and how the UI hedges. Weights are
 provisional — walk #4 and the fusion research refine them; the *structure*
 (BLE sets, WiFi modulates, GPS vetoes) is the durable part.
+
+## 5c. Fusion research verdict & upgrade path (2026-07-15)
+
+A dedicated research run (`research/sensor-fusion.md`) evaluated our provisional
+weighting against the literature. Verdict: **the structure is right, the method
+is the known-weak one, and the fix needs labeled data.**
+
+**What the research validates about §5b:**
+- BLE-primary with the other radios as corroborator/veto — correct.
+- Weighting a sensor by its *reliability* — correct, and it should be
+  **inverse-variance** (`weight ∝ 1/variance`), *measured*, not guessed.
+- Our conflict rule ("close BLE + different-building WiFi ⇒ halve confidence")
+  is directionally right — a crude stand-in for Dempster conflict-mass handling.
+
+**The warning:** hand-tuned *linear weighted-sum* fusion — which is exactly what
+§5b is — **failed near-randomly in deployed contact-tracing apps** (Swiss 0 % TPR,
+Italian ~50/50). Our §5b is a reasonable interim, but it is not the destination.
+
+**Upgrade path, in order of value:**
+1. **Recursive Bayesian filter over the RSSI *sequence*, not per-window median.**
+   The single highest-value change: inferring the tier from the whole observation
+   sequence (Unscented Kalman Smoother / particle filter) scored ROC-AUC **0.823
+   vs 0.5** for per-sample thresholding. Particle filter beat Kalman on the noisy
+   tail (MAE 0.27 m vs 0.33–0.37 m within 3 m).
+2. **Cheap immediate win — a 1-D Kalman *prefilter* on the raw RSSI stream**
+   before the median. Roughly halves volatility (10.33 → 5.43 dB in one study).
+   Starting params to tune on our data: `Q = 0.065, R = 1.4`.
+3. **Fit per-sensor likelihoods from labeled data, don't assume Gaussian.**
+   Empirical (kernel-density / SVR) RSSI likelihoods hit ~88 % vs a Gaussian
+   assumption. This is the mandate for walk #4 to be *labeled*.
+4. **Then replace the weighted-sum with either naive-Bayes fusion** (converges
+   faster than Dempster–Shafer, handles missing/conflicting reports) **or a small
+   learned classifier** over `(BLE median, BLE variance, sample count, dwell,
+   WiFi similarity, GPS accuracy)` → proximity bin + **Platt/isotonic-calibrated**
+   probability. Model tier transitions as an **HMM** for principled hysteresis.
+5. **Bonus:** fusing on-device IMU (accel/gyro) with RSSI beats RSSI-alone.
+
+**What this means for walk #4:** it is already labeled — each 90 s station has a
+known true distance (from the noted times), which is exactly the training data
+needed to *fit* the weights and per-sensor likelihoods instead of guessing them.
+Keep the live classifier on raw median for the walk (don't contaminate the
+baseline); apply Kalman/Bayesian/learned fusion in analysis afterward, then
+productionize the winner.
