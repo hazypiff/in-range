@@ -218,5 +218,40 @@ BEGIN
   EXCEPTION WHEN sqlstate '22023' THEN NULL; END;
 END $$;
 
+-- ============ TEST 10: relay-abuse detection (#6 step 4) ============
+-- scan_relay_abuse flags impossible movement (spoofed GPS) and tokens observed
+-- implausibly far from where they were claimed (relayed), and leaves honest
+-- movement / nearby observers alone.
+INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+ ('61000000-0000-0000-0000-000000000061','00000000-0000-0000-0000-000000000000','authenticated','authenticated','ab_tp@t.local',now(),now()),
+ ('62000000-0000-0000-0000-000000000062','00000000-0000-0000-0000-000000000000','authenticated','authenticated','ab_nm@t.local',now(),now()),
+ ('63000000-0000-0000-0000-000000000063','00000000-0000-0000-0000-000000000000','authenticated','authenticated','ab_rl@t.local',now(),now()),
+ ('64000000-0000-0000-0000-000000000064','00000000-0000-0000-0000-000000000000','authenticated','authenticated','ab_nr@t.local',now(),now()),
+ ('65000000-0000-0000-0000-000000000065','00000000-0000-0000-0000-000000000000','authenticated','authenticated','ab_ob@t.local',now(),now());
+-- teleporter: ~1010 km in 60 s
+INSERT INTO public.token_claim_history (token,user_id,valid_from,valid_until,approx_lat,approx_lon,range_type) VALUES
+ ('e1e1aaaae1e1aaaae1e1aaaae1e1aaaa','61000000-0000-0000-0000-000000000061', now()-interval '60 s', now()+interval '10 min', 38.9,-76.9,'feet_10'),
+ ('e2e2aaaae2e2aaaae2e2aaaae2e2aaaa','61000000-0000-0000-0000-000000000061', now(),                now()+interval '10 min', 48.0,-76.9,'feet_10'),
+-- normal mover: ~130 m in 15 min (control)
+ ('f1f1bbbbf1f1bbbbf1f1bbbbf1f1bbbb','62000000-0000-0000-0000-000000000062', now()-interval '15 min', now()+interval '10 min', 38.9000,-76.9,'feet_10'),
+ ('f2f2bbbbf2f2bbbbf2f2bbbbf2f2bbbb','62000000-0000-0000-0000-000000000062', now(),                  now()+interval '10 min', 38.9012,-76.9,'feet_10'),
+-- relayed owner (token seen ~55 km away) + near owner (control)
+ ('a1a1cccca1a1cccca1a1cccca1a1cccc','63000000-0000-0000-0000-000000000063', now(), now()+interval '10 min', 38.9,-76.9,'feet_10'),
+ ('a1a1dddda1a1dddda1a1dddda1a1dddd','64000000-0000-0000-0000-000000000064', now(), now()+interval '10 min', 38.9,-76.9,'feet_10');
+INSERT INTO public.sightings (observer_user_id,observed_token,received_at,rssi,observed_at,observer_lat,observer_lon,range_type) VALUES
+ ('65000000-0000-0000-0000-000000000065','a1a1cccca1a1cccca1a1cccca1a1cccc', now(), -60, now(), 39.4,   -76.9,'feet_10'),  -- 55 km -> relay
+ ('65000000-0000-0000-0000-000000000065','a1a1dddda1a1dddda1a1dddda1a1dddd', now(), -60, now(), 38.9012,-76.9,'feet_10'); -- 130 m -> ok
+DO $$ BEGIN
+  PERFORM public.scan_relay_abuse(INTERVAL '1 day');
+  ASSERT (SELECT count(*) FROM public.beacon_abuse_flags WHERE user_id='61000000-0000-0000-0000-000000000061' AND reason='claim_teleport') = 1,
+    'T10 teleporting account was not flagged';
+  ASSERT (SELECT count(*) FROM public.beacon_abuse_flags WHERE user_id='62000000-0000-0000-0000-000000000062' AND reason='claim_teleport') = 0,
+    'T10 normal movement was wrongly flagged as teleport';
+  ASSERT (SELECT count(*) FROM public.beacon_abuse_flags WHERE user_id='63000000-0000-0000-0000-000000000063' AND reason='relay_geo') = 1,
+    'T10 relayed token (far observer) was not flagged';
+  ASSERT (SELECT count(*) FROM public.beacon_abuse_flags WHERE user_id='64000000-0000-0000-0000-000000000064' AND reason='relay_geo') = 0,
+    'T10 nearby observer was wrongly flagged as relay';
+END $$;
+
 SELECT '✅ ALL RECIPROCITY SECURITY INVARIANTS PASSED' AS result;
 ROLLBACK;

@@ -51,9 +51,23 @@
 > flag OFF. **Cutover TODO:** after client rollout, `UPDATE app_settings SET
 > value_num=1 WHERE key='enforce_batch_tokens';`.
 >
-> **Remaining #6 roadmap (not yet built):** (3) App Attest / Play Integrity around
-> token issuance + sighting submission; (4) relay-abuse detection (token fan-out,
-> geographically incompatible honest observations, unusual recurrence velocity);
+> **#6 step 4 — relay-abuse detection (0032), SHIPPED (telemetry).**
+> `scan_relay_abuse()` (periodic, decoupled from the hot path) raises two signals
+> into `beacon_abuse_flags`: `claim_teleport` (an account whose consecutive claims
+> imply impossible speed — spoofed/injected GPS) and `relay_geo` (a token observed
+> kilometres from where its owner claimed it — beyond any GPS-accuracy story, so
+> relayed). This is **telemetry, not auto-punishment**: in a forwarding relay both
+> parties are victims, so flags feed review/rate-limiting while the existing
+> distance veto still blocks the bogus encounter. Validated + harness T10
+> (teleporter and relayed-owner flagged; honest movement and nearby observers
+> not). Deployed 0032. **Wiring TODO:** schedule `scan_relay_abuse` (pg_cron or an
+> Edge Function on a timer) and build the ops review surface; decide the response
+> policy (rate-limit / batch-revoke / manual review) before any suppression.
+>
+> **Remaining #6 roadmap (needs device + platform work, not buildable here):**
+> (3) App Attest / Play Integrity around token issuance + sighting submission —
+> requires Apple/Google platform credentials, an Edge Function attestation
+> verifier (not a SQL RPC), and real devices to produce attestation tokens;
 > (5) UWB `secure_ranged` confirmation where supported.
 >
 > The SQL fixes #1/#10 and #5/#8/#13 were **validated against the local Supabase
