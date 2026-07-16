@@ -168,5 +168,55 @@ DO $$ BEGIN
     'T8 end-of-life (grace) reciprocal token did not confirm — correlate valid_from floor too tight';
 END $$;
 
+-- ============ TEST 9: server-issued token batches (#6 step 2) ============
+-- issue_token_batch mints opaque, server-owned tokens; a peer cannot claim a
+-- token the server didn't issue to them (once enforcement is on). Uses A and B
+-- from the fixtures above.
+DO $$
+DECLARE v_cnt INT; v_distinct INT; v_hexok BOOLEAN; v_first TEXT[]; v_second TEXT[];
+        v_a_tok TEXT; v_b_tok TEXT;
+BEGIN
+  PERFORM set_config('request.jwt.claims','{"sub":"a0000000-0000-0000-0000-00000000000a","role":"authenticated"}', true);
+  SELECT count(*), count(DISTINCT token), bool_and(token ~ '^[0-9a-f]{32}$')
+    INTO v_cnt, v_distinct, v_hexok FROM public.issue_token_batch(CURRENT_DATE, 15);
+  ASSERT v_cnt = 96 AND v_distinct = 96, 'T9 batch is not 96 distinct tokens';
+  ASSERT v_hexok, 'T9 batch tokens are not opaque 32-hex';
+  -- idempotent: a re-fetch returns the identical set (no churn)
+  SELECT array_agg(token ORDER BY slot) INTO v_first FROM public.issue_token_batch(CURRENT_DATE, 15);
+  SELECT array_agg(token ORDER BY slot) INTO v_second FROM public.beacon_token_batch
+    WHERE user_id='a0000000-0000-0000-0000-00000000000a' AND batch_day=CURRENT_DATE;
+  ASSERT v_first = v_second, 'T9 re-issue was not idempotent';
+
+  SELECT token INTO v_a_tok FROM public.beacon_token_batch
+    WHERE user_id='a0000000-0000-0000-0000-00000000000a' AND valid_from<=now() AND valid_until>now() LIMIT 1;
+  PERFORM set_config('request.jwt.claims','{"sub":"b0000000-0000-0000-0000-00000000000b","role":"authenticated"}', true);
+  PERFORM public.issue_token_batch(CURRENT_DATE, 15);
+  SELECT token INTO v_b_tok FROM public.beacon_token_batch
+    WHERE user_id='b0000000-0000-0000-0000-00000000000b' AND valid_from<=now() AND valid_until>now() LIMIT 1;
+
+  -- enforcement ON for the binding checks
+  UPDATE public.app_settings SET value_num=1 WHERE key='enforce_batch_tokens';
+  INSERT INTO public.app_settings (key,value_num) SELECT 'enforce_batch_tokens',1
+    WHERE NOT EXISTS (SELECT 1 FROM public.app_settings WHERE key='enforce_batch_tokens');
+
+  -- A can claim A's own issued token
+  PERFORM set_config('request.jwt.claims','{"sub":"a0000000-0000-0000-0000-00000000000a","role":"authenticated"}', true);
+  PERFORM public.claim_token(v_a_tok, now()+interval '15 min', 38.9,-76.9,'feet_10',10.0);
+  ASSERT (SELECT consumed_at IS NOT NULL FROM public.beacon_token_batch WHERE token=v_a_tok),
+    'T9 own batch token was not consumed on claim';
+
+  -- A cannot claim a self-minted (non-issued) token under enforcement
+  BEGIN
+    PERFORM public.claim_token('deadbeefdeadbeefdeadbeefdeadbeef', now()+interval '15 min',38.9,-76.9,'feet_10',10.0);
+    ASSERT false, 'T9 self-minted token accepted under enforcement';
+  EXCEPTION WHEN sqlstate '22023' THEN NULL; END;
+
+  -- A cannot claim B's issued token (not in A's batch)
+  BEGIN
+    PERFORM public.claim_token(v_b_tok, now()+interval '15 min',38.9,-76.9,'feet_10',10.0);
+    ASSERT false, 'T9 cross-user batch token accepted';
+  EXCEPTION WHEN sqlstate '22023' THEN NULL; END;
+END $$;
+
 SELECT '✅ ALL RECIPROCITY SECURITY INVARIANTS PASSED' AS result;
 ROLLBACK;
