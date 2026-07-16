@@ -88,6 +88,10 @@ END $$;
 -- ============ TEST 4: repeated reciprocal reports stay exactly one ============
 -- Recurrence lives in encounter_pairs (the durable aggregate); a repeat report
 -- within the session gap must NOT create a second encounter or bump the count.
+-- NOTE: this is SEQUENTIAL idempotency (same transaction, one call after
+-- another). The pg_advisory_xact_lock only matters under two OVERLAPPING
+-- committed transactions, which a rolled-back single-txn fixture cannot stage —
+-- that race is covered by check 3 in run_security_tests.sh.
 SELECT pg_temp.sight(:B, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', -85, 'feet_60');
 SELECT pg_temp.sight(:A, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', -60, 'feet_10');
 DO $$ BEGIN
@@ -141,6 +145,28 @@ BEGIN
   END LOOP;
 END $$;
 RESET ROLE;
+
+-- ============ TEST 8: end-of-life reciprocal token still confirms ============
+-- Regression for the rotation-boundary bug (migration 0030). Both phones observe
+-- each other in the token's 2-min grace window, so valid_until is ~1 min past but
+-- valid_from is ~16 min ago. record_sighting accepts it (valid_until grace), and
+-- correlate_encounter MUST also confirm — before 0030 its valid_from > now-15min
+-- floor silently dropped these, so the sighting stored but no encounter formed.
+INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+ ('d0000000-0000-0000-0000-00000000000d','00000000-0000-0000-0000-000000000000','authenticated','authenticated','sec_d@t.local',now(),now()),
+ ('e0000000-0000-0000-0000-00000000000e','00000000-0000-0000-0000-000000000000','authenticated','authenticated','sec_e@t.local',now(),now());
+UPDATE public.profiles SET display_name='D', dob='1990-01-01', age_verified=true, is_photo_verified=true, photo_urls=ARRAY['d.jpg'], is_paused=false, is_incognito=false WHERE id='d0000000-0000-0000-0000-00000000000d';
+UPDATE public.profiles SET display_name='E', dob='1990-01-01', age_verified=true, is_photo_verified=true, photo_urls=ARRAY['e.jpg'], is_paused=false, is_incognito=false WHERE id='e0000000-0000-0000-0000-00000000000e';
+-- both tokens in grace: valid_from 16 min ago, valid_until 1 min ago
+INSERT INTO public.token_claim_history (token,user_id,valid_from,valid_until,approx_lat,approx_lon,range_type) VALUES
+ ('d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1','d0000000-0000-0000-0000-00000000000d', now()-interval '16 min', now()-interval '1 min', 38.9,-76.9,'feet_10'),
+ ('e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1','e0000000-0000-0000-0000-00000000000e', now()-interval '16 min', now()-interval '1 min', 38.9,-76.9,'feet_10');
+SELECT pg_temp.sight('e0000000-0000-0000-0000-00000000000e', 'd1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1', -60, 'feet_10'); -- E observes D (fresh receipt)
+SELECT pg_temp.sight('d0000000-0000-0000-0000-00000000000d', 'e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1', -60, 'feet_10'); -- D observes E -> confirm
+DO $$ BEGIN
+  ASSERT pg_temp.enc_count('d0000000-0000-0000-0000-00000000000d','e0000000-0000-0000-0000-00000000000e') = 1,
+    'T8 end-of-life (grace) reciprocal token did not confirm — correlate valid_from floor too tight';
+END $$;
 
 SELECT '✅ ALL RECIPROCITY SECURITY INVARIANTS PASSED' AS result;
 ROLLBACK;

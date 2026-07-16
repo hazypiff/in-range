@@ -2,8 +2,9 @@
 
 > ## Fix status (2026-07-16, Android/laptop side)
 >
-> **All 24 addressed and deployed to production** (migrations 0020–0029 live on
-> `riigipzlyqeaadyvbuty`, verified). #6 is closed to its practical limit for now:
+> **All 24 addressed and deployed to production** (migrations 0020–0030 live on
+> `riigipzlyqeaadyvbuty`, verified; 0030 is a post-review rotation-boundary fix,
+> see below). #6 is closed to its practical limit for now:
 >
 > **#6 step 1 — reciprocal confirmation (0029), SHIPPED + DB-validated + deployed.**
 > A cloud encounter + recurrence is created ONLY when both phones independently
@@ -19,6 +20,18 @@
 > **Honest limitation:** this stops today's cheap remote-API forgery; it is NOT
 > relay-proof — a relay forwarding BOTH tokens still makes both phones report.
 > True relay resistance needs secure distance ranging (UWB / `secure_ranged`).
+>
+> **Post-review follow-up — rotation-boundary bug (migration 0030, deployed).**
+> A verification pass over #5/#6 found that `correlate_encounter` used a
+> `valid_from > now - LEAST(30, window)` floor (15 min for feet), while
+> `record_sighting` accepts a token through its 2-minute grace. A grace-valid
+> token can have `valid_from` up to ~23 min ago (≤21-min life + grace), so the
+> last stretch of every token's life was **stored but never confirmed** — honest
+> reciprocal encounters at token rotation silently dropped. Reproduced
+> transactionally (end-of-life reciprocal pair → sighting stored, 0 encounters),
+> fixed by flooring the `valid_from` window at 25 min (`valid_until` grace + the
+> reciprocity server-receipt window remain the real gates — not a security
+> relaxation), and locked in by test T8. Deployed to prod and ledgered as 0030.
 >
 > **Remaining #6 roadmap (not yet built):** (2) server-issued daily token batches
 > to replace the shared client HMAC without losing offline scanning; (3) App
