@@ -1,5 +1,10 @@
 # Adversarial correctness and design review — In Range
 
+> **Partner picking up the remaining #6 work:** start at
+> [`docs/SECURITY_HANDOFF.md`](SECURITY_HANDOFF.md) — executable tasks (enforcement
+> cutover, relay-abuse response, App Attest/Play Integrity, UWB), ground rules, and
+> a file map.
+
 > ## Fix status (2026-07-16, Android/laptop side)
 >
 > **All 24 addressed and deployed to production** (migrations 0020–0030 live on
@@ -60,9 +65,10 @@
 > parties are victims, so flags feed review/rate-limiting while the existing
 > distance veto still blocks the bogus encounter. Validated + harness T10
 > (teleporter and relayed-owner flagged; honest movement and nearby observers
-> not). Deployed 0032. **Wiring TODO:** schedule `scan_relay_abuse` (pg_cron or an
-> Edge Function on a timer) and build the ops review surface; decide the response
-> policy (rate-limit / batch-revoke / manual review) before any suppression.
+> not). Deployed 0032, and scheduled via pg_cron (`relay-abuse-scan`, every 15
+> min — `supabase/ops/schedule_relay_abuse_scan.sql`), so telemetry now
+> accumulates live. **Remaining:** ops review surface + response policy
+> (rate-limit / batch-revoke / manual review) — see the handoff, Task B.
 >
 > **Remaining #6 roadmap (needs device + platform work, not buildable here):**
 > (3) App Attest / Play Integrity around token issuance + sighting submission —
