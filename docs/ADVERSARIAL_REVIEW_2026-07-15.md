@@ -2,9 +2,30 @@
 
 > ## Fix status (2026-07-16, Android/laptop side)
 >
-> **23 of 24 fixed and pushed to `inrangeai`.** Only #6 (forgeable one-way
-> encounters) remains — it is a product/matching-semantics decision (reciprocal
-> observation vs instant one-way encounters), deliberately left for that call.
+> **All 24 addressed and deployed to production** (migrations 0020–0029 live on
+> `riigipzlyqeaadyvbuty`, verified). #6 is closed to its practical limit for now:
+>
+> **#6 step 1 — reciprocal confirmation (0029), SHIPPED + DB-validated + deployed.**
+> A cloud encounter + recurrence is created ONLY when both phones independently
+> observed each other within a ~3-minute window measured by **server receipt
+> time** (`sightings.received_at`), not the caller-controlled RSSI/GPS/time.
+> One-way sightings stay anonymous local cards (client, unchanged) and short-lived
+> server evidence — no identity reveal, notification, ranking, or recurrence.
+> Displayed band = the **wider** of the two directions (a malicious side can't
+> claim feet_10 when the honest phone saw a weak signal). New encounters carry
+> `trust_level = 'mutual_ble'`. Validated: one-way rejected, stale-reverse
+> rejected, reciprocal confirmed at feet_60, recurrence only on mutual.
+>
+> **Honest limitation:** this stops today's cheap remote-API forgery; it is NOT
+> relay-proof — a relay forwarding BOTH tokens still makes both phones report.
+> True relay resistance needs secure distance ranging (UWB / `secure_ranged`).
+>
+> **Remaining #6 roadmap (not yet built):** (2) server-issued daily token batches
+> to replace the shared client HMAC without losing offline scanning; (3) App
+> Attest / Play Integrity around token issuance + sighting submission; (4)
+> relay-abuse detection (token fan-out, geographically incompatible honest
+> observations, unusual recurrence velocity); (5) UWB `secure_ranged` confirmation
+> where supported.
 >
 > The SQL fixes #1/#10 and #5/#8/#13 were **validated against the local Supabase
 > Postgres container** (`supabase_db_in-range`): migrations 0020–0028 apply
