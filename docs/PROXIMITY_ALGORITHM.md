@@ -330,3 +330,37 @@ venue provider.
 - **Android ↔ Android:** full WiFi fingerprint venue (§3) — richest.
 - **iPhone ↔ Android:** connected-BSSID match (+ optional audio) venue; BLE-primary.
 - **iPhone ↔ iPhone:** connected-BSSID match (+ optional audio); UWB Close By where both have U1.
+
+### 7.1 Connected-network matching — robustness rules
+
+Reading the *connected* AP (§7 rank 1) has two failure modes that must be handled
+or it will silently mis-decide:
+
+- **Dual-band split (false negative).** A dual-band AP has a **different BSSID on
+  2.4 GHz vs 5 GHz**, so two phones together but on different bands get different
+  BSSIDs. Fix: match **SSID** (band- and AP-independent) for "same network / same
+  venue," and treat **BSSID** as a tighter "same radio" bonus on top. Enterprise
+  and mesh venues (many APs, one SSID) are handled the same way — SSID is the
+  venue key, BSSID the room-ish refinement.
+- **Generic SSID (false positive).** `xfinitywifi` / `attwifi` / `Guest` repeat
+  city-wide, so an SSID match alone can be meaningless. This is already
+  neutralized by **L0 (GPS veto)**: cross-area pairs are dropped before venue is
+  considered, so "same generic SSID **and** GPS says local" is legitimate
+  same-venue evidence. The layers compose — venue never runs without the veto.
+
+**Decision (both platforms):**
+```
+same physical AP (BSSID match)                       → strong same-venue
+same SSID, GPS-local, BSSID differs                  → moderate same-venue
+both on WiFi, neither matches (big venue / band split)→ NEUTRAL — fall to BLE+audio
+not on WiFi / different networks                      → NEUTRAL — fall to BLE+audio
+```
+A venue **mismatch is never a "different place" veto** — only a *match* is
+positive evidence; absence falls through to the BLE (+audio) distance signal,
+exactly as §5b treats a null venue term.
+
+**Battery bonus:** the connected BSSID/SSID is a single property read, far cheaper
+than a full scan. So on **Android too**, connected-network matching can be the
+cheap always-on venue key, with the expensive full fingerprint (§3) run only when
+the connected AP is ambiguous — a constraint that improves the Android power path,
+not just an iOS workaround.
