@@ -100,6 +100,20 @@ class _BeaconScreenState extends ConsumerState<BeaconScreen> {
             incognito: safety.incognito,
             boost: safety.boostActive,
           ),
+          if (state.isOn && !state.discoverable) ...[
+            const SizedBox(height: 12),
+            Card(
+              color: Theme.of(context).colorScheme.tertiaryContainer,
+              child: const ListTile(
+                leading: Icon(Icons.wifi_find_outlined),
+                title: Text('Scanning only — not discoverable'),
+                subtitle: Text(
+                  'This device finds and logs nearby beacons, but cannot yet '
+                  'be discovered by others (iOS advertising pending).',
+                ),
+              ),
+            ),
+          ],
           const SizedBox(height: 12),
           if (newCount > 0 || pending > 0)
             Card(

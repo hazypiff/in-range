@@ -34,10 +34,17 @@ class PermissionService {
     if (Platform.isIOS) {
       final bt = await Permission.bluetooth.request();
       debugPrint('PERM iOS bluetooth: $bt');
-      // isPermanentlyDenied only if the user explicitly refused; otherwise
-      // (granted / not-yet-determined) let the beacon proceed and let the
-      // CoreBluetooth manager surface any real block.
-      return !bt.isPermanentlyDenied;
+      // `restricted` = Bluetooth blocked by MDM / Screen Time / parental
+      // controls (distinct from user denial). It would pass a
+      // !isPermanentlyDenied check and then fail cryptically inside
+      // CoreBluetooth, so reject it explicitly (P2, hazypiff review
+      // 2026-07-16). Plain `denied` can be a transient pre-CBManager state on
+      // iOS, so keep letting that through — CoreBluetooth surfaces any real
+      // block — but a hard user/MDM refusal is rejected here.
+      if (bt.isPermanentlyDenied || bt.isRestricted) {
+        return false;
+      }
+      return true;
     }
 
     // Android 12+ BLE "nearby devices" permissions. On API 31+ the app CANNOT

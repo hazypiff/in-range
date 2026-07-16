@@ -85,6 +85,12 @@ class BeaconService {
   bool _cloudClaimed = false;
   bool get cloudClaimed => _cloudClaimed;
 
+  /// False while the platform can't broadcast the token (iOS scan-only): the
+  /// beacon scans + logs but peers can't discover this device. Drives the
+  /// "scanning only" UI so we never claim false discoverability (reviewer #2).
+  bool _discoverable = true;
+  bool get discoverable => _discoverable;
+
   EphemeralToken? _currentToken;
   EphemeralToken? get currentToken => _currentToken;
 
@@ -228,17 +234,21 @@ class BeaconService {
     _advTick = 0;
     _advPower = AdvertPower.high;
     _advPowerTimer?.cancel();
-    _advPowerTimer = Timer.periodic(const Duration(seconds: 10), (_) {
-      if (!_isOn) return;
-      _advTick = (_advTick + 1) % 3;
-      final next = _advTick == 2 ? AdvertPower.medium : AdvertPower.high;
-      if (next != _advPower) {
-        _advPower = next;
-        unawaited(_startAdvertising().catchError((Object e) {
-          debugPrint('Power-slot advertise restart failed: $e');
-        }));
-      }
-    });
+    // No advertiser to power-cycle in iOS scan-only mode; iOS also has no
+    // CBPeripheralManager TX-power control, so this timer is a no-op there.
+    if (_discoverable) {
+      _advPowerTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+        if (!_isOn) return;
+        _advTick = (_advTick + 1) % 3;
+        final next = _advTick == 2 ? AdvertPower.medium : AdvertPower.high;
+        if (next != _advPower) {
+          _advPower = next;
+          unawaited(_startAdvertising().catchError((Object e) {
+            debugPrint('Power-slot advertise restart failed: $e');
+          }));
+        }
+      });
+    }
     // Zombie-scanner watchdog. Silence usually means the user is simply
     // alone — NOT a broken scanner — so this is a slow safety net, not a
     // health probe: one restart per 15 silent minutes at most (audit
@@ -444,17 +454,20 @@ class BeaconService {
       throw StateError('No beacon token is available');
     }
 
-    // FAIL CLOSED on iOS: the pinned flutter_ble_peripheral Darwin bridge
-    // forwards only serviceUuid/localName, never manufacturerData, so an
-    // iPhone would advertise an EMPTY packet and no peer could recover the
-    // 16-byte id — yet the call "succeeds" and the UI would say "findable"
-    // (reviewer #2). Until an iOS-supported carrier (service UUID / iBeacon)
-    // ships and is device-tested, refuse rather than lie about discoverability.
+    // iOS SCAN-ONLY (approved 2026-07-16, docs/IOS_CARRIER_DECISION_2026-07-16):
+    // the pinned flutter_ble_peripheral Darwin bridge forwards only
+    // serviceUuid/localName, never manufacturerData, so an iPhone can't carry
+    // the 16-byte token — advertising would emit an EMPTY packet. Rather than
+    // fail the whole beacon (which also killed scanning), skip advertising and
+    // mark the device non-discoverable. The UI must show "scanning only" so we
+    // never lie about discoverability (reviewer #2). iPhone still scans + logs
+    // RSSI — this is what enables the S9 → iPhone calibration curve.
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
-      throw StateError(
-          'iOS beacon advertising is not yet supported — peers cannot discover '
-          'this device. (Tracked: iOS token carrier not implemented.)');
+      _discoverable = false;
+      debugPrint('iOS scan-only: advertising skipped, device not discoverable.');
+      return;
     }
+    _discoverable = true;
 
     final peripheral = FlutterBlePeripheral();
     // Legacy payload: mfg id + 16-byte corr + 1 flag byte (fits 31-byte AD).

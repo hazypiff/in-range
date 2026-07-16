@@ -81,20 +81,27 @@ class BeaconState {
     this.isOn = false,
     this.tokenExpiresAt,
     this.cloudSynced,
+    this.discoverable = true,
   });
   final bool isOn;
   final DateTime? tokenExpiresAt;
   final bool? cloudSynced;
 
+  /// False when the beacon is scanning but can't advertise (iOS scan-only) —
+  /// peers can't discover this device. UI shows "scanning only".
+  final bool discoverable;
+
   BeaconState copyWith({
     bool? isOn,
     DateTime? tokenExpiresAt,
     bool? cloudSynced,
+    bool? discoverable,
   }) =>
       BeaconState(
         isOn: isOn ?? this.isOn,
         tokenExpiresAt: tokenExpiresAt ?? this.tokenExpiresAt,
         cloudSynced: cloudSynced ?? this.cloudSynced,
+        discoverable: discoverable ?? this.discoverable,
       );
 }
 
@@ -115,6 +122,7 @@ class BeaconController extends StateNotifier<BeaconState> {
         isOn: true,
         tokenExpiresAt: expiresAt ?? state.tokenExpiresAt,
         cloudSynced: cloudSynced,
+        discoverable: state.discoverable,
       );
     };
   }
@@ -152,6 +160,7 @@ class BeaconController extends StateNotifier<BeaconState> {
           isOn: true,
           tokenExpiresAt: _service.currentToken?.expiresAt,
           cloudSynced: AppConfig.hasRealSupabase ? _service.cloudClaimed : null,
+          discoverable: _service.discoverable,
         );
       } catch (e) {
         debugPrint('turnOnBeacon failed: $e');
