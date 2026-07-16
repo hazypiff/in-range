@@ -193,4 +193,77 @@ void main() {
           'Same Venue');
     });
   });
+
+  group('ProximityFusion — confidence weighting', () {
+    VenueScore venue(double score, {int aps = 10}) => VenueScore(
+          score: score,
+          jaccard: score,
+          sorensen: score,
+          sharedAps: aps,
+          totalAps: aps,
+        );
+    const solid = ProximityEvidence(bleSampleCount: 40, dwellSeconds: 60);
+    const thin = ProximityEvidence(bleSampleCount: 2, dwellSeconds: 3);
+
+    test('no signal is zero confidence', () {
+      expect(ProximityFusion.fuse(bleBand: 'none', venue: null).confidence, 0);
+    });
+
+    test('more BLE evidence => higher confidence', () {
+      final a =
+          ProximityFusion.fuse(bleBand: 'feet_10', venue: null, evidence: thin);
+      final b = ProximityFusion.fuse(
+          bleBand: 'feet_10', venue: null, evidence: solid);
+      expect(b.confidence, greaterThan(a.confidence));
+    });
+
+    test('WiFi agreement raises confidence above BLE-alone', () {
+      // Moderate BLE evidence leaves headroom; solid BLE alone already maxes
+      // out (strong BLE is self-sufficient), so WiFi can only add when BLE is
+      // less than certain — which is exactly when the second radio matters.
+      const moderate = ProximityEvidence(bleSampleCount: 10, dwellSeconds: 15);
+      final alone =
+          ProximityFusion.fuse(bleBand: 'feet_10', evidence: moderate);
+      final agree = ProximityFusion.fuse(
+          bleBand: 'feet_10', venue: venue(0.8), evidence: moderate);
+      expect(agree.confidence, greaterThan(alone.confidence));
+    });
+
+    test('solid BLE alone is already high confidence (self-sufficient)', () {
+      final c = ProximityFusion.fuse(bleBand: 'feet_10', evidence: solid);
+      expect(c.isHighConfidence, isTrue);
+    });
+
+    test('WiFi conflict (close BLE, different place) slashes confidence', () {
+      // The relay/error smell: BLE says arm's length, WiFi says different
+      // building. Confidence must drop hard.
+      final conflict = ProximityFusion.fuse(
+          bleBand: 'feet_10', venue: venue(0.05), evidence: solid);
+      final neutral = ProximityFusion.fuse(bleBand: 'feet_10', evidence: solid);
+      expect(conflict.confidence, lessThan(neutral.confidence * 0.7));
+    });
+
+    test('GPS/coarse cannot raise confidence — WiFi abstention is neutral', () {
+      final abstain = ProximityFusion.fuse(
+          bleBand: 'feet_10',
+          venue: venue(0.0, aps: 1), // unknown
+          evidence: solid);
+      final none = ProximityFusion.fuse(bleBand: 'feet_10', evidence: solid);
+      expect(abstain.confidence, none.confidence);
+    });
+
+    test('in-range + different place AGREES (both say far) — no penalty', () {
+      final far = ProximityFusion.fuse(
+          bleBand: 'feet_60', venue: venue(0.05), evidence: solid);
+      final neutral =
+          ProximityFusion.fuse(bleBand: 'feet_60', evidence: solid);
+      expect(far.confidence, greaterThanOrEqualTo(neutral.confidence));
+    });
+
+    test('same-venue-only (BLE silent) is capped moderate', () {
+      final c = ProximityFusion.fuse(bleBand: 'none', venue: venue(0.9));
+      expect(c.confidence, lessThan(0.75));
+      expect(c.confidence, greaterThan(0.0));
+    });
+  });
 }

@@ -1,5 +1,7 @@
 import 'dart:collection';
 
+import 'package:in_range/features/beacon/venue_matcher.dart';
+
 /// Which transmit-power slot a received advert was sent in.
 ///
 /// The beacon alternates high/medium TX power and stamps the level into the
@@ -87,6 +89,29 @@ class RangeEstimator {
         track.samples.where((s) => s.power == AdvertPower.medium).length;
     if (mediumCount >= midMinMediumSamples) return 'feet_30';
     return 'feet_60';
+  }
+
+  /// Sample volume + dwell behind this peer's current classification — the
+  /// evidence the fusion layer weights confidence by. Counts high-power
+  /// samples in the live window (the ones the tier decision rests on).
+  ProximityEvidence evidenceFor(String correlationId) {
+    final track = _peers[correlationId];
+    if (track == null) {
+      return const ProximityEvidence(bleSampleCount: 0, dwellSeconds: 0);
+    }
+    _prune(track, _now());
+    final high =
+        track.samples.where((s) => s.power == AdvertPower.high).toList();
+    int? median;
+    if (high.isNotEmpty) {
+      final r = high.map((s) => s.rssi).toList()..sort();
+      median = r[r.length ~/ 2];
+    }
+    return ProximityEvidence(
+      bleSampleCount: high.length,
+      dwellSeconds: nearDwell(correlationId).inSeconds,
+      medianRssi: median,
+    );
   }
 
   /// Cumulative time this peer has held the feet_10 band (session-scoped).

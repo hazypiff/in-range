@@ -179,13 +179,45 @@ class VenueMatcher {
   }
 }
 
-/// The fusion table from docs/PROXIMITY_ALGORITHM.md §5.
+/// How much evidence stood behind the BLE tier — the volume that turns a
+/// classification into a *confident* one. Null for rows without live data
+/// (e.g. server-hydrated cards), which fall back to a tier-only confidence.
+class ProximityEvidence {
+  const ProximityEvidence({
+    required this.bleSampleCount,
+    required this.dwellSeconds,
+    this.medianRssi,
+  });
+
+  final int bleSampleCount;
+  final int dwellSeconds;
+  final int? medianRssi;
+
+  /// Enough samples to trust the median rather than a lucky spike.
+  static const int solidSamples = 20;
+
+  /// Dwell at which a tier is fully "earned" (matches the 30 s dwell rule).
+  static const int solidDwellSeconds = 30;
+}
+
+/// Fuse the radios into a proximity tier AND a confidence in it.
 ///
-/// WiFi's job is to resolve BLE's ambiguity, never to overrule it:
-/// a weak BLE signal means "far" OR "close but blocked", and only a second
-/// radio can tell those apart. The row that earns this whole layer is
-/// `feet_60 + same_venue -> blocked, not far` — the crowded-bar case that
-/// BLE alone gets wrong every time.
+/// The weighting principle — the whole point of the arrangement — is that
+/// each radio only carries weight on the question it is actually good at:
+///
+///   * BLE is the distance backbone. Its evidence (median RSSI, sample count,
+///     dwell) SETS the tier and the base confidence. Nothing else can assert
+///     "close".
+///   * WiFi CORROBORATES placement; it never sets distance. Agreement raises
+///     confidence; a conflict (BLE says close, WiFi says different building)
+///     lowers it — that pattern smells like a relay or a bad reading. Its one
+///     decisive power is the blocked-vs-far case (feet_60 + same venue).
+///   * GPS is a pure veto (applied server-side): implausible pairs are dropped
+///     before they get here, so it contributes ZERO positive confidence. A
+///     coarse radio must not be allowed to make anything look more certain.
+///
+/// Weights below are provisional — the starting point for the fusion research
+/// and walk-#4 data to refine, not final constants.
 class ProximityFusion {
   static const String veryClose = 'very_close'; // BLE feet_10
   static const String near = 'near'; // BLE feet_30, or blocked-in-venue
@@ -193,49 +225,127 @@ class ProximityFusion {
   static const String sameVenue = 'same_venue'; // WiFi only, BLE silent
   static const String none = 'none';
 
+  // Corroboration weights: how far a WiFi verdict can move confidence.
+  static const double _wifiAgreeBoost = 0.4; // toward 1.0 when WiFi agrees
+  static const double _wifiConflictPenalty = 0.5; // ×0.5 when WiFi conflicts
+
   /// [bleBand] is the RangeEstimator verdict; [venue] may be null when WiFi
-  /// has nothing to say (no scan yet, or too few APs).
+  /// has nothing to say; [evidence] carries the BLE sample volume/dwell.
   static FusedProximity fuse({
     required String bleBand,
     VenueScore? venue,
+    ProximityEvidence? evidence,
   }) {
     final v = venue;
-    final venueSaysSame =
-        v != null && !v.isUnknown && v.verdict == 'same_venue';
+    final venueVerdict = (v == null || v.isUnknown) ? null : v.verdict;
+    final venueSaysSame = venueVerdict == 'same_venue';
+    final venueSaysDifferent = venueVerdict == 'different_place';
+
+    String proximity;
+    String reason;
+    // Does WiFi corroborate, conflict with, or abstain from the BLE tier?
+    // +1 agree, -1 conflict, 0 abstain.
+    int corroboration;
 
     switch (bleBand) {
       case 'feet_10':
-        // Strong BLE is self-sufficient; nothing can counterfeit it.
-        return FusedProximity(veryClose, bleBand, v, 'strong BLE');
+        proximity = veryClose;
+        reason = 'strong BLE';
+        // Close by BLE but far apart by WiFi => contradictory (relay/error).
+        corroboration = venueSaysSame ? 1 : (venueSaysDifferent ? -1 : 0);
+        break;
       case 'feet_20':
       case 'feet_30':
-        return FusedProximity(near, bleBand, v, 'BLE medium-power slot');
+        proximity = near;
+        reason = 'BLE medium-power slot';
+        corroboration = venueSaysSame ? 1 : (venueSaysDifferent ? -1 : 0);
+        break;
       case 'feet_60':
         if (venueSaysSame) {
-          // The row this layer exists for: in radio range AND demonstrably in
-          // the same room => the weak signal is a body in the path, not distance.
-          return FusedProximity(
-              near, bleBand, v, 'BLE in range + same venue => blocked, not far');
+          proximity = near;
+          reason = 'BLE in range + same venue => blocked, not far';
+          corroboration = 1;
+        } else {
+          proximity = inRange;
+          reason = 'BLE presence only';
+          // "In range" + "different place" is consistent (genuinely far),
+          // so a different-place verdict AGREES here rather than conflicts.
+          corroboration = venueSaysDifferent ? 1 : 0;
         }
-        return FusedProximity(inRange, bleBand, v, 'BLE presence only');
+        break;
       default:
-        // BLE silent.
         if (venueSaysSame) {
-          return FusedProximity(
-              sameVenue, bleBand, v, 'WiFi same venue, BLE silent');
+          proximity = sameVenue;
+          reason = 'WiFi same venue, BLE silent';
+          corroboration = 0; // WiFi alone; no BLE to corroborate
+        } else {
+          proximity = none;
+          reason = 'no signal';
+          corroboration = 0;
         }
-        return FusedProximity(none, bleBand, v, 'no signal');
     }
+
+    final confidence =
+        _confidence(proximity, corroboration, evidence, hasWifi: v != null);
+    return FusedProximity(proximity, bleBand, v, reason, confidence);
+  }
+
+  static double _confidence(
+    String proximity,
+    int corroboration,
+    ProximityEvidence? evidence, {
+    required bool hasWifi,
+  }) {
+    if (proximity == none) return 0;
+
+    // Base confidence from BLE evidence volume. Without evidence (server
+    // cards), a tier that fired at all gets a neutral 0.6.
+    double base;
+    if (evidence == null) {
+      base = proximity == sameVenue ? 0.55 : 0.6;
+    } else if (proximity == sameVenue) {
+      // Comes from WiFi alone (BLE silent) — cap it: venue co-location is
+      // ~94% indoors but carries no distance corroboration here.
+      base = 0.55;
+    } else {
+      final vol = (evidence.bleSampleCount / ProximityEvidence.solidSamples)
+          .clamp(0.0, 1.0);
+      final dwell = (evidence.dwellSeconds / ProximityEvidence.solidDwellSeconds)
+          .clamp(0.0, 1.0);
+      // Floor 0.4 for firing at all, then earn the rest from volume + dwell.
+      base = (0.4 + 0.3 * vol + 0.3 * dwell).clamp(0.0, 1.0);
+    }
+
+    // WiFi corroboration modulates — but only when WiFi actually weighed in.
+    if (corroboration > 0) {
+      base = base + (1.0 - base) * _wifiAgreeBoost;
+    } else if (corroboration < 0) {
+      base = base * _wifiConflictPenalty;
+    }
+    return double.parse(base.clamp(0.0, 1.0).toStringAsFixed(3));
   }
 }
 
 class FusedProximity {
-  const FusedProximity(this.proximity, this.bleBand, this.venue, this.reason);
+  const FusedProximity(
+    this.proximity,
+    this.bleBand,
+    this.venue,
+    this.reason, [
+    this.confidence = 0.6,
+  ]);
 
   final String proximity;
   final String bleBand;
   final VenueScore? venue;
   final String reason;
+
+  /// 0…1 — how much the weighted evidence backs this tier. Drives whether an
+  /// alert fires (a trustworthy Close By beats a fast one) and how the UI
+  /// hedges ("Close By" vs "probably Close By").
+  final double confidence;
+
+  bool get isHighConfidence => confidence >= 0.75;
 
   String get label {
     switch (proximity) {
@@ -253,5 +363,7 @@ class FusedProximity {
   }
 
   @override
-  String toString() => '$proximity (ble=$bleBand, venue=${venue ?? "n/a"}) — $reason';
+  String toString() =>
+      '$proximity conf=${confidence.toStringAsFixed(2)} '
+      '(ble=$bleBand, venue=${venue ?? "n/a"}) — $reason';
 }

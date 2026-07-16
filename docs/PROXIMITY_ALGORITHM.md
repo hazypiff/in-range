@@ -228,3 +228,26 @@ scan steals airtime from BLE. Hence:
 | WiFi venue score + fusion table | **Spec'd here, not built** |
 | GPS gate widening | **Spec'd here, not built** |
 | WiFi Aware / RTT true ranging, UWB | Opportunistic upgrades — architect for, don't depend on |
+
+## 5b. Confidence weighting — give weight to what actually matters
+
+The fusion table (§5) picks a *tier*; this layer says how much to *trust* it,
+by weighting each radio only on the question it's actually good at.
+
+- **BLE is the distance backbone.** Its evidence — windowed median RSSI, sample
+  count, dwell — sets the tier and the base confidence. Nothing else can assert
+  "close". Base = `0.4 + 0.3·(samples/20) + 0.3·(dwell/30s)`, so a tier earns
+  confidence by being *seen a lot, for a while*, not by one lucky packet. Solid
+  BLE alone reaches ~1.0 — strong BLE is self-sufficient.
+- **WiFi corroborates placement; it never sets distance.** Agreement lifts
+  confidence toward 1 (`+0.4·headroom`); a *conflict* — BLE says arm's length,
+  WiFi says different building — halves it, because that pattern smells like a
+  relay or a bad reading. Its one decisive power is the blocked-vs-far row.
+- **GPS is a pure veto.** Implausible pairs are dropped server-side before
+  fusion, so GPS contributes **zero positive confidence**. A coarse radio must
+  never be allowed to make anything look more certain than the fine radios do.
+
+Output: `FusedProximity.confidence ∈ [0,1]`. Drives whether a Close By alert
+fires (a trustworthy alert beats a fast one) and how the UI hedges. Weights are
+provisional — walk #4 and the fusion research refine them; the *structure*
+(BLE sets, WiFi modulates, GPS vetoes) is the durable part.
