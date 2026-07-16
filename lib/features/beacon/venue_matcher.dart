@@ -240,13 +240,13 @@ class FusedProximity {
   String get label {
     switch (proximity) {
       case ProximityFusion.veryClose:
-        return 'Very close';
+        return 'Close By';
       case ProximityFusion.near:
-        return 'Near';
+        return 'Near By';
       case ProximityFusion.inRange:
-        return 'In range';
+        return 'In Range';
       case ProximityFusion.sameVenue:
-        return 'Same venue';
+        return 'Same Venue';
       default:
         return 'Nearby';
     }

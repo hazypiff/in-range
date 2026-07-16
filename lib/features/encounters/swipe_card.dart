@@ -16,6 +16,9 @@ class SwipeCard {
     this.expiresAt,
     this.bestRssi,
     this.local,
+    this.sessionCount = 1,
+    this.distinctDayCount = 1,
+    this.firstSeenAt,
   });
 
   /// Dismiss / swipe key: server encounter_id as string, or local corr-id.
@@ -31,7 +34,25 @@ class SwipeCard {
   final int? bestRssi;
   final LocalEncounter? local;
 
+  /// Recurrence (server only): how many distinct times you've crossed paths.
+  final int sessionCount;
+  final int distinctDayCount;
+  final DateTime? firstSeenAt;
+
   bool get isFeet => rangeType.startsWith('feet');
+
+  /// A face you keep running into. Familiarity is one of the strongest
+  /// signals a proximity app has — surface it, and rank it higher.
+  bool get isRecurring => sessionCount > 1;
+
+  /// Short human phrase for the recurrence, or null when it's a first meeting.
+  String? get recurrenceLabel {
+    if (sessionCount <= 1) return null;
+    if (distinctDayCount > 1) {
+      return 'Crossed paths $sessionCount times · $distinctDayCount days';
+    }
+    return 'Crossed paths $sessionCount times';
+  }
 
   Duration get timeRemaining {
     final exp = expiresAt;
@@ -81,6 +102,9 @@ class SwipeCard {
       otherUserId: row['other_user_id']?.toString(),
       encounterTime: et,
       expiresAt: exp,
+      sessionCount: (row['session_count'] as int?) ?? 1,
+      distinctDayCount: (row['distinct_day_count'] as int?) ?? 1,
+      firstSeenAt: DateTime.tryParse(row['first_seen_at']?.toString() ?? ''),
     );
   }
 

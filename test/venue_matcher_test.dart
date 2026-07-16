@@ -186,11 +186,11 @@ void main() {
 
     test('labels are qualitative, never fake feet', () {
       expect(ProximityFusion.fuse(bleBand: 'feet_10', venue: null).label,
-          'Very close');
+          'Close By');
       expect(ProximityFusion.fuse(bleBand: 'feet_60', venue: null).label,
-          'In range');
+          'In Range');
       expect(ProximityFusion.fuse(bleBand: 'none', venue: venue(0.9)).label,
-          'Same venue');
+          'Same Venue');
     });
   });
 }

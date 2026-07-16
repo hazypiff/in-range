@@ -158,18 +158,19 @@ class RangeEstimator {
   void clear() => _peers.clear();
 }
 
-/// User-facing band labels — deliberately qualitative until the middle
-/// tier is field-calibrated (walk #4). The S9 data supports "very close"
-/// and "in range" with confidence; exact-feet claims would overpromise.
+/// User-facing product tiers (docs/PROXIMITY_TIERS.md). Deliberately
+/// qualitative until the middle tier is field-calibrated (walk #4). The S9
+/// data supports "Close By" and "In Range" with confidence; exact-feet
+/// claims would overpromise past ~15 ft, where RSSI goes flat.
 String rangeBandLabel(String band) {
   switch (band) {
     case 'feet_10':
-      return 'Very close';
+      return 'Close By';
     case 'feet_20':
     case 'feet_30':
-      return 'Near';
+      return 'Near By';
     case 'feet_60':
-      return 'In range';
+      return 'In Range';
     default:
       return 'Nearby';
   }
