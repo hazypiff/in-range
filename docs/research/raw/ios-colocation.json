@@ -1,0 +1,295 @@
+{
+ "question": "Mitigating iOS's WiFi-scanning restriction for a smartphone proximity / co-location app. Problem: our Android app (In Range) uses WiFi AP-scan fingerprints (list of nearby BSSIDs + RSSI) to decide \"same room / same venue\" as a second proximity signal fused with BLE and GPS. iOS FORBIDS third-party apps from scanning nearby WiFi networks (no equivalent of Android WifiManager.getScanResults; needs the NEHotspotHelper entitlement which Apple grants almost exclusively to captive-portal/hotspot vendors). We need every viable way to recover the \"same venue / co-location\" signal on iPhone, and cross-platform iPhone<->Android. Research, with current (2024-2026) API status, entitlement requirements, accuracy, and device support: (1) CNCopyCurrentNetworkInfo / NEHotspotNetwork.fetchCurrent \u2014 can an iOS app read the BSSID/SSID of the currently CONNECTED WiFi network (with location permission / entitlement), and does matching two phones' connected-BSSID give a valid 'same network => same venue' signal? exact entitlements, iOS 13/14/15/16/17 changes, what breaks it; (2) Apple Multipeer Connectivity framework \u2014 peer-to-peer discovery over WiFi/Bluetooth/AWDL for direct co-presence detection between two iPhones (and can it interoperate with Android? AWDL is Apple-only); accuracy as a 'near each other' signal, background limitations, power; (3) NearbyInteraction + U1/U2 UWB (iPhone 11+) \u2014 centimeter ranging and direction for the close tier; can it interoperate with Android UWB (androidx.core.uwb) cross-platform, is there a common spec (FiRa / Channel Sounding), Apple's third-party UWB accessory protocol, device support matrix, background/foreground limits; (4) Core Location beacon ranging (CLBeacon / iBeacon) \u2014 one phone advertises iBeacon (needs an Android advertiser since iOS can't advertise iBeacon in background), the other ranges CLProximity (immediate/near/far) + accuracy meters \u2014 as a BLE-distance substitute that iOS actually supports well; (5) Google Nearby Connections / Nearby (cross-platform iOS+Android P2P) \u2014 does it give proximity/co-location, what radios, accuracy, offline; (6) Google/Apple Exposure Notification precedent \u2014 how did the cross-platform contact-tracing system achieve co-location on iOS without WiFi scanning (BLE only), and what does that imply for us; (7) any other iOS co-location signals: barometer/altitude pressure matching for same-floor, ambient audio fingerprinting, motion/activity correlation, magnetometer fingerprinting; (8) architecture recommendation: given WiFi fingerprinting is Android-only, how should the fusion degrade gracefully on iOS \u2014 which substitute(s) give the best 'same venue' + 'blocked vs far' disambiguation on iPhone, and what is the recommended cross-platform stack (what works iPhone<->iPhone vs iPhone<->Android vs Android<->Android). Conclusion needed: a ranked, concrete mitigation plan for the iOS WiFi gap \u2014 the single best substitute for 'same venue' co-location on iPhone, the best cross-platform proximity signal, exact entitlements/permissions each needs, and how the BLE-primary/WiFi-corroborator/GPS-veto fusion should adapt per-platform.",
+ "summary": "The single best substitute for the Android-only WiFi AP-scan \"same venue\" signal on iPhone is reading the CONNECTED network's BSSID via NEHotspotNetwork.fetchCurrent: iOS 14+ exposes the connected SSID/BSSID (no NEHotspotHelper needed) to any app holding the freely-available com.apple.developer.networking.wifi-info entitlement plus precise Core Location authorization, and matching two phones' connected-BSSID is a valid (if coarser) \"same AP => same venue\" corroborator that works iPhone<->iPhone and iPhone<->Android (Android reads its connected BSSID too). For the general cross-platform proximity/co-presence signal, BLE RSSI is the validated substrate \u2014 this is exactly the constraint the Google/Apple Exposure Notification system solved (BLE-only, standardized cross-platform beacon format, no WiFi scanning) \u2014 but GAEN measurement studies prove BLE RSSI alone is unreliable for near-vs-far/blocked disambiguation in metal-rich or wall-separated environments (0% true-positive on a bus, chance-level on a tram). The recommended graceful degradation: keep BLE-primary everywhere; on Android keep WiFi AP-scan fingerprints as the corroborator, on iOS substitute connected-BSSID matching plus ambient-audio correlation (both platforms expose mic APIs) as the \"same room / blocked-vs-far\" corroborator, which adds up to ~6% macro-F1 over BLE-only and nearly perfectly separates wall-separated devices that BLE cannot; use UWB NearbyInteraction (iPhone 11+ U1) only as a same-platform close-tier where hardware exists (it does not interoperate cross-platform above the PHY layer), and keep GPS as the coarse veto. iBeacon ranging is a well-supported BLE-distance substitute on iOS (CLBeacon proximity/accuracy) but iOS can only ADVERTISE iBeacon in the foreground, so an Android device must be the background advertiser in a cross-platform pairing.",
+ "findings": [
+  {
+   "claim": "iOS apps CAN read the currently-connected WiFi network's SSID/BSSID (not a scan of nearby APs) via NEHotspotNetwork.fetchCurrent on iOS 14+ / CNCopyCurrentNetworkInfo earlier, with no NEHotspotHelper entitlement required.",
+   "confidence": "high",
+   "sources": [
+    "https://developer.apple.com/forums/thread/679038",
+    "https://developer.apple.com/forums/thread/670970"
+   ],
+   "evidence": "Apple's official docs and forum threads 679038/670970 state verbatim that since iOS 14 the connected SSID/BSSID is available via fetchCurrent(completionHandler:) and its use 'does not require the NEHotspotHelper entitlement.' This is the key mitigation: iOS forbids scanning nearby APs, but the CONNECTED AP's BSSID is readable, giving a coarser 'same AP => same venue' signal.",
+   "vote": "3-0"
+  },
+  {
+   "claim": "Reading the connected BSSID requires the freely-available com.apple.developer.networking.wifi-info (Access WiFi Information) entitlement PLUS one of four runtime conditions; for a normal proximity app the simplest qualifying path is precise Core Location authorization. Without the entitlement the API returns nil.",
+   "confidence": "high",
+   "sources": [
+    "https://developer.apple.com/forums/thread/679038",
+    "https://developer.apple.com/forums/thread/670970"
+   ],
+   "evidence": "Apple boilerplate (repeated across threads 679038, 670970, 684519 and the fetchCurrent docs) enumerates exactly four requirements: (1) using Core Location with precise-location authorization, (2) prior NEHotspotConfiguration use, (3) active VPN config, (4) active NEDNSSettingsManager config; and states an app 'will receive nil if [it] does not have the com.apple.developer.networking.wifi-info entitlement.' Condition (1) is the simplest for a proximity app that already needs precise location. This is stable across iOS 13-17.",
+   "vote": "3-0"
+  },
+  {
+   "claim": "Matching two phones' connected-BSSID is a valid 'same network => same venue' co-location mechanism, and WiFi-signature comparison is a long-established proximity technique (e.g. NearMe comparing AP lists + signal strengths).",
+   "confidence": "high",
+   "sources": [
+    "https://developer.apple.com/forums/thread/670970",
+    "https://arxiv.org/pdf/1808.03320"
+   ],
+   "evidence": "BSSID identifies a specific physical AP, so a shared connected-BSSID means both devices are within one AP's range (same venue). The co-presence survey (Conti & Lal, arXiv 1808.03320) documents NearMe (Krumm & Hinckley, Microsoft Research) 'determines proximity by comparing a list of WiFi access points and signal strengths' as an established mechanism. Note this is coarser than Android's multi-AP fingerprint (single connected AP, not a scan-list), and requires both devices actually joined to WiFi.",
+   "vote": "3-0"
+  },
+  {
+   "claim": "The Google/Apple Exposure Notification (GAEN) precedent proves cross-platform (iOS+Android) co-presence is achievable with BLE ONLY, no WiFi scanning \u2014 using a standardized beacon format that interoperates between iOS and Android (Rolling Proximity Identifier beacons ~every 250ms, scan ~every 4 min). This validates BLE as the viable cross-platform substitute under the same no-WiFi constraint iOS imposes.",
+   "confidence": "high",
+   "sources": [
+    "https://arxiv.org/pdf/2006.08543",
+    "https://arxiv.org/pdf/2007.05057"
+   ],
+   "evidence": "arXiv 2006.08543 states the BLE beacon format ensures 'interoperability between handsets... running Apple's iOS... and... Android,' with ~250ms broadcast and ~4-min scan. GAEN is universally documented as BLE-only (no WiFi component), built by Apple+Google specifically to work cross-platform within iOS's WiFi-scan prohibition \u2014 the exact constraint In Range faces on iPhone.",
+   "vote": "3-0"
+  },
+  {
+   "claim": "BLE RSSI/attenuation is an unreliable standalone near-vs-far signal in metal-rich or wall-separated environments: attenuation does not increase monotonically with distance. GAEN measurement studies found a 0% true-positive detection rate on a bus (all pairs within 2m for 15+ min, zero notifications; loosened thresholds only reached 5-8%) and chance-level performance on a tram.",
+   "confidence": "high",
+   "sources": [
+    "https://arxiv.org/pdf/2006.08543",
+    "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0239943"
+   ],
+   "evidence": "Leith & Farrell (PLOS ONE / arXiv 2006.08543) found on a bus that 'no exposure notifications would have been triggered despite... all pairs of handsets... within 2m... for at least 15 mins,' improving only to 5% (15min)/8% (10min) with loosened rules; the tram study (pone.0239943) found 'similar ranges of signal strength... both between handsets... less than 2m apart and... greater than 2m apart,' i.e. no usable distance correlation. Implication: BLE alone cannot reliably disambiguate blocked-vs-far, so a corroborator is essential.",
+   "vote": "3-0"
+  },
+  {
+   "claim": "iOS supports iBeacon RANGING well: CLLocationManager ranging returns CLBeacon objects ordered closest-first with proximity (immediate/near/far), accuracy (meters), and rssi \u2014 a viable BLE-distance substitute. But iOS can only ADVERTISE as an iBeacon in the foreground; if the app is backgrounded/quit, iOS stops the iBeacon advertisement, so cross-platform designs need an Android device (or a foreground iPhone) as the beacon advertiser.",
+   "confidence": "high",
+   "sources": [
+    "https://developer.apple.com/library/archive/documentation/UserExperience/Conceptual/LocationAwarenessPG/RegionMonitoring/RegionMonitoring.html"
+   ],
+   "evidence": "Apple Core Location docs: apps use startRangingBeaconsInRegion to 'determine the relative proximity of one or more beacons,' with CLBeacon exposing proximity/accuracy/rssi. But 'If the user quits the app, the system stops advertising your device as a peripheral' and advertising requires foreground \u2014 iOS suppresses the manufacturer-specific iBeacon payload in background. Hence Android must be the background advertiser in an iPhone<->Android iBeacon pairing.",
+   "vote": "3-0"
+  },
+  {
+   "claim": "UWB NearbyInteraction (iPhone 11+ with U1) provides a real-time distance+direction ranging stream and supports third-party accessories via Apple's published Nearby Interaction Accessory Protocol Specification (for MFi chipset/module makers). Accuracy is centimeter-class (mean error <20cm across iPhone 12 Pro / Galaxy S21 Ultra / Pixel 6 Pro), making it the best 'close tier' signal where hardware exists.",
+   "confidence": "high",
+   "sources": [
+    "https://developer.apple.com/videos/play/wwdc2021/10165/",
+    "https://arxiv.org/pdf/2303.11220"
+   ],
+   "evidence": "WWDC2021 session 10165: NearbyInteraction streams NINearbyObject updates 'each containing distance and, optionally, direction,' and Apple published an accessory spec 'for chipset and module manufactures... to interoperate with U1 in iPhone.' Flueratoru et al. (arXiv 2303.11220) measured 'error of less than 20cm' on iPhone 12 Pro, Galaxy S21 Ultra, Pixel 6 Pro. Accuracy is the <20cm MEAN under favorable conditions.",
+   "vote": "3-0"
+  },
+  {
+   "claim": "UWB does NOT interoperate cross-platform out of the box: at the MAC layer the multiple-access and localization techniques are mostly proprietary, so Apple's NearbyInteraction and Android's androidx.core.uwb do not range together despite a shared 802.15.4z PHY. UWB is also unreliable in some scenarios (orientation-dependent failures, up to ~5m underestimation, 37.8% failed measurements outdoors on Pixel), so it cannot be a standalone signal and needs fusion/fallback.",
+   "confidence": "high",
+   "sources": [
+    "https://arxiv.org/pdf/2202.02190",
+    "https://arxiv.org/pdf/2303.11220"
+   ],
+   "evidence": "arXiv 2202.02190: 'For the MAC layer, the implementation of the multiple access scheme as well as the localization technique is mostly proprietary' (PHY is interoperable, MAC is not). arXiv 2303.11220: devices 'fail in producing reliable measurements in all scenarios' \u2014 Pixel failed at 37.8% of outdoor positions, ranging failed at certain antenna orientations. FiRa Consortium certification (Release 3.0 Dec 2024, 4.0 Nov 2025) is the ongoing effort to close the MAC interop gap, confirming it is not inherent. Practically: use UWB same-platform-only for a close tier.",
+   "vote": "3-0"
+  },
+  {
+   "claim": "Ambient-audio correlation is a strong iOS-viable and cross-platform 'same room / blocked-vs-far' corroborator (both iOS and Android expose microphone APIs, unlike WiFi scanning). Sound fused with BLE lifts co-location classification to F1/accuracy 72/86% vs 63/77% BLE-only (up to ~6% macro-F1 gain), and in lab tests sound 'nearly perfectly separated' co-located from wall-separated devices where BLE could not.",
+   "confidence": "high",
+   "sources": [
+    "https://www.mdpi.com/1424-8220/21/16/5604",
+    "https://arxiv.org/pdf/1503.03790"
+   ],
+   "evidence": "MDPI Sensors 2021 (21(16):5604 / PMC8402400): sound+BLE fusion = 72/86% vs BLE 63/77% and sound 63/80%, with '6% improvement in macro F1 for binary classes'; sound 'nearly perfectly separated' co-located vs wall-separated devices while 'Bluetooth alone could not differentiate.' Sound-Proof (arXiv 1503.03790, USENIX Sec 2015) achieved 0.2% EER for ambient-sound co-location and was validated on iPhone 4/5/6 AND multiple Android devices. Caveats: mic permission required; audio must be correlated; 'same venue' field transfer beyond lab/2FA settings is not fully proven.",
+   "vote": "3-0"
+  },
+  {
+   "claim": "Multi-modal fusion is the empirically-backed architecture: in a systematic comparison of WiFi, Bluetooth, GPS, and audio, WiFi was the best SINGLE modality for co-presence/relay-attack resistance, and fusing modalities further improves resilience. Co-presence rests on nearby devices observing the same ambient environment across sensors (WiFi, GPS, BLE, audio, plus physical sensors including pressure/altitude).",
+   "confidence": "high",
+   "sources": [
+    "https://arxiv.org/pdf/1808.03320"
+   ],
+   "evidence": "Conti & Lal survey (arXiv 1808.03320) summarizing Truong et al. (IEEE PerCom 2014): comparing WiFi/BT/GPS/audio individually and fused, 'WiFi data as the context is better in opposing relay attacks... and the fusing of multiple modalities further improve resilience.' This confirms WiFi is the strongest single corroborator (hence the loss on iOS is real) and that fusion is the right degradation strategy. The survey lists pressure/altitude among ambient sensors \u2014 supporting barometer matching for same-floor, though no quantified same-floor accuracy claim survived verification.",
+   "vote": "3-0"
+  },
+  {
+   "claim": "RECOMMENDED per-platform fusion / mitigation ranking for the iOS WiFi gap: keep BLE-primary + GPS-veto on all platforms; replace the Android WiFi AP-scan corroborator on iOS with (rank 1) connected-BSSID matching, (rank 2) ambient-audio correlation for blocked-vs-far, (rank 3) same-platform UWB close tier, (rank 4) iBeacon ranging with an Android/foreground advertiser.",
+   "confidence": "medium",
+   "sources": [
+    "https://developer.apple.com/forums/thread/679038",
+    "https://www.mdpi.com/1424-8220/21/16/5604",
+    "https://arxiv.org/pdf/2006.08543",
+    "https://arxiv.org/pdf/2202.02190"
+   ],
+   "evidence": "Synthesis of the confirmed evidence rather than a single sourced claim. Cross-platform matrix: Android<->Android keeps full WiFi fingerprint + BLE + GPS; iPhone<->Android uses connected-BSSID match + BLE RSSI + ambient-audio + GPS (no UWB interop, Android must advertise iBeacon in background); iPhone<->iPhone can additionally use same-platform UWB (U1, iPhone 11+) for a cm-scale close tier and Multipeer Connectivity for AWDL co-presence. Best single 'same venue' substitute on iPhone = connected-BSSID matching (cheapest, exact venue signal); best cross-platform proximity signal = BLE RSSI (GAEN-validated) hardened with ambient-audio for the blocked-vs-far disambiguation BLE handles poorly. Confidence medium because it is an engineering synthesis and no confirmed claim covered Multipeer Connectivity or Google Nearby Connections directly.",
+   "vote": "synthesis"
+  }
+ ],
+ "caveats": "Time-sensitivity: the connected-BSSID API surface is stable across iOS 13-17 but Apple has historically tightened WiFi-info access (precise-location gating added iOS 13, NEDNSSettingsManager condition added later); re-verify against the current iOS 18/26 SDK before shipping. Two of the eight research sub-questions had NO confirmed claims survive verification: Multipeer Connectivity (sub-question 2) and Google Nearby Connections (sub-question 5) \u2014 the per-platform recommendation treats them from general engineering knowledge (Multipeer uses Apple-only AWDL and does not interoperate with Android; Nearby Connections is cross-platform but its proximity granularity was not evidenced here), so those specific rows are lower-confidence. Barometer/same-floor, magnetometer fingerprinting, and motion/activity correlation (sub-question 7) are only weakly attested \u2014 the co-presence survey lists pressure/altitude as an ambient sensor but no quantified same-floor accuracy claim survived. UWB accuracy figures (<20cm) are MEAN errors under favorable conditions; real-world tails are much worse (up to 3-5m underestimation, orientation-dependent total failure), so UWB is a bonus close-tier, never a standalone. The BLE 0% detection results are specific to metal-rich reflective environments (bus/tram); open outdoor/room BLE performs better, but the studies establish the failure mode is real and common. Ambient-audio fusion numbers come from a single COVID-distancing dataset (~2m) and a 2FA study (phone-to-terminal, not literally phone-to-phone), so field transfer to arbitrary 'same venue' is plausible but not proven; two over-generalized audio claims were explicitly REFUTED (audio is NOT robustly validated for pocket/purse/outdoor phone-to-phone).",
+ "openQuestions": [
+  "What proximity granularity and cross-platform interop does Google Nearby Connections actually deliver on iOS+Android (radios used, RSSI exposure, offline behavior), and can it replace a hand-rolled BLE layer for In Range?",
+  "Does Multipeer Connectivity give any usable 'near each other' distance/RSSI signal for iPhone<->iPhone co-presence, and what are its concrete background-execution limits, given AWDL is Apple-only and cannot reach Android?",
+  "How reliable is barometer/altitude pressure matching for same-floor disambiguation on modern iPhones/Androids, and what is its quantified accuracy vs cross-device sensor-calibration drift?",
+  "What are the current (iOS 18/26) background-execution and microphone-privacy constraints on continuous ambient-audio sampling, and can audio correlation run often enough in background to serve as a live corroborator rather than a foreground-only check?"
+ ],
+ "refuted": [
+  {
+   "claim": "The Exposure Notification detection rules performed equivalently to randomly selecting participants regardless of their true proximity, demonstrating the ceiling of BLE-RSSI-only co-location on iOS/Android.",
+   "vote": "0-3",
+   "source": "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0239943"
+  },
+  {
+   "claim": "Comparing ambient audio recorded by two devices' microphones is a robust discriminant for whether they are co-located, working both indoors and outdoors and even when a phone is inside a pocket or purse \u2014 directly validating ambient-sound matching as an iOS-viable 'same room/venue' co-location signal.",
+   "vote": "0-3",
+   "source": "https://arxiv.org/pdf/1503.03790"
+  }
+ ],
+ "unverified": [],
+ "sources": [
+  {
+   "url": "https://developer.apple.com/forums/thread/679038",
+   "quality": "primary",
+   "angle": "iOS connected-WiFi API status + entitlements (primary)",
+   "claimCount": 5
+  },
+  {
+   "url": "https://developer.apple.com/forums/thread/670970",
+   "quality": "primary",
+   "angle": "iOS connected-WiFi API status + entitlements (primary)",
+   "claimCount": 4
+  },
+  {
+   "url": "https://github.com/ConnectSDK/Connect-SDK-iOS-Core/issues/68",
+   "quality": "forum",
+   "angle": "iOS connected-WiFi API status + entitlements (primary)",
+   "claimCount": 4
+  },
+  {
+   "url": "https://budzinski.medium.com/how-to-detect-wifi-change-in-ios-app-57d82fcd887f",
+   "quality": "blog",
+   "angle": "iOS connected-WiFi API status + entitlements (primary)",
+   "claimCount": 4
+  },
+  {
+   "url": "https://pub.dev/packages/network_info_plus",
+   "quality": "secondary",
+   "angle": "iOS connected-WiFi API status + entitlements (primary)",
+   "claimCount": 5
+  },
+  {
+   "url": "https://seacode.uk/swift/wifi-ssid-bssid",
+   "quality": "blog",
+   "angle": "iOS connected-WiFi API status + entitlements (primary)",
+   "claimCount": 4
+  },
+  {
+   "url": "https://newly.app/sensors/uwb-mobile-apps",
+   "quality": "blog",
+   "angle": "UWB NearbyInteraction cross-platform (close tier)",
+   "claimCount": 5
+  },
+  {
+   "url": "https://www.smartphoneassistant.com/uwb-on-iphones-and-android/",
+   "quality": "blog",
+   "angle": "UWB NearbyInteraction cross-platform (close tier)",
+   "claimCount": 5
+  },
+  {
+   "url": "https://developer.apple.com/videos/play/wwdc2021/10165/",
+   "quality": "primary",
+   "angle": "UWB NearbyInteraction cross-platform (close tier)",
+   "claimCount": 5
+  },
+  {
+   "url": "https://arxiv.org/pdf/2202.02190",
+   "quality": "primary",
+   "angle": "UWB NearbyInteraction cross-platform (close tier)",
+   "claimCount": 4
+  },
+  {
+   "url": "https://arxiv.org/pdf/2303.11220",
+   "quality": "primary",
+   "angle": "UWB NearbyInteraction cross-platform (close tier)",
+   "claimCount": 4
+  },
+  {
+   "url": "https://www.qorvo.com/innovation/ultra-wideband/products/uwb-solutions-compatible-with-apple-u1",
+   "quality": "secondary",
+   "angle": "UWB NearbyInteraction cross-platform (close tier)",
+   "claimCount": 3
+  },
+  {
+   "url": "https://github.com/google/nearby/discussions/2447",
+   "quality": "forum",
+   "angle": "Cross-platform P2P proximity frameworks",
+   "claimCount": 5
+  },
+  {
+   "url": "https://github.com/google/nearby/issues/1720",
+   "quality": "forum",
+   "angle": "Cross-platform P2P proximity frameworks",
+   "claimCount": 3
+  },
+  {
+   "url": "https://developer.apple.com/documentation/multipeerconnectivity",
+   "quality": "unreliable",
+   "angle": "Cross-platform P2P proximity frameworks",
+   "claimCount": 0
+  },
+  {
+   "url": "https://arxiv.org/pdf/2006.08543",
+   "quality": "primary",
+   "angle": "BLE-only co-location: iBeacon ranging + Exposure Notification precedent",
+   "claimCount": 5
+  },
+  {
+   "url": "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0239943",
+   "quality": "primary",
+   "angle": "BLE-only co-location: iBeacon ranging + Exposure Notification precedent",
+   "claimCount": 5
+  },
+  {
+   "url": "https://arxiv.org/pdf/2007.05057",
+   "quality": "primary",
+   "angle": "BLE-only co-location: iBeacon ranging + Exposure Notification precedent",
+   "claimCount": 4
+  },
+  {
+   "url": "https://developer.estimote.com/ibeacon/tutorial/part-3-ranging-beacons/",
+   "quality": "secondary",
+   "angle": "BLE-only co-location: iBeacon ranging + Exposure Notification precedent",
+   "claimCount": 5
+  },
+  {
+   "url": "https://developer.apple.com/library/archive/documentation/UserExperience/Conceptual/LocationAwarenessPG/RegionMonitoring/RegionMonitoring.html",
+   "quality": "primary",
+   "angle": "BLE-only co-location: iBeacon ranging + Exposure Notification precedent",
+   "claimCount": 5
+  },
+  {
+   "url": "https://arxiv.org/pdf/1808.03320",
+   "quality": "primary",
+   "angle": "Alternative sensor co-location signals",
+   "claimCount": 5
+  },
+  {
+   "url": "https://arxiv.org/pdf/1503.03790",
+   "quality": "primary",
+   "angle": "Alternative sensor co-location signals",
+   "claimCount": 5
+  },
+  {
+   "url": "https://www.mdpi.com/1424-8220/21/16/5604",
+   "quality": "primary",
+   "angle": "Alternative sensor co-location signals",
+   "claimCount": 5
+  },
+  {
+   "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC4431287/",
+   "quality": "primary",
+   "angle": "Alternative sensor co-location signals",
+   "claimCount": 5
+  }
+ ],
+ "stats": {
+  "angles": 5,
+  "sourcesFetched": 24,
+  "claimsExtracted": 104,
+  "claimsVerified": 25,
+  "confirmed": 23,
+  "killed": 2,
+  "unverified": 0,
+  "afterSynthesis": 11,
+  "urlDupes": 0,
+  "budgetDropped": 6,
+  "agentCalls": 106
+ }
+}

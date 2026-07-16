@@ -15,9 +15,10 @@ widely repeated on the internet.
 | [`ble-radio-optimization.md`](ble-radio-optimization.md) | How to make the phone-to-phone BLE link work optimally: advertising physics, Android stack internals, BLE 5, 2.4 GHz coexistence, battery |
 | [`wifi-colocation.md`](wifi-colocation.md) | WiFi AP-scan fingerprints as a second signal: similarity algorithms, Android throttling, WiFi Aware/RTT, fusion, privacy |
 | [`sensor-fusion.md`](sensor-fusion.md) | How to combine BLE+WiFi+GPS into one proximity class with calibrated confidence — Bayesian filters, inverse-variance weighting, why hand-tuned weighted-sum fails |
+| [`ios-colocation.md`](ios-colocation.md) | Mitigating iOS's WiFi-scan ban: connected-BSSID matching, ambient audio, UWB, iBeacon — per-platform fusion |
 | [`gps-fused-location.md`](gps-fused-location.md) | Role (and hard limits) of GPS/Fused Location in a proximity stack; Play Store policy; privacy |
 
-The synthesis of all five — the layered fusion design we actually implement — is
+The synthesis of all six — the layered fusion design we actually implement — is
 [`../PROXIMITY_ALGORITHM.md`](../PROXIMITY_ALGORITHM.md).
 
 ## The three findings that changed the code

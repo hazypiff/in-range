@@ -294,3 +294,39 @@ needed to *fit* the weights and per-sensor likelihoods instead of guessing them.
 Keep the live classifier on raw median for the walk (don't contaminate the
 baseline); apply Kalman/Bayesian/learned fusion in analysis afterward, then
 productionize the winner.
+
+## 7. Per-platform fusion — the iOS WiFi-scan gap (2026-07-15)
+
+iOS forbids third-party WiFi AP scanning, so §3's venue fingerprint is
+Android-only. Research (`research/ios-colocation.md`) gives a ranked, verified
+mitigation. The backbone is unchanged — **BLE-primary everywhere, GPS-veto
+everywhere** — and the WiFi *corroborator* is what adapts per platform:
+
+| Mechanism | Platforms | Entitlement / cost | Role |
+|---|---|---|---|
+| **Connected-BSSID match** | iOS 14+ & Android | iOS: free `wifi-info` entitlement + precise location; Android: already have it | **Primary iOS substitute.** Both phones read the *connected* AP's BSSID (not a scan). Same BSSID ⇒ same venue. Coarser than a fingerprint (one AP), and needs both actually joined to WiFi, but works iPhone↔iPhone **and iPhone↔Android**. |
+| **Ambient-audio correlation** | iOS & Android (mic APIs) | mic permission; privacy design (hash/features, never raw audio) | **Best blocked-vs-far discriminator.** Sound fused with BLE lifts co-location F1 to 72/86 % vs 63/77 % BLE-only, and separated wall-divided devices BLE couldn't. Cross-platform. Bigger build. |
+| **UWB (NearbyInteraction / androidx.uwb)** | iPhone 11+, some Android | — | Centimeter close-tier **same-platform only** — Apple NI and Android UWB do **not** range together despite a shared PHY. Bonus, never load-bearing (37.8 % failed measurements outdoors on one Pixel). |
+| **iBeacon ranging** | iOS ranges well | — | BLE-distance substitute on iOS (CLProximity immediate/near/far). iOS can only *advertise* iBeacon in foreground, so the **Android** side must be the background advertiser in a pair. |
+
+**Adopted plan (ranked):**
+1. **Connected-BSSID match** — the cheap, cross-platform common denominator for
+   "same venue." Add it on **both** platforms (Android already scans, but the
+   connected BSSID is the one venue key that also works against an iPhone).
+2. **Ambient-audio correlation** — the real blocked-vs-far corroborator when the
+   product needs it, on both platforms; privacy-first (features/hashes only).
+3. **UWB** as a same-platform Close By confirmation where hardware exists.
+4. **iBeacon ranging** as an iOS BLE-distance path with an Android advertiser.
+
+**Why this is safe:** the Google/Apple Exposure Notification system ran
+planet-scale cross-platform co-presence on **BLE alone, no WiFi** — direct proof
+the backbone survives the iOS constraint. WiFi fingerprinting was always the
+corroborator, not the spine; §5b's confidence weighting already treats venue as a
+modulator, so an iPhone simply carries a weaker (connected-BSSID / audio) venue
+term instead of a full fingerprint — no architectural change, just a per-platform
+venue provider.
+
+### Fusion adaptation per pairing
+- **Android ↔ Android:** full WiFi fingerprint venue (§3) — richest.
+- **iPhone ↔ Android:** connected-BSSID match (+ optional audio) venue; BLE-primary.
+- **iPhone ↔ iPhone:** connected-BSSID match (+ optional audio); UWB Close By where both have U1.
