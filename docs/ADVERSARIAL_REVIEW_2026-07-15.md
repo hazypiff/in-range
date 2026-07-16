@@ -2,7 +2,20 @@
 
 > ## Fix status (2026-07-16, Android/laptop side)
 >
-> **19 of 24 fixed and pushed to `inrangeai`** (commits `1554e23` → this one).
+> **23 of 24 fixed and pushed to `inrangeai`.** Only #6 (forgeable one-way
+> encounters) remains — it is a product/matching-semantics decision (reciprocal
+> observation vs instant one-way encounters), deliberately left for that call.
+>
+> The SQL fixes #1/#10 and #5/#8/#13 were **validated against the local Supabase
+> Postgres container** (`supabase_db_in-range`): migrations 0020–0028 apply
+> cleanly on the 0019 base; exactly one signature per RPC (no ambiguous
+> overloads); `get_my_encounters` returns the 15-column recurrence shape with its
+> grant; and functional transaction tests confirm each behavior:
+> - #13 two upserts on one (observer,token) → **1 row keeping the stronger RSSI**; the per-call rate counter climbs (not stuck at 1).
+> - #8 after a 2-day gap ("expired" encounter) the next crossing reports **session 2 / distinct_days 2**, best_range narrowed — recurrence survives via the durable `encounter_pairs` table.
+> - #5 after rotation the live claim drops the old token but `token_claim_history` still resolves it → a buffered sighting correlates instead of erroring.
+>
+> **Original 19-fix batch** (commits `1554e23` → `f4ea547`):
 > All fixes verified with `flutter test` (60 pass) + `flutter analyze` clean; the
 > lifecycle coordinator was additionally smoke-tested on both S9s (normal
 > operation + a rapid on/off storm, 0 errors, no scan leaks).
