@@ -1,8 +1,13 @@
 # Proximity Tiers — Close By / Near By / In Range
 
 Product decision (2026-07-15): proximity is surfaced as three buckets, not
-feet. Feet boundaries are fixed in the product; the RSSI cutoffs that
-implement them are per-device-model and come from calibration walks.
+feet, and **the customer picks which tier triggers their alerts** (Close By
+= only the closest contacts; Near By = that tier or closer; In Range = any
+detection). The tier feet below are PROVISIONAL predictions — the
+calibration walks decide the final boundaries: each boundary is placed at
+the largest distance where the measured RSSI distributions still separate
+cleanly for our device pairings. The UI never promises feet, only tier
+names.
 
 ## Tiers
 
@@ -26,6 +31,11 @@ outdoors, and ~30–80 ft with bodies/pockets/indoors — there is no reliable
    classify on a single reading.
 2. **Dwell** — a tier must hold ≥30 s before being surfaced; transient
    passers-by never appear.
+2b. **Conservative promotion (gray zone)** — promotion to a closer tier
+   requires strong, sustained evidence; ambiguous readings in the boundary
+   overlap stay in the farther tier. A trustworthy Close By alert beats a
+   fast one. (UWB confirm on capable pairs, e.g. iPhone 11+, later makes
+   Close By exact.)
 3. **Hysteresis** — promote/demote thresholds are separated (e.g. promote to
    Close By at ≤15 ft-equivalent, demote at ≥25 ft-equivalent) so boundary
    cases don't flicker.
