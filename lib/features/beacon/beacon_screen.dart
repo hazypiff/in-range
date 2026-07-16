@@ -110,8 +110,8 @@ class _BeaconScreenState extends ConsumerState<BeaconScreen> {
                 leading: Icon(Icons.wifi_find_outlined),
                 title: Text('Scanning only — not discoverable'),
                 subtitle: Text(
-                  'This device finds and logs nearby beacons, but cannot yet '
-                  'be discovered by others (iOS advertising pending).',
+                  'This device finds and logs nearby beacons, but could not '
+                  'start advertising, so others can\'t discover it right now.',
                 ),
               ),
             ),

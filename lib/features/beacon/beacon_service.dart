@@ -234,9 +234,10 @@ class BeaconService {
     _advTick = 0;
     _advPower = AdvertPower.high;
     _advPowerTimer?.cancel();
-    // No advertiser to power-cycle in iOS scan-only mode; iOS also has no
-    // CBPeripheralManager TX-power control, so this timer is a no-op there.
-    if (_discoverable) {
+    // Power-cycle only on Android: iOS has no CBPeripheralManager TX-power
+    // control (single high-power slot), and re-advertising it every 10 s would
+    // just churn the iOS advertiser for no distance signal.
+    if (_discoverable && defaultTargetPlatform != TargetPlatform.iOS) {
       _advPowerTimer = Timer.periodic(const Duration(seconds: 10), (_) {
         if (!_isOn) return;
         _advTick = (_advTick + 1) % 3;
@@ -403,6 +404,10 @@ class BeaconService {
 
   static const String _inRangeServiceUuid =
       '0000cafe-0000-1000-8000-00805f9b34fb';
+  // Short (16-bit) form of the discovery marker — advertised on iOS so it
+  // costs 2 bytes on air, leaving room for the 128-bit token UUID in the same
+  // 31-byte legacy advertisement. Equal by value to _inRangeServiceUuid.
+  static const String _inRangeDiscoveryShort = 'cafe';
   static const int _inRangeManufacturerId = 0xFFFF;
 
   /// The advertised/claimed correlation id is now the raw 16 bytes of the
@@ -454,17 +459,35 @@ class BeaconService {
       throw StateError('No beacon token is available');
     }
 
-    // iOS SCAN-ONLY (approved 2026-07-16, docs/IOS_CARRIER_DECISION_2026-07-16):
-    // the pinned flutter_ble_peripheral Darwin bridge forwards only
-    // serviceUuid/localName, never manufacturerData, so an iPhone can't carry
-    // the 16-byte token — advertising would emit an EMPTY packet. Rather than
-    // fail the whole beacon (which also killed scanning), skip advertising and
-    // mark the device non-discoverable. The UI must show "scanning only" so we
-    // never lie about discoverability (reviewer #2). iPhone still scans + logs
-    // RSSI — this is what enables the S9 → iPhone calibration curve.
+    // iOS FOREGROUND service-UUID carrier (path b, hazypiff-approved prototype
+    // — docs/IOS_CARRIER_DECISION_2026-07-16). iOS CBPeripheralManager can't
+    // send manufacturerData, but it forwards service UUIDs. So advertise a
+    // FIXED discovery marker (short 16-bit UUID, filterable/known) plus the
+    // rotating 16-byte token AS a 128-bit service UUID. Both fit in the 31-byte
+    // legacy AD (2-byte marker + 16-byte token + overhead ≈ 25B). Peers match
+    // the marker, then read the token UUID. FOREGROUND ONLY — iOS moves these
+    // UUIDs to the overflow area in background (visible only to a device
+    // explicitly scanning them). No CBPeripheralManager TX-power control, so
+    // high-power only (no medium feet_30 slot on iOS). Falls back to scan-only
+    // if advertising fails, so the beacon still comes up scanning.
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
-      _discoverable = false;
-      debugPrint('iOS scan-only: advertising skipped, device not discoverable.');
+      final tokenUuid = Guid.fromBytes(_currentCorrelationId!).str128;
+      final iosData = AdvertiseData(
+        serviceUuids: [_inRangeDiscoveryShort, tokenUuid],
+        includeDeviceName: false,
+      );
+      try {
+        final peripheral = FlutterBlePeripheral();
+        try {
+          await peripheral.stop();
+        } catch (_) {}
+        await peripheral.start(advertiseData: iosData);
+        _discoverable = true;
+        debugPrint('iOS foreground advertising: marker + token $tokenUuid');
+      } catch (e) {
+        _discoverable = false;
+        debugPrint('iOS advertising failed → scan-only fallback: $e');
+      }
       return;
     }
     _discoverable = true;
@@ -619,19 +642,27 @@ class BeaconService {
     );
     _scanSub = sub;
 
-    // Hardware msd filter (our manufacturer id) — required, not an
+    // Hardware msd filter (our manufacturer id) — required on Android, not an
     // optimization: Android ≥8.1 suppresses UNFILTERED scans while the
     // screen is off. Walk #1 (2026-07-13) proved it: 100% of scan
     // deliveries on both phones landed inside screen-awake windows.
-    // The filter also confines results to In Range beacons, so the old
-    // continuousDivisor flood guard is no longer needed.
+    // The filter also confines results to In Range beacons.
+    //
+    // iOS: do NOT apply the msd filter. flutter_blue_plus filters MSD in
+    // software on iOS, which would drop iPhone peers (they advertise service
+    // UUIDs, no manufacturerData) — so iPhone↔iPhone would never see each
+    // other. iOS foreground scanning has no screen-off suppression, so scan
+    // unfiltered and match both carriers (mfg data + service UUID) in
+    // _onScanResults.
     final calib = AppConfig.calibScanMode;
+    final isIOS =
+        !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
     try {
       await FlutterBluePlus.startScan(
         timeout: const Duration(hours: 1),
         androidUsesFineLocation: true,
         continuousUpdates: true,
-        withMsd: [MsdFilter(_inRangeManufacturerId)],
+        withMsd: isIOS ? [] : [MsdFilter(_inRangeManufacturerId)],
         androidScanMode:
             calib ? AndroidScanMode.lowLatency : AndroidScanMode.balanced,
       );
@@ -696,6 +727,23 @@ class BeaconService {
         final bytes = adv.serviceData[inRangeGuid];
         if (bytes != null && bytes.length == 16) {
           observedCorrelationId = Uint8List.fromList(bytes);
+        }
+      }
+
+      // iOS foreground service-UUID carrier (path b): if the fixed discovery
+      // marker is advertised, the OTHER 128-bit service UUID is the token.
+      // Match the marker by value (robust to 16-bit vs 128-bit form); take the
+      // 16-byte UUID that isn't the marker. This is how iPhones are discovered
+      // (they can't send manufacturerData). No power flag on iOS → high.
+      if (observedCorrelationId == null && adv.serviceUuids.isNotEmpty) {
+        final marker = Guid(_inRangeServiceUuid);
+        if (adv.serviceUuids.any((u) => u == marker)) {
+          for (final u in adv.serviceUuids) {
+            if (u != marker && u.bytes.length == 16) {
+              observedCorrelationId = Uint8List.fromList(u.bytes);
+              break;
+            }
+          }
         }
       }
 
