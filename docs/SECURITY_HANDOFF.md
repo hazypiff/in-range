@@ -3,8 +3,9 @@
 **For:** the partner (and their AI agent) picking up the remaining anti-forgery work.
 **Last updated:** 2026-07-16. **Prod project ref:** `riigipzlyqeaadyvbuty`.
 
-This is an executable handoff. Tasks A, C, and D are still pending; Task B is a
-shipped operations reference. Keep the security harness green.
+This is an executable handoff. Task A (cutover) and Task D are pending; Task B is a
+shipped operations reference; Task C's **server scaffold is shipped** (only the
+Edge Function verifier + client attestation call remain). Keep the harness green.
 
 ---
 
@@ -16,10 +17,11 @@ shipped operations reference. Keep the security harness green.
 | — | Rotation-boundary confirm fix (grace-valid tokens could confirm) | `migrations/0030` | ✅ prod |
 | 2 | Server-issued opaque token batches (`issue_token_batch`), client `BatchTokenSource` advertises them; `claim_token` batch-gated behind a flag | `migrations/0031`, `lib/features/beacon/batch_token_source.dart` | ✅ prod (enforcement **OFF**) |
 | 4 | Relay-abuse detection + evidence de-dupe + service-role triage/digest policy + 15-min pg_cron | `migrations/0032`–`0033`, `docs/RELAY_ABUSE_RUNBOOK.md` | ✅ prod |
-| 3 | App Attest / Play Integrity at issuance | — | ⛔ TODO (Task C) |
+| 3 | App Attest / Play Integrity — server scaffold (table + gate + writer, flag OFF) | `migrations/0034` | 🟡 scaffold ✅; verifier+client TODO (Task C) |
 | 5 | UWB `secure_ranged` confirmation | — | ⛔ TODO (Task D) |
 
-**Prod migration ledger:** through `0033`. **Enforcement flag:** `app_settings.enforce_batch_tokens = 0`.
+**Prod migration ledger:** through `0034`. **Enforcement flags (both OFF):**
+`app_settings.enforce_batch_tokens = 0`, `app_settings.require_attestation = 0`.
 
 **Threat model wording (keep precise):** unilateral/API-only forgery is fixed;
 `mutual_ble` is **not** relay-proof (a relay forwarding both tokens + spoofing GPS
@@ -35,9 +37,9 @@ address); a true "we were physically together" proof needs secure ranging
    ```bash
    bash supabase/tests/run_security_tests.sh      # needs the local Supabase Postgres container
    ```
-   It checks: migrations 0020+ apply in order (idempotent); 11 reciprocity/batch/
-   relay invariants (T1–T11, transactional + rolled back); advisory-lock
-   concurrency. Add a Tn for any new invariant you introduce.
+   It checks: migrations 0020+ apply in order (idempotent); 12 reciprocity/batch/
+   relay/attestation invariants (T1–T12, transactional + rolled back); advisory-
+   lock concurrency. Add a Tn for any new invariant you introduce.
 2. **Deploy, then commit** (match the existing history). Deploy SQL via the
    Supabase SQL editor, `supabase db push`, or the management API
    (`POST /v1/projects/<ref>/database/query`). After deploying a migration, add a
@@ -109,32 +111,33 @@ workflow and raw/cron queries are in `docs/RELAY_ABUSE_RUNBOOK.md`.
 batches — closing the "modified client / emulator farm mints and relays tokens"
 gap that server-issued opaqueness (step 2) doesn't by itself stop.
 
-**Why it's not done here:** it needs Apple/Google platform credentials, a
-server-side **attestation verifier that makes outbound calls** (an Edge Function /
-backend — NOT a SQL RPC), and real devices to produce attestation tokens. None are
-available in the dev workspace.
+**✅ Server scaffold shipped (migration `0034`, deployed, flag OFF).** Already done:
+- `public.device_attestations(user_id, platform, verdict, verified_at, expires_at,
+  detail)` — RPC/service-only, PK `(user_id, platform)`.
+- `public.record_device_attestation(p_user, p_platform, p_verdict, p_ttl, p_detail)`
+  — service-role-only writer the Edge Function calls **after** it verifies.
+- `issue_token_batch` gated: when `app_settings.require_attestation >= 1`, it
+  requires a `device_attestations` row with `expires_at > now()` (error `42501`
+  "Device attestation required"). Flag defaults `0` → non-breaking.
+- Harness **T12** proves it: no attestation → rejected; fresh attestation → 96
+  tokens issue; expired attestation → rejected.
 
-**Components to build:**
+**What's left (needs platform creds + devices — can't be done in the dev workspace):**
 1. **Platform config:** iOS App Attest (Team ID, bundle `io.inrange.app`, key
    registration); Android Play Integrity (Play Console + Google Cloud project,
    verification/decryption keys).
-2. **Client:** obtain an attestation/assertion at batch-fetch time and pass it to
-   the server. Add it as a param on the `issue_token_batch` call path in
-   `lib/features/beacon/beacon_service.dart::_fetchTokenBatch`.
-3. **Verifier (Supabase Edge Function, Deno):** verify App Attest (CBOR + Apple
+2. **Verifier (Supabase Edge Function, Deno):** verify App Attest (CBOR + Apple
    App Attest root CA chain) / Play Integrity (decrypt+verify the token, check
    package name, cert digest, `MEETS_DEVICE_INTEGRITY`). `pg_net` is **not**
-   installed on prod — do the outbound verification in the Edge Function, not in
-   Postgres.
-4. **Server gate:** on success, write `public.device_attestations(user_id,
-   platform, verdict, verified_at, expires_at)`; have `issue_token_batch` require a
-   fresh row for the caller when a new flag (e.g. `require_attestation`) is on —
-   mirror the `enforce_batch_tokens` flag pattern so rollout is non-breaking.
+   installed on prod, so the outbound verification MUST live in the Edge Function,
+   not Postgres. On success it calls `record_device_attestation(<uid>, <platform>,
+   'pass', <ttl>, <detail>)` with the service-role key.
+3. **Client:** obtain an App Attest assertion / Play Integrity token at
+   batch-fetch time (`lib/features/beacon/beacon_service.dart::_fetchTokenBatch`)
+   and POST it to the Edge Function before/around the `issue_token_batch` call.
 
-**Suggested rollout:** ship the migration (table + gate, flag OFF) → ship the
-verifier + client → flip `require_attestation` after device coverage, exactly like
-Task A. Add a harness Tn: with the flag on, `issue_token_batch` fails without a
-fresh `device_attestations` row and succeeds with one.
+**Cutover (after 2+3 ship to devices):** `UPDATE app_settings SET value_num=1
+WHERE key='require_attestation';` — exactly like Task A. Rollback: set it to `0`.
 
 ---
 
@@ -164,6 +167,7 @@ distinguishes the two trust levels.
 | Token batches + `claim_token` gate | `supabase/migrations/0031_server_issued_token_batches.sql` |
 | Relay-abuse detection | `supabase/migrations/0032_relay_abuse_detection.sql` |
 | Relay evidence de-dupe + response views | `supabase/migrations/0033_relay_abuse_response_surface.sql` |
+| Device-attestation scaffold (Task C server half) | `supabase/migrations/0034_device_attestation_scaffold.sql` |
 | Cron schedule (ops) | `supabase/ops/schedule_relay_abuse_scan.sql` |
 | Relay-abuse operations policy | `docs/RELAY_ABUSE_RUNBOOK.md` |
 | Security harness | `supabase/tests/run_security_tests.sh`, `supabase/tests/reciprocity_security_test.sql` |

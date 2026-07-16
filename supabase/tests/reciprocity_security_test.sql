@@ -345,5 +345,35 @@ DO $$ BEGIN
   ), 'T11 authenticated users can read raw abuse flags';
 END $$;
 
+-- ============ TEST 12: device-attestation gate (#6 step 3 scaffold) ============
+-- When require_attestation is on, issue_token_batch needs a fresh, verified
+-- device_attestations row (written only by the service-role Edge Function via
+-- record_device_attestation). Off by default (non-breaking).
+INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+ ('71000000-0000-0000-0000-000000000071','00000000-0000-0000-0000-000000000000','authenticated','authenticated','att_g@t.local',now(),now());
+UPDATE public.profiles SET display_name='G',dob='1990-01-01',is_active=true,age_verified=true,is_photo_verified=true,photo_urls=ARRAY['g.jpg'],is_paused=false,is_incognito=false WHERE id='71000000-0000-0000-0000-000000000071';
+UPDATE public.app_settings SET value_num=1 WHERE key='require_attestation';
+INSERT INTO public.app_settings (key,value_num) SELECT 'require_attestation',1
+  WHERE NOT EXISTS (SELECT 1 FROM public.app_settings WHERE key='require_attestation');
+DO $$ BEGIN
+  PERFORM set_config('request.jwt.claims','{"sub":"71000000-0000-0000-0000-000000000071","role":"authenticated"}', true);
+  -- no attestation on file -> rejected
+  BEGIN
+    PERFORM count(*) FROM public.issue_token_batch(CURRENT_DATE, 15);
+    ASSERT false, 'T12 issued a batch with no attestation under require_attestation';
+  EXCEPTION WHEN sqlstate '42501' THEN NULL; END;
+  -- Edge Function (service role) records a verified attestation
+  PERFORM public.record_device_attestation('71000000-0000-0000-0000-000000000071','android','pass', INTERVAL '24 hours', NULL);
+  ASSERT (SELECT count(*) FROM public.issue_token_batch(CURRENT_DATE, 15)) = 96,
+    'T12 attested account could not issue a batch';
+  -- an expired attestation no longer satisfies the gate
+  UPDATE public.device_attestations SET expires_at = NOW() - INTERVAL '1 minute'
+    WHERE user_id='71000000-0000-0000-0000-000000000071';
+  BEGIN
+    PERFORM count(*) FROM public.issue_token_batch(CURRENT_DATE, 15);
+    ASSERT false, 'T12 expired attestation still satisfied the gate';
+  EXCEPTION WHEN sqlstate '42501' THEN NULL; END;
+END $$;
+
 SELECT '✅ ALL RECIPROCITY SECURITY INVARIANTS PASSED' AS result;
 ROLLBACK;

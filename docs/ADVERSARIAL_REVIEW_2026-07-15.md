@@ -74,11 +74,12 @@
 > flagged token owner. Harness T11 covers evidence de-dupe, thresholds, and view
 > privileges. See `docs/RELAY_ABUSE_RUNBOOK.md`.
 >
-> **Remaining #6 roadmap (needs device + platform work, not buildable here):**
-> (3) App Attest / Play Integrity around token issuance + sighting submission —
-> requires Apple/Google platform credentials, an Edge Function attestation
-> verifier (not a SQL RPC), and real devices to produce attestation tokens;
-> (5) UWB `secure_ranged` confirmation where supported.
+> **Remaining #6 roadmap:** (3) App Attest / Play Integrity — **server scaffold
+> shipped** (`0034`: `device_attestations` + service-role writer +
+> `require_attestation`-gated `issue_token_batch`, flag OFF, harness T12); still
+> needs the Edge Function verifier + client attestation call + platform
+> credentials + devices (see handoff Task C). (5) UWB `secure_ranged` — needs UWB
+> hardware.
 >
 > The SQL fixes #1/#10 and #5/#8/#13 were **validated against the local Supabase
 > Postgres container** (`supabase_db_in-range`): migrations 0020–0028 apply
