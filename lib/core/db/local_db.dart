@@ -26,6 +26,24 @@ class LocalDb {
     await db.execute(
       'CREATE INDEX idx_sightings_last ON sightings(last_seen_ms DESC)',
     );
+    await _createRssiLog(db);
+  }
+
+  static Future<void> _createRssiLog(Database db) async {
+    // Raw per-advert RSSI stream. The estimator's medians live in memory
+    // only; without this table a calibration walk persists nothing but
+    // best_rssi (a max — multipath spikes at 60 ft matched 10 ft readings
+    // in the 2026-07 beacon test), which cannot yield distance thresholds.
+    await db.execute('''
+      CREATE TABLE rssi_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        at_ms INTEGER NOT NULL,
+        correlation_id TEXT NOT NULL,
+        rssi INTEGER NOT NULL,
+        power TEXT NOT NULL
+      )
+    ''');
+    await db.execute('CREATE INDEX idx_rssi_log_at ON rssi_log(at_ms)');
   }
 
   static Future<void> _onUpgrade(
@@ -36,6 +54,10 @@ class LocalDb {
         "ALTER TABLE sightings ADD COLUMN best_band TEXT NOT NULL DEFAULT ''",
       );
     }
+    if (oldVersion < 3) {
+      // v3: raw RSSI sample log for calibration.
+      await _createRssiLog(db);
+    }
   }
 
   static Future<LocalDb> open() async {
@@ -43,9 +65,20 @@ class LocalDb {
     final path = p.join(dir, 'in_range_local.db');
     final database = await openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
+    );
+    // Keep the raw log bounded (~1-2 rows/s per peer while scanning):
+    // calibration sessions get pulled off-device within days.
+    await database.delete(
+      'rssi_log',
+      where: 'at_ms < ?',
+      whereArgs: [
+        DateTime.now()
+            .subtract(const Duration(days: 7))
+            .millisecondsSinceEpoch,
+      ],
     );
     return LocalDb._(database);
   }
@@ -54,7 +87,7 @@ class LocalDb {
   static Future<LocalDb> openInMemory() async {
     final database = await openDatabase(
       inMemoryDatabasePath,
-      version: 2,
+      version: 3,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -84,6 +117,33 @@ class LocalDb {
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+  }
+
+  /// Append one raw advert sample (power: 'H' | 'M'). Fire-and-forget from
+  /// the scan path — must never throw into the BLE callback.
+  Future<void> logRssiSample({
+    required int atMs,
+    required String correlationId,
+    required int rssi,
+    required String power,
+  }) async {
+    try {
+      await db.insert('rssi_log', {
+        'at_ms': atMs,
+        'correlation_id': correlationId,
+        'rssi': rssi,
+        'power': power,
+      });
+    } catch (_) {
+      // Calibration logging must never break scanning.
+    }
+  }
+
+  Future<List<Map<String, Object?>>> allRssiSamples() =>
+      db.query('rssi_log', orderBy: 'at_ms ASC');
+
+  Future<void> clearRssiLog() async {
+    await db.delete('rssi_log');
   }
 
   Future<void> deleteSighting(String correlationId) async {

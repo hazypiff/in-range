@@ -35,6 +35,7 @@ class BeaconService {
     required String hmacSecret,
     Duration rotationWindow = const Duration(minutes: 15),
     this.onSighting,
+    this.onAdvertSample,
   })  : _tokenGenerator = EphemeralTokenGenerator(
           userIdSecret: userIdSecret,
           userId: userId,
@@ -50,6 +51,11 @@ class BeaconService {
 
   /// Optional hook for local encounter store / UI.
   SightingCallback? onSighting;
+
+  /// Every foreign advert, unthrottled (unlike [onSighting]'s 5 s gate).
+  /// Calibration needs the full RSSI stream, not sighting summaries.
+  void Function(String correlationId, int rssi, AdvertPower power, DateTime at)?
+      onAdvertSample;
 
   /// Fired whenever the service turns itself off internally (e.g. a failed
   /// token rotation) so the UI never shows a green beacon over dead BLE.
@@ -553,6 +559,11 @@ class BeaconService {
       // under-fire, never claim mid-range falsely.
       final power = mediumFlag ? AdvertPower.medium : AdvertPower.high;
       rangeEstimator.addSample(hexId, r.rssi, power);
+      try {
+        onAdvertSample?.call(hexId, r.rssi, power, DateTime.now());
+      } catch (e) {
+        debugPrint('onAdvertSample callback error: $e');
+      }
 
       // One line per fresh foreign advert — the calibration ground truth
       // (logcat timestamp + live RSSI). Cheap: filtered scan = only our beacons.

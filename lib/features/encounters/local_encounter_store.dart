@@ -218,6 +218,22 @@ class LocalEncounterStore extends StateNotifier<Map<String, LocalEncounter>> {
     );
   }
 
+  /// Raw advert sample straight off the scan path (unthrottled — every
+  /// packet, unlike noteSighting's 5 s gate). Feeds calibration analysis.
+  Future<void> logRssiSample({
+    required String correlationId,
+    required int rssi,
+    required String power,
+    required DateTime at,
+  }) async {
+    await _db?.logRssiSample(
+      atMs: at.millisecondsSinceEpoch,
+      correlationId: correlationId,
+      rssi: rssi,
+      power: power,
+    );
+  }
+
   /// Estimator can return 'none' (window raced empty) — treat as widest.
   static String? _validBand(String? band) =>
       (band == null || rangeBandRank(band) > 2) ? null : band;

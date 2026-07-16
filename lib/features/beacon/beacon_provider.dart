@@ -5,6 +5,7 @@ import 'package:in_range/core/permissions/permission_service.dart';
 import 'package:in_range/core/prefs/app_prefs.dart';
 import 'package:in_range/core/session/app_session.dart';
 import 'package:in_range/features/beacon/beacon_service.dart';
+import 'package:in_range/features/beacon/range_estimator.dart';
 import 'package:in_range/features/encounters/local_encounter_store.dart';
 
 /// Beacon feet range — persisted across restarts.
@@ -60,6 +61,14 @@ final beaconServiceProvider = Provider<BeaconService>((ref) {
         rssi: rssi,
         rangeType: rangeType,
         estimatedBand: estimatedBand,
+      );
+    },
+    onAdvertSample: (correlationId, rssi, power, at) {
+      store.logRssiSample(
+        correlationId: correlationId,
+        rssi: rssi,
+        power: power == AdvertPower.medium ? 'M' : 'H',
+        at: at,
       );
     },
   );
