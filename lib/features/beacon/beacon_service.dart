@@ -9,6 +9,7 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/core/network/supabase_client.dart';
+import 'package:in_range/features/beacon/claim_manager.dart';
 import 'package:in_range/features/beacon/ephemeral_token_generator.dart';
 import 'package:in_range/features/beacon/range_estimator.dart';
 import 'package:in_range/features/beacon/wifi_scanner.dart';
@@ -60,6 +61,22 @@ class BeaconService {
   /// Fired whenever the service turns itself off internally (e.g. a failed
   /// token rotation) so the UI never shows a green beacon over dead BLE.
   void Function()? onBeaconStopped;
+
+  /// Fired after every claim attempt AND every rotation so the UI reflects the
+  /// CURRENT token expiry and cloud-claim state — not the first token's stale
+  /// values (reviewer #11). cloudSynced is null when there is no cloud (local
+  /// mode); true/false otherwise.
+  void Function(DateTime? expiresAt, bool? cloudSynced)? onClaimStateChanged;
+
+  /// Retryable claim upload (see ClaimManager). Reports cloud-sync state after
+  /// every attempt so the UI can't show the first token's stale values.
+  late final ClaimManager _claimMgr = ClaimManager(upload: _uploadClaim)
+    ..onState = (synced) {
+      _cloudClaimed = synced;
+      onClaimStateChanged?.call(_currentToken?.expiresAt, synced);
+    };
+
+  String? _claimRangeType;
 
   bool _isOn = false;
   bool get isOn => _isOn;
@@ -272,6 +289,7 @@ class BeaconService {
     _sessionGeneration++;
     _advertisingWanted = false;
     _scanningWanted = false;
+    _claimMgr.cancel();
     _rotationTimer?.cancel();
     _rotationTimer = null;
     _sightingFlushTimer?.cancel();
@@ -882,40 +900,50 @@ class BeaconService {
       }
     }
 
+    // A new token supersedes any pending retry of the previous claim.
+    final gen = _claimMgr.newSession();
+    _claimRangeType = rangeType;
+    _cachedLat = lat;
+    _cachedLon = lon;
+
+    // Publish the new token's expiry immediately, even before the claim RPC
+    // resolves, so the UI countdown tracks the current token (reviewer #11).
+    onClaimStateChanged?.call(
+        _currentToken!.expiresAt, AppConfig.hasRealSupabase ? _cloudClaimed : null);
+
     if (!AppConfig.hasRealSupabase) {
       _cloudClaimed = false;
       debugPrint('claim_token skipped (no real Supabase — local BLE mode)');
       return;
     }
 
-    final dbRange = _mapUiRangeToDb(rangeType);
-    // Peers only observe the 16-byte correlation id over BLE — claim THAT
-    // hex string so record_sighting / correlate_encounter can match.
+    // Retries the SAME live token with bounded backoff; ClaimManager fires
+    // onState (→ onClaimStateChanged) after every attempt.
+    await _claimMgr.attempt(gen);
+  }
+
+  /// One claim_token RPC for the current token/location. Throws on failure so
+  /// ClaimManager retries; a location refresh is nudged for the next attempt.
+  Future<void> _uploadClaim() async {
+    if (_currentToken == null || _currentCorrelationId == null) {
+      throw StateError('no token to claim');
+    }
+    _ensureLocationCache();
     final claimToken = _currentCorrelationId!
         .map((b) => b.toRadixString(16).padLeft(2, '0'))
         .join();
-    try {
-      // Always send UTC — local DateTime without offset is misread as UTC by Postgres
-      // and expires claims hours early (broke feet correlation after first flush).
-      final validUntil = _currentToken!.expiresAt.toUtc();
-      // Two-minute transport grace, bounded by the server's 21-minute maximum.
-      final until = validUntil.add(const Duration(minutes: 2));
-      await InRangeSupabase.client.rpc('claim_token', params: {
-        'p_token': claimToken,
-        'p_valid_until': until.toIso8601String(),
-        'p_lat': lat,
-        'p_lon': lon,
-        'p_range': dbRange,
-        'p_accuracy': _cachedAccuracy,
-      });
-      _cloudClaimed = true;
-      debugPrint(
-        'claim_token OK range=$dbRange until=${until.toIso8601String()}',
-      );
-    } catch (e) {
-      _cloudClaimed = false;
-      debugPrint('claim_token RPC failed (continuing local BLE): $e');
-    }
+    // Always send UTC — a local DateTime without offset is misread as UTC by
+    // Postgres and expires claims hours early (broke feet correlation once).
+    final until = _currentToken!.expiresAt.toUtc().add(const Duration(minutes: 2));
+    await InRangeSupabase.client.rpc('claim_token', params: {
+      'p_token': claimToken,
+      'p_valid_until': until.toIso8601String(),
+      'p_lat': _cachedLat,
+      'p_lon': _cachedLon,
+      'p_range': _mapUiRangeToDb(_claimRangeType ?? 'feet_60'),
+      'p_accuracy': _cachedAccuracy,
+    });
+    debugPrint('claim_token OK until=${until.toIso8601String()}');
   }
 
   bool _isFreshPosition(Position position) {

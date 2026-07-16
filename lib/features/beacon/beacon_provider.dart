@@ -107,6 +107,16 @@ class BeaconController extends StateNotifier<BeaconState> {
     _service.onBeaconStopped = () {
       if (mounted && state.isOn) state = const BeaconState();
     };
+    // Every claim attempt / rotation republishes token expiry + cloud state,
+    // so the UI can't show the first token's stale values (reviewer #11).
+    _service.onClaimStateChanged = (expiresAt, cloudSynced) {
+      if (!mounted || !state.isOn) return;
+      state = BeaconState(
+        isOn: true,
+        tokenExpiresAt: expiresAt ?? state.tokenExpiresAt,
+        cloudSynced: cloudSynced,
+      );
+    };
   }
 
   final Ref _ref;
