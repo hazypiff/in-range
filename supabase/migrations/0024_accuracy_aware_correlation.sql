@@ -102,12 +102,21 @@ BEGIN
       p_lat, p_lon, v_range, p_accuracy
     ) RETURNING id INTO v_id;
   ELSE
+    -- Keep a COHERENT strongest observation: RSSI, band, location and accuracy
+    -- must come from the SAME sample. Only when this sample is strictly
+    -- stronger do we replace all of them together; otherwise we merely advance
+    -- observed_at (a monotonic last-seen). Previously GREATEST(rssi) was pinned
+    -- to the LATEST sample's location/band — an observation that never
+    -- happened, which could pass the RSSI gate on old strength but store an
+    -- unrelated GPS tuple/band (reviewer #12).
     UPDATE public.sightings
-    SET rssi = GREATEST(rssi, p_rssi), observed_at = p_observed_at,
-        observer_lat = COALESCE(p_lat, observer_lat),
-        observer_lon = COALESCE(p_lon, observer_lon),
-        observer_accuracy_m = COALESCE(p_accuracy, observer_accuracy_m),
-        range_type = v_range
+    SET observed_at = p_observed_at,
+        rssi        = CASE WHEN p_rssi > rssi THEN p_rssi ELSE rssi END,
+        observer_lat = CASE WHEN p_rssi > rssi THEN p_lat ELSE observer_lat END,
+        observer_lon = CASE WHEN p_rssi > rssi THEN p_lon ELSE observer_lon END,
+        observer_accuracy_m =
+          CASE WHEN p_rssi > rssi THEN p_accuracy ELSE observer_accuracy_m END,
+        range_type  = CASE WHEN p_rssi > rssi THEN v_range ELSE range_type END
     WHERE id = v_id;
   END IF;
 

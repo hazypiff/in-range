@@ -41,6 +41,27 @@ ALTER TABLE public.encounters
   ADD COLUMN IF NOT EXISTS last_recurrence_at TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS last_seen_day DATE;
 
+-- Backfill existing rows so the counters, timestamps, and session history are
+-- consistent before the recurrence correlator runs (reviewer #14). Without
+-- this, a first post-migration sighting within the hour would target a
+-- nonexistent "latest session" and silently update zero rows, and null
+-- last_seen_day would mis-count distinct days.
+UPDATE public.encounters e
+SET first_seen_at = COALESCE(e.first_seen_at, e.encounter_time),
+    last_recurrence_at =
+      COALESCE(e.last_recurrence_at, e.last_seen_at, e.encounter_time),
+    last_seen_day =
+      COALESCE(e.last_seen_day, (COALESCE(e.last_seen_at, e.encounter_time))::DATE)
+WHERE e.first_seen_at IS NULL OR e.last_seen_day IS NULL;
+
+-- One session row per existing encounter that has none.
+INSERT INTO public.encounter_sessions (encounter_id, started_at, last_seen_at, best_range)
+SELECT e.id, e.encounter_time, COALESCE(e.last_seen_at, e.encounter_time), e.range_type
+FROM public.encounters e
+WHERE NOT EXISTS (
+  SELECT 1 FROM public.encounter_sessions s WHERE s.encounter_id = e.id
+);
+
 -- RLS: sessions are readable only by the two participants (defense in depth;
 -- all access goes through SECURITY DEFINER RPCs, but never leave it open).
 ALTER TABLE public.encounter_sessions ENABLE ROW LEVEL SECURITY;
@@ -162,9 +183,11 @@ BEGIN
     ) VALUES (
       v_user_a, v_user_b, 'Near you', v_now, v_now,
       v_band,
-      CASE WHEN v_distance IS NULL THEN 0.8 ELSE
-        LEAST(1.0, GREATEST(0.5, 1.0 - (v_distance / GREATEST(p_radius_meters, 1))))
-      END,
+      -- Neutral confidence: GPS is a VETO only (it already passed above), it
+      -- must not add positive confidence — otherwise a forged coordinate could
+      -- manufacture 1.0 (reviewer #16). BLE-derived confidence is computed
+      -- client-side (§5b); the server stores a constant until it is uploaded.
+      0.8,
       'active',
       1, 1, v_now, v_now, v_now::DATE
     ) RETURNING id INTO v_enc_id;
@@ -179,6 +202,7 @@ BEGIN
       UPDATE public.encounters
       SET session_count = session_count + 1,
           last_recurrence_at = v_now,
+          -- Increment when the calendar day changed (reviewer #15).
           distinct_day_count = distinct_day_count
             + CASE WHEN v_prev_day IS DISTINCT FROM v_now::DATE THEN 1 ELSE 0 END,
           last_seen_day = v_now::DATE,
@@ -186,24 +210,25 @@ BEGIN
           range_type = CASE
             WHEN range_type::TEXT LIKE 'feet_%' AND v_band::TEXT LIKE 'feet_%'
                  AND public.range_band_rank(v_band) < public.range_band_rank(range_type)
-              THEN v_band ELSE range_type END,
-          confidence = CASE WHEN v_distance IS NULL THEN confidence ELSE
-            LEAST(1.0, GREATEST(0.5, 1.0 - (v_distance / GREATEST(p_radius_meters, 1)))) END
+              THEN v_band ELSE range_type END
+          -- confidence unchanged (GPS is veto-only; reviewer #16)
       WHERE id = v_enc_id;
 
       INSERT INTO public.encounter_sessions (encounter_id, started_at, last_seen_at, best_range)
       VALUES (v_enc_id, v_now, v_now, v_band);
     ELSE
-      -- Same crossing: extend it, keep the running best band.
+      -- Same crossing: extend it, keep the running best band. A crossing that
+      -- spans midnight (23:50 -> 00:10, under the gap) still touches TWO
+      -- calendar days, so the day counter must advance here too (reviewer #15).
       UPDATE public.encounters
       SET last_seen_at = v_now,
+          distinct_day_count = distinct_day_count
+            + CASE WHEN last_seen_day IS DISTINCT FROM v_now::DATE THEN 1 ELSE 0 END,
           last_seen_day = v_now::DATE,
           range_type = CASE
             WHEN range_type::TEXT LIKE 'feet_%' AND v_band::TEXT LIKE 'feet_%'
                  AND public.range_band_rank(v_band) < public.range_band_rank(range_type)
-              THEN v_band ELSE range_type END,
-          confidence = CASE WHEN v_distance IS NULL THEN confidence ELSE
-            LEAST(1.0, GREATEST(0.5, 1.0 - (v_distance / GREATEST(p_radius_meters, 1)))) END
+              THEN v_band ELSE range_type END
       WHERE id = v_enc_id;
 
       UPDATE public.encounter_sessions es

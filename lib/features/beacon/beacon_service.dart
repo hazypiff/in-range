@@ -639,20 +639,20 @@ class BeaconService {
       rangeType: uploadRange,
     );
 
-    // Keep one pending row per corr (best RSSI).
+    // Keep one COHERENT best-evidence record per corr: RSSI, band, time,
+    // location and accuracy all come from the SAME physical sample. Previously
+    // the strongest RSSI was stitched onto the latest sample's time/coords/band
+    // — an observation that never happened, which could pass the server RSSI
+    // gate on old strength but store an unrelated location/band (reviewer #12).
     final prev = _pendingByCorr[observedCorrelationIdHex];
     if (prev == null && _pendingByCorr.length >= _maxPendingSightings) {
       _pendingByCorr.remove(_pendingByCorr.keys.first);
     }
-    _pendingByCorr[observedCorrelationIdHex] = SightingRecord(
-      observedToken: record.observedToken,
-      rssi: prev == null ? rssi : (rssi > prev.rssi ? rssi : prev.rssi),
-      observerLat: record.observerLat,
-      observerLon: record.observerLon,
-      observerAccuracyM: record.observerAccuracyM,
-      observedAt: record.observedAt,
-      rangeType: record.rangeType,
-    );
+    // Replace only when this sample is strictly stronger; otherwise keep the
+    // existing coherent record untouched.
+    if (prev == null || rssi > prev.rssi) {
+      _pendingByCorr[observedCorrelationIdHex] = record;
+    }
 
     final band = estimated;
     debugPrint(
