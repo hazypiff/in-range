@@ -12,6 +12,14 @@
 -- The veto stays coarse ON PURPOSE. It exists to stop cross-city relay/replay,
 -- not to measure distance. Distance is BLE's job.
 
+-- Adding p_accuracy with a default creates a NEW overload rather than
+-- replacing the old function — both would then match a call that omits
+-- p_accuracy, and PostgREST returns PGRST203 (ambiguous). Drop the exact
+-- prior signature first (migration 0011 documented this same outage mode).
+DROP FUNCTION IF EXISTS public.record_sighting(
+  TEXT, DOUBLE PRECISION, DOUBLE PRECISION, INTEGER, TIMESTAMPTZ, public.range_type
+);
+
 CREATE OR REPLACE FUNCTION public.record_sighting(
   p_observed_token TEXT,
   p_lat DOUBLE PRECISION DEFAULT NULL,
@@ -266,6 +274,11 @@ GRANT EXECUTE ON FUNCTION public.record_sighting(
 
 -- claim_token also carries the claimer's GPS accuracy, so the veto radius is
 -- computed from BOTH phones' real uncertainty rather than one side's.
+-- Drop the prior 5-arg signature first (same ambiguous-overload reason as above).
+DROP FUNCTION IF EXISTS public.claim_token(
+  TEXT, TIMESTAMPTZ, DOUBLE PRECISION, DOUBLE PRECISION, public.range_type
+);
+
 CREATE OR REPLACE FUNCTION public.claim_token(
   p_token TEXT,
   p_valid_until TIMESTAMPTZ,

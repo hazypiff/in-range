@@ -141,6 +141,55 @@ void main() {
     });
   });
 
+  group('review fixes', () {
+    test('#17 clear() wipes state so a new session cannot inherit NEAR', () {
+      for (var i = 0; i < 6; i++) {
+        est.addSample('a', -70, AdvertPower.high);
+        tick();
+      }
+      expect(est.classify('a'), 'feet_10');
+      est.clear();
+      est.addSample('a', -70, AdvertPower.high); // one fresh weak-evidence sample
+      expect(est.classify('a'), isNot('feet_10')); // needs 5, not inherited
+    });
+
+    test('#17 partial prune below 5 samples closes NEAR dwell', () {
+      // 5 samples at t=0,15,30,45,60 (all inside the 90 s window) -> NEAR at 60.
+      for (var i = 0; i < 5; i++) {
+        est.addSample('a', -70, AdvertPower.high);
+        if (i < 4) tick(15);
+      }
+      expect(est.classify('a'), 'feet_10'); // now=60, 5 samples present
+      tick(31); // now=91: sample t=0 ages out (>90) -> 4 samples left
+      est.classify('a'); // prune drops below 5 -> must close dwell
+      final d1 = est.nearDwell('a').inSeconds;
+      tick(60); // dwell must NOT keep growing for a tier no longer held
+      expect(est.nearDwell('a').inSeconds, d1);
+    });
+
+    test('#23 evidence median matches the classifier median (even n)', () {
+      for (final r in [-100, -90, -81, -79, -60, -50]) {
+        est.addSample('a', r, AdvertPower.high);
+        tick();
+      }
+      // classifier even-median = (-81 + -79)/2 = -80
+      expect(est.classify('a'), 'feet_10'); // -80 >= -80 threshold
+      expect(est.evidenceFor('a').medianRssi, -80); // not the upper-middle -79
+    });
+
+    test('#24 fresh-id flood is evicted down to the cap', () {
+      final e = RangeEstimator(clock: () => now);
+      for (var i = 0; i < 700; i++) {
+        e.addSample('peer$i', -70, AdvertPower.high);
+        tick(); // all fresh, all within window
+      }
+      // Not directly observable, but classify on an evicted early id is 'none'
+      // while a recent id survives — proves the map didn't grow unbounded.
+      expect(e.classify('peer0'), 'none');
+      expect(e.classify('peer699'), isNot('none'));
+    });
+  });
+
   group('rangeBandRank', () {
     test('orders narrow to wide with legacy feet_20 as mid', () {
       expect(rangeBandRank('feet_10'), lessThan(rangeBandRank('feet_30')));

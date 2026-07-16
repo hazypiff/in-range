@@ -67,6 +67,7 @@ class RangeEstimator {
     _updateNearDwell(correlationId, track, now);
 
     if (_peers.length > _maxPeers) {
+      // Drop stale peers first…
       final stale = _peers.entries
           .where((e) =>
               e.value.samples.isEmpty ||
@@ -74,6 +75,24 @@ class RangeEstimator {
           .map((e) => e.key)
           .toList();
       stale.forEach(_peers.remove);
+      // …then, if a flood of FRESH ids (e.g. a spoofer rotating payloads) is
+      // still over the cap, evict oldest-seen until at/below it. Without this
+      // loop the cap does nothing when every peer is fresh (reviewer #24/#9).
+      if (_peers.length > _maxPeers) {
+        final byAge = _peers.entries.toList()
+          ..sort((a, b) {
+            final ta = a.value.samples.isEmpty
+                ? DateTime.fromMillisecondsSinceEpoch(0)
+                : a.value.samples.last.at;
+            final tb = b.value.samples.isEmpty
+                ? DateTime.fromMillisecondsSinceEpoch(0)
+                : b.value.samples.last.at;
+            return ta.compareTo(tb);
+          });
+        for (var i = 0; _peers.length > _maxPeers && i < byAge.length; i++) {
+          _peers.remove(byAge[i].key);
+        }
+      }
     }
   }
 
@@ -100,18 +119,24 @@ class RangeEstimator {
       return const ProximityEvidence(bleSampleCount: 0, dwellSeconds: 0);
     }
     _prune(track, _now());
-    final high =
-        track.samples.where((s) => s.power == AdvertPower.high).toList();
-    int? median;
-    if (high.isNotEmpty) {
-      final r = high.map((s) => s.rssi).toList()..sort();
-      median = r[r.length ~/ 2];
-    }
+    final high = track.samples
+        .where((s) => s.power == AdvertPower.high)
+        .map((s) => s.rssi)
+        .toList();
     return ProximityEvidence(
       bleSampleCount: high.length,
       dwellSeconds: nearDwell(correlationId).inSeconds,
-      medianRssi: median,
+      // Same median the classifier uses — evidence must not disagree with the
+      // tier decision (reviewer #23). Rounded to int for the evidence field.
+      medianRssi: high.isEmpty ? null : _median(high).round(),
     );
+  }
+
+  /// The one median used by both classification and evidence.
+  static double _median(List<int> values) {
+    final r = List<int>.from(values)..sort();
+    final mid = r.length ~/ 2;
+    return r.length.isOdd ? r[mid].toDouble() : (r[mid - 1] + r[mid]) / 2.0;
   }
 
   /// Cumulative time this peer has held the feet_10 band (session-scoped).
@@ -137,11 +162,7 @@ class RangeEstimator {
         .map((s) => s.rssi)
         .toList();
     if (highRssi.length < nearMinSamples) return false;
-    highRssi.sort();
-    final mid = highRssi.length ~/ 2;
-    final median = highRssi.length.isOdd
-        ? highRssi[mid].toDouble()
-        : (highRssi[mid - 1] + highRssi[mid]) / 2.0;
+    final median = _median(highRssi);
     return median >= nearMedianDbm;
   }
 
@@ -170,10 +191,18 @@ class RangeEstimator {
         now.difference(track.samples.first.at) > window) {
       lastRemovedAt = track.samples.removeFirst().at;
     }
-    // Window emptied by silence: close any open NEAR interval at the
-    // moment its evidence expired, not at whenever we next look.
-    if (track.samples.isEmpty && track.nearSince != null) {
-      var end = (lastRemovedAt ?? track.nearSince!).add(window);
+    if (lastRemovedAt == null || track.nearSince == null) return;
+    // Aging samples out can drop the window below the NEAR predicate (e.g.
+    // fewer than 5 high-power samples) WITHOUT emptying it. Close the dwell
+    // interval whenever NEAR no longer holds, not only when the queue is
+    // empty (reviewer #17) — at the moment the last-still-present evidence
+    // expired, so silence never banks dwell.
+    if (!_isNear(track)) {
+      var end = (track.samples.isEmpty
+              ? lastRemovedAt
+              : track.samples.last.at)
+          .add(window);
+      if (end.isAfter(now)) end = now;
       if (end.isBefore(track.nearSince!)) end = track.nearSince!;
       track.nearAccum += end.difference(track.nearSince!);
       track.nearSince = null;

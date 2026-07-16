@@ -217,7 +217,8 @@ class BeaconService {
     // WiFi venue layer — 60s cadence: a venue changes on the scale of minutes,
     // and WiFi shares the 2.4GHz antenna with the BLE scanner that matters more.
     wifiScanner.onFingerprint = (fp) {
-      _wifiFingerprint = fp.hashed(_correlationSalt);
+      _wifiFingerprint =
+          fp.hashed(_correlationSalt, excludedBssids: wifiScanner.excludedBssids);
     };
     wifiScanner.start();
 
@@ -260,6 +261,10 @@ class BeaconService {
     _locationRefreshTimer = null;
     wifiScanner.stop();
     _wifiFingerprint = null;
+    // Estimator state must not leak across beacon sessions: after off/on, a
+    // single fresh weak sample could otherwise classify Close By from the
+    // prior session's samples (reviewer #17).
+    rangeEstimator.clear();
     await _flushSightings();
     await _releaseClaim();
     await _stopBle();
@@ -770,8 +775,17 @@ class BeaconService {
       _ownCorrHexes.remove(_ownCorrHexes.first);
     }
 
-    double? lat = _cachedLat;
-    double? lon = _cachedLon;
+    // Reuse the cached fix only if it is still fresh. Without the age check a
+    // user who travels >400 m without seeing a peer keeps claiming their
+    // ORIGIN, and the server's 400 m veto then rejects the real encounter at
+    // the new location (reviewer #7).
+    final cacheAge = _cachedLocAt == null
+        ? null
+        : DateTime.now().difference(_cachedLocAt!);
+    final cacheFresh = cacheAge != null &&
+        cacheAge <= const Duration(minutes: 2);
+    double? lat = cacheFresh ? _cachedLat : null;
+    double? lon = cacheFresh ? _cachedLon : null;
     if (lat == null) {
       try {
         Position? position = AppConfig.calibScanMode

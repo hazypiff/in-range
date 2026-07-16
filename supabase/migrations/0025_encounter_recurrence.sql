@@ -262,6 +262,13 @@ GRANT EXECUTE ON FUNCTION public.encounter_recurrence(BIGINT, INT) TO authentica
 
 -- get_my_encounters: carry the recurrence counters so the feed can show
 -- "you've crossed paths N times" and rank familiar faces higher.
+--
+-- This ADDS output columns (11 -> 15). PostgreSQL forbids changing a function's
+-- return-row type via CREATE OR REPLACE (OUT params are part of the type), so
+-- the old definition must be dropped first — and the DROP discards its ACL, so
+-- the GRANT below is required to restore authenticated access.
+DROP FUNCTION IF EXISTS public.get_my_encounters(INT, INT, NUMERIC);
+
 CREATE OR REPLACE FUNCTION public.get_my_encounters(
   p_limit INT DEFAULT 50,
   p_offset INT DEFAULT 0,
@@ -326,3 +333,6 @@ AS $$
   LIMIT LEAST(100, GREATEST(1, COALESCE(p_limit, 50)))
   OFFSET GREATEST(0, COALESCE(p_offset, 0));
 $$;
+
+-- Restore the ACL the DROP above discarded.
+GRANT EXECUTE ON FUNCTION public.get_my_encounters(INT, INT, NUMERIC) TO authenticated;

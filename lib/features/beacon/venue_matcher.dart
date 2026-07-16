@@ -73,10 +73,13 @@ class Fingerprint {
   /// Privacy: BSSIDs are salted-hashed before they ever leave the device, so
   /// the server can compare fingerprints without learning which networks —
   /// and therefore which places — a user is near.
-  Map<String, int> hashed(String salt) {
+  ///
+  /// Runs on the SAME filtered set as [usable] — strong, fresh, non-excluded —
+  /// so the uploaded fingerprint can't assert a stale AP from a room already
+  /// left, or the travelling hotspot. (Reviewer #22.)
+  Map<String, int> hashed(String salt, {Set<String> excludedBssids = const {}}) {
     final out = <String, int>{};
-    for (final a in aps) {
-      if (a.rssi < minRssi) continue;
+    for (final a in usable(excludedBssids)) {
       final mac = Hmac(sha256, utf8.encode(salt));
       final digest = mac.convert(utf8.encode(a.bssid.toLowerCase()));
       // 12 hex chars is ample to avoid collisions and keeps the payload small.
