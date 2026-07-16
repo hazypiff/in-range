@@ -113,6 +113,19 @@ class BeaconService {
   /// no-op instead of resurrecting a stale advertiser after stop.
   bool _advertisingWanted = false;
 
+  /// Same guard for the scan path: the 25-min restart timer, 15-min watchdog,
+  /// and stream onError all fire `_restartScanning`, which without
+  /// serialization can overwrite `_scanSub` (leaking a listener) or start a
+  /// fresh 1-hour hardware scan after teardown (reviewer #4).
+  Future<void> _scanOpChain = Future.value();
+  bool _scanningWanted = false;
+
+  Future<T> _serialScanOp<T>(Future<T> Function() op) {
+    final run = _scanOpChain.then((_) => op());
+    _scanOpChain = run.then((_) {}, onError: (_) {});
+    return run;
+  }
+
   /// Bumped on every turn-on/off. In-flight async work (rotation, claims)
   /// compares its captured generation and aborts if the session changed.
   int _sessionGeneration = 0;
@@ -140,20 +153,31 @@ class BeaconService {
       throw StateError('Sign in before starting the beacon.');
     }
     _currentRangeType = rangeType;
-    _sessionGeneration++;
+    final gen = ++_sessionGeneration;
+    _scanningWanted = true;
     _advertisingWanted = true;
 
     try {
       await _refreshClaim(rangeType: rangeType);
+      // A turnOffBeacon (account pause / provider disposal) can land during any
+      // of these awaits, bump the generation, and stop BLE. If so, abort before
+      // we publish _isOn or install timers — otherwise startup resurrects a
+      // stopped service (reviewer #3).
+      if (gen != _sessionGeneration) throw StateError('beacon turned off');
       await _startAdvertising();
+      if (gen != _sessionGeneration) throw StateError('beacon turned off');
       await _startScanning();
+      if (gen != _sessionGeneration) throw StateError('beacon turned off');
       _isOn = true;
     } catch (e) {
-      _advertisingWanted = false;
-      await _stopBle();
-      _currentToken = null;
-      _currentCorrelationId = null;
-      _currentRangeType = null;
+      if (gen == _sessionGeneration) {
+        _advertisingWanted = false;
+        _scanningWanted = false;
+        await _stopBle();
+        _currentToken = null;
+        _currentCorrelationId = null;
+        _currentRangeType = null;
+      }
       rethrow;
     }
 
@@ -247,6 +271,7 @@ class BeaconService {
     _isOn = false;
     _sessionGeneration++;
     _advertisingWanted = false;
+    _scanningWanted = false;
     _rotationTimer?.cancel();
     _rotationTimer = null;
     _sightingFlushTimer?.cancel();
@@ -324,10 +349,14 @@ class BeaconService {
   }
 
   Future<void> _stopBle() async {
-    await _scanSub?.cancel();
-    _scanSub = null;
+    // Serialized behind any in-flight start; queued starts no-op via
+    // _scanningWanted (already false by the time _stopBle is called on stop).
     try {
-      await FlutterBluePlus.stopScan();
+      await _serialScanOp(() async {
+        await _scanSub?.cancel();
+        _scanSub = null;
+        await FlutterBluePlus.stopScan();
+      });
     } catch (e) {
       debugPrint('BLE scan stop failed: $e');
     }
@@ -475,10 +504,15 @@ class BeaconService {
 
   bool _capsLogged = false;
 
-  Future<void> _startScanning() async {
+  Future<void> _startScanning() => _serialScanOp(_startScanningLocked);
+
+  Future<void> _startScanningLocked() async {
+    // Beacon turned off while this op waited in the queue — don't start a scan.
+    if (!_scanningWanted) return;
     await _logRadioCapabilities();
-    await _scanSub?.cancel();
+    final oldSub = _scanSub;
     _scanSub = null;
+    await oldSub?.cancel();
 
     try {
       await FlutterBluePlus.stopScan();
@@ -486,13 +520,17 @@ class BeaconService {
       debugPrint('Pre-scan stop failed: $e');
     }
 
-    _scanSub = FlutterBluePlus.scanResults.listen(
+    // Re-check after the awaits: teardown may have run while we were stopping.
+    if (!_scanningWanted) return;
+
+    final sub = FlutterBluePlus.scanResults.listen(
       _onScanResults,
       onError: (e) {
         debugPrint('BLE scan stream error: $e');
-        if (_isOn) unawaited(_restartScanning());
+        if (_scanningWanted) unawaited(_restartScanning());
       },
     );
+    _scanSub = sub;
 
     // Hardware msd filter (our manufacturer id) — required, not an
     // optimization: Android ≥8.1 suppresses UNFILTERED scans while the
@@ -501,14 +539,30 @@ class BeaconService {
     // The filter also confines results to In Range beacons, so the old
     // continuousDivisor flood guard is no longer needed.
     final calib = AppConfig.calibScanMode;
-    await FlutterBluePlus.startScan(
-      timeout: const Duration(hours: 1),
-      androidUsesFineLocation: true,
-      continuousUpdates: true,
-      withMsd: [MsdFilter(_inRangeManufacturerId)],
-      androidScanMode:
-          calib ? AndroidScanMode.lowLatency : AndroidScanMode.balanced,
-    );
+    try {
+      await FlutterBluePlus.startScan(
+        timeout: const Duration(hours: 1),
+        androidUsesFineLocation: true,
+        continuousUpdates: true,
+        withMsd: [MsdFilter(_inRangeManufacturerId)],
+        androidScanMode:
+            calib ? AndroidScanMode.lowLatency : AndroidScanMode.balanced,
+      );
+    } catch (e) {
+      // This op's own listener must not outlive a failed/aborted start.
+      await sub.cancel();
+      if (identical(_scanSub, sub)) _scanSub = null;
+      rethrow;
+    }
+    // Turned off during startScan → undo, don't leave a live hardware scan.
+    if (!_scanningWanted) {
+      await sub.cancel();
+      if (identical(_scanSub, sub)) _scanSub = null;
+      try {
+        await FlutterBluePlus.stopScan();
+      } catch (_) {}
+      return;
+    }
     debugPrint(
         'BLE scan started (filtered msd=0xFFFF, ${calib ? "lowLatency/calib" : "balanced"})');
   }
