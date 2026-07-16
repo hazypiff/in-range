@@ -22,13 +22,23 @@ class PermissionService {
       return false;
     }
 
-    // Android 12+ BLE "nearby devices" permissions (no-op below API 31).
-    // These are required for BLE scanning on modern Android.
-    await Future.wait([
+    // Android 12+ BLE "nearby devices" permissions. On API 31+ the app CANNOT
+    // scan or advertise without scan+advertise, so a denial here is a hard
+    // failure — not something to swallow and then fail cryptically inside the
+    // BLE plugin (reviewer #21). Below API 31 these resolve granted (no-op),
+    // so requiring them does not break Android 10/11.
+    final results = await Future.wait([
       Permission.bluetoothScan.request(),
       Permission.bluetoothAdvertise.request(),
       Permission.bluetoothConnect.request(),
     ]);
+    final scan = results[0];
+    final advertise = results[1];
+    // Nearby-devices grants are a single OS-level toggle, so scan and advertise
+    // move together; require both. (connect isn't needed for advertise+scan.)
+    if (!scan.isGranted || !advertise.isGranted) {
+      return false;
+    }
 
     return true;
   }
@@ -44,12 +54,17 @@ class PermissionService {
   static Future<PermissionResult> requestAllForBeacon() async {
     final fg = await requestForegroundBle();
     if (!fg) {
+      // Distinguish which grant is missing so the rationale is accurate.
+      final loc = await Permission.locationWhenInUse.isGranted;
       return PermissionResult(
-        foregroundLocation: false,
+        foregroundLocation: loc,
         backgroundLocation: false,
         canUseBeacon: false,
-        denialReason: 'Location permission is required for BLE proximity. '
-            'Please grant location access in Settings to use In Range.',
+        denialReason: loc
+            ? 'Nearby devices (Bluetooth) permission is required to find people '
+                'around you. Grant it in Settings to use In Range.'
+            : 'Location permission is required for BLE proximity. '
+                'Please grant location access in Settings to use In Range.',
       );
     }
     final bg = await requestBackgroundLocation();

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/features/beacon/venue_matcher.dart';
 
 /// Reads the platform's cached WiFi scan results for venue co-location.
@@ -96,9 +97,13 @@ class WifiScanner {
       _seq++;
       debugPrint('WifiScan seq=$_seq aps=${aps.length} fresh=$fresh '
           'usable=${usable.length}');
-      for (final a in aps..sort((x, y) => y.rssi.compareTo(x.rssi))) {
-        debugPrint('WifiAp seq=$_seq bssid=${a.bssid} rssi=${a.rssi} '
-            'band=${a.is5GHz ? 5 : 2} age=${(a.ageMs / 1000).round()}');
+      // Raw BSSIDs are a place fingerprint — log them only in calibration
+      // mode, never to production/release logs or bug reports (reviewer #18).
+      if (AppConfig.calibScanMode) {
+        for (final a in aps..sort((x, y) => y.rssi.compareTo(x.rssi))) {
+          debugPrint('WifiAp seq=$_seq bssid=${a.bssid} rssi=${a.rssi} '
+              'band=${a.is5GHz ? 5 : 2} age=${(a.ageMs / 1000).round()}');
+        }
       }
 
       onFingerprint?.call(fp);

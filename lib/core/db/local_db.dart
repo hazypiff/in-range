@@ -158,6 +158,19 @@ class LocalDb {
     await db.delete('sightings');
   }
 
+  Future<void> clearAliases() async {
+    await db.delete('aliases');
+  }
+
+  /// Wipe ALL local proximity/location traces — sightings, raw RSSI samples,
+  /// and peer aliases. Used by delete-history / sign-out / account deletion so
+  /// no place-fingerprint or peer history survives in the shared DB.
+  Future<void> wipeAll() async {
+    await db.delete('sightings');
+    await db.delete('rssi_log');
+    await db.delete('aliases');
+  }
+
   Future<Map<String, String>> allAliases() async {
     final rows = await db.query('aliases');
     return {

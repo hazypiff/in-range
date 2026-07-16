@@ -136,11 +136,17 @@ class LocalEncounterStore extends StateNotifier<Map<String, LocalEncounter>> {
   final LocalDb? _db;
   Map<String, String> _aliases = {};
 
+  /// Bumped by clear(); hydration checks it before publishing so a stale
+  /// snapshot can't resurrect a cleared / signed-out account's cards
+  /// (reviewer #19).
+  int _generation = 0;
+
   Future<void> _hydrate() async {
     final db = _db;
     if (db == null) return;
+    final gen = _generation;
     try {
-      _aliases = await db.allAliases();
+      final aliases = await db.allAliases();
       final rows = await db.allSightings();
       final map = <String, LocalEncounter>{};
       for (final r in rows) {
@@ -156,7 +162,7 @@ class LocalEncounterStore extends StateNotifier<Map<String, LocalEncounter>> {
           ),
           bestRssi: r['best_rssi']! as int,
           rangeType: r['range_type']! as String,
-          alias: _aliases[id],
+          alias: aliases[id],
           bestBand:
               (storedBand == null || storedBand.isEmpty) ? null : storedBand,
         );
@@ -166,7 +172,15 @@ class LocalEncounterStore extends StateNotifier<Map<String, LocalEncounter>> {
           await db.deleteSighting(id);
         }
       }
-      state = map;
+      // A clear() or live sighting may have raced ahead while we were reading.
+      // Don't clobber current state with the stale snapshot: merge in only
+      // ids we don't already hold, and abort entirely if we were cleared.
+      if (gen != _generation) {
+        debugPrint('Hydrate discarded — store changed during load');
+        return;
+      }
+      _aliases = aliases;
+      state = {...map, ...state}; // live entries win over the disk snapshot
       debugPrint('Hydrated ${map.length} local sightings from SQLite');
     } catch (e) {
       debugPrint('Sighting hydrate failed: $e');
@@ -285,7 +299,12 @@ class LocalEncounterStore extends StateNotifier<Map<String, LocalEncounter>> {
   }
 
   Future<void> clear() async {
-    await _db?.clearSightings();
+    // Invalidate any in-flight hydration so a stale snapshot can't reappear
+    // after the wipe (reviewer #19), and delete ALL local traces — sightings,
+    // raw RSSI samples, and aliases — not just sightings (reviewer #18).
+    _generation++;
+    _aliases = {};
+    await _db?.wipeAll();
     state = const {};
   }
 }

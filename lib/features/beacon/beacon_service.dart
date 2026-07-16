@@ -361,6 +361,18 @@ class BeaconService {
       throw StateError('No beacon token is available');
     }
 
+    // FAIL CLOSED on iOS: the pinned flutter_ble_peripheral Darwin bridge
+    // forwards only serviceUuid/localName, never manufacturerData, so an
+    // iPhone would advertise an EMPTY packet and no peer could recover the
+    // 16-byte id — yet the call "succeeds" and the UI would say "findable"
+    // (reviewer #2). Until an iOS-supported carrier (service UUID / iBeacon)
+    // ships and is device-tested, refuse rather than lie about discoverability.
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      throw StateError(
+          'iOS beacon advertising is not yet supported — peers cannot discover '
+          'this device. (Tracked: iOS token carrier not implemented.)');
+    }
+
     final peripheral = FlutterBlePeripheral();
     // Legacy payload: mfg id + 16-byte corr + 1 flag byte (fits 31-byte AD).
     // Flag bit0 = medium-power slot. Field test 2026-07-13: Samsung's stack
@@ -564,16 +576,19 @@ class BeaconService {
       // under-fire, never claim mid-range falsely.
       final power = mediumFlag ? AdvertPower.medium : AdvertPower.high;
       rangeEstimator.addSample(hexId, r.rssi, power);
-      try {
-        onAdvertSample?.call(hexId, r.rssi, power, DateTime.now());
-      } catch (e) {
-        debugPrint('onAdvertSample callback error: $e');
+      // Raw per-advert persistence + verbose peer logging is CALIBRATION only.
+      // In production it would retain a place/peer fingerprint and print peer
+      // ids to release logs / bug reports (reviewer #18).
+      if (AppConfig.calibScanMode) {
+        try {
+          onAdvertSample?.call(hexId, r.rssi, power, DateTime.now());
+        } catch (e) {
+          debugPrint('onAdvertSample callback error: $e');
+        }
+        // One line per fresh foreign advert — the calibration ground truth.
+        debugPrint(
+            'Advert corr=${hexId.substring(0, 8)} rssi=${r.rssi} pw=${power == AdvertPower.medium ? "M" : "H"}');
       }
-
-      // One line per fresh foreign advert — the calibration ground truth
-      // (logcat timestamp + live RSSI). Cheap: filtered scan = only our beacons.
-      debugPrint(
-          'Advert corr=${hexId.substring(0, 8)} rssi=${r.rssi} pw=${power == AdvertPower.medium ? "M" : "H"}');
 
       _lastForeignScanAt = DateTime.now();
       _recordLocalSighting(hexId, r.rssi);

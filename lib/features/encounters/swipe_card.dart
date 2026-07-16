@@ -62,8 +62,11 @@ class SwipeCard {
   }
 
   double get expiryProgress {
-    if (expiresAt == null || encounterTime == null) return 0;
-    final total = expiresAt!.difference(encounterTime!).inMilliseconds;
+    if (expiresAt == null) return 0;
+    // Fraction of the fixed feet lifetime still left. Using the lifetime (not
+    // expires−encounterTime) keeps the bar correct for recurring encounters,
+    // whose expiry now runs from last-seen, not the first meeting (#20).
+    final total = LocalEncounter.feetLifespan.inMilliseconds;
     if (total <= 0) return 0;
     return (timeRemaining.inMilliseconds / total).clamp(0.0, 1.0);
   }
@@ -88,9 +91,14 @@ class SwipeCard {
         const <String>[];
     final rt = row['range_type']?.toString() ?? 'feet_10';
     final et = DateTime.tryParse(row['encounter_time']?.toString() ?? '');
+    final lastSeen =
+        DateTime.tryParse(row['last_seen_at']?.toString() ?? '');
     DateTime? exp;
-    if (rt.startsWith('feet') && et != null) {
-      exp = et.add(LocalEncounter.feetLifespan);
+    if (rt.startsWith('feet')) {
+      // 24h lifetime runs from LAST seen, not first meeting — a peer seen again
+      // just now must not already read "0s remaining" (reviewer #20).
+      final base = lastSeen ?? et;
+      if (base != null) exp = base.add(LocalEncounter.feetLifespan);
     }
     return SwipeCard(
       id: id,
@@ -159,9 +167,14 @@ List<SwipeCard> buildHybridSwipeDeck({
     cards.add(SwipeCard.fromLocal(e));
   }
 
-  // When server has cards, put them first (product: real profiles with photos).
+  // Server cards first (real profiles with photos), then FAMILIAR FACES first —
+  // preserve the server's session_count ordering instead of flattening it back
+  // to recency (reviewer #20), then most-recent.
   cards.sort((a, b) {
     if (a.isServer != b.isServer) return a.isServer ? -1 : 1;
+    if (a.sessionCount != b.sessionCount) {
+      return b.sessionCount.compareTo(a.sessionCount);
+    }
     final at = a.encounterTime ?? DateTime.fromMillisecondsSinceEpoch(0);
     final bt = b.encounterTime ?? DateTime.fromMillisecondsSinceEpoch(0);
     return bt.compareTo(at);
