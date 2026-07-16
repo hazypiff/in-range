@@ -71,9 +71,11 @@ class _BeaconScreenState extends ConsumerState<BeaconScreen> {
         // Surface the real reason. Config/crypto/sign-in failures are
         // StateErrors and are NOT permission problems — don't mislabel them.
         setState(() {
+          // Surface the raw exception so field debugging doesn't need a
+          // tethered session (2026-07-16). Type + message pins the throw site.
           _lastError = e is StateError
               ? 'Beacon could not start: ${e.message}'
-              : 'Could not start the Beacon. Check Bluetooth, location, and app permissions.';
+              : 'Beacon error [${e.runtimeType}]: $e';
         });
       }
     }

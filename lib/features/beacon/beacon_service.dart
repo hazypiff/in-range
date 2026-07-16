@@ -576,6 +576,26 @@ class BeaconService {
   Future<void> _startScanningLocked() async {
     // Beacon turned off while this op waited in the queue — don't start a scan.
     if (!_scanningWanted) return;
+
+    // iOS: CoreBluetooth starts in CBManagerStateUnknown and only reports
+    // poweredOn asynchronously a beat after first use. Calling startScan
+    // before then throws PlatformException(startScan, "bluetooth must be
+    // turned on (CBManagerStateUnknown)") even though BT is on (2026-07-16).
+    // Android reports `on` immediately, so this wait is a no-op there.
+    if (FlutterBluePlus.adapterStateNow != BluetoothAdapterState.on) {
+      try {
+        await FlutterBluePlus.adapterState
+            .firstWhere((s) => s == BluetoothAdapterState.on)
+            .timeout(const Duration(seconds: 6));
+      } catch (_) {
+        // Still not on after the wait — surface the real state, not a
+        // generic failure, so the UI can say "turn Bluetooth on".
+        throw StateError(
+            'Bluetooth is not ready (${FlutterBluePlus.adapterStateNow.name}). '
+            'Turn Bluetooth on and try again.');
+      }
+    }
+
     await _logRadioCapabilities();
     final oldSub = _scanSub;
     _scanSub = null;
