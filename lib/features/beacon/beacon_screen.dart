@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:in_range/core/navigation/home_tab.dart';
+import 'package:in_range/core/permissions/permission_service.dart';
 import 'package:in_range/core/privacy/safety_store.dart';
 import 'package:in_range/features/beacon/beacon_provider.dart';
 import 'package:in_range/features/encounters/local_encounter_store.dart';
@@ -55,10 +56,14 @@ class _BeaconScreenState extends ConsumerState<BeaconScreen> {
 
       final s = ref.read(beaconControllerProvider);
       if (!s.isOn && mounted) {
-        setState(() {
-          _lastError =
-              'Beacon stayed off — check location permission + Bluetooth.';
-        });
+        // Name the exact denied permission on-screen — field debugging must
+        // not depend on a tethered debug session (2026-07-16 iOS incident).
+        final diag = await PermissionService.diagnose();
+        if (mounted) {
+          setState(() {
+            _lastError = 'Beacon stayed off — $diag';
+          });
+        }
       }
     } catch (e) {
       debugPrint('Beacon toggle failed: $e');

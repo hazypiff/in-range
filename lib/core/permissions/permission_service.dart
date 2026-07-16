@@ -18,6 +18,7 @@ class PermissionService {
     // Location is prerequisite for BLE on API 29. On API 31+ it is not
     // required for scanning but needed for GPS (miles feed). Request it first.
     final foreground = await Permission.locationWhenInUse.request();
+    debugPrint('PERM locationWhenInUse: $foreground');
     if (!foreground.isGranted) {
       return false;
     }
@@ -34,6 +35,8 @@ class PermissionService {
     ]);
     final scan = results[0];
     final advertise = results[1];
+    debugPrint(
+        'PERM btScan: $scan btAdvertise: $advertise btConnect: ${results[2]}');
     // Nearby-devices grants are a single OS-level toggle, so scan and advertise
     // move together; require both. (connect isn't needed for advertise+scan.)
     if (!scan.isGranted || !advertise.isGranted) {
@@ -48,6 +51,30 @@ class PermissionService {
   static Future<bool> requestBackgroundLocation() async {
     final bg = await Permission.locationAlways.request();
     return bg.isGranted;
+  }
+
+  /// Compact status line of every permission the beacon gate checks —
+  /// shown in the UI when the beacon refuses, so field debugging never
+  /// depends on a tethered debug session.
+  static Future<String> diagnose() async {
+    final entries = <String, Permission>{
+      'loc': Permission.locationWhenInUse,
+      'locAlways': Permission.locationAlways,
+      'btScan': Permission.bluetoothScan,
+      'btAdv': Permission.bluetoothAdvertise,
+      'btConn': Permission.bluetoothConnect,
+      'bt': Permission.bluetooth,
+    };
+    final parts = <String>[];
+    for (final e in entries.entries) {
+      try {
+        final s = await e.value.status;
+        parts.add('${e.key}=${s.name}');
+      } catch (err) {
+        parts.add('${e.key}=err');
+      }
+    }
+    return parts.join(' ');
   }
 
   /// Full flow: foreground → background. Returns a PermissionResult.
