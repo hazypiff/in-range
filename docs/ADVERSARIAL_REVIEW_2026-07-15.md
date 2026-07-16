@@ -33,12 +33,28 @@
 > reciprocity server-receipt window remain the real gates — not a security
 > relaxation), and locked in by test T8. Deployed to prod and ledgered as 0030.
 >
-> **Remaining #6 roadmap (not yet built):** (2) server-issued daily token batches
-> to replace the shared client HMAC without losing offline scanning; (3) App
-> Attest / Play Integrity around token issuance + sighting submission; (4)
-> relay-abuse detection (token fan-out, geographically incompatible honest
-> observations, unusual recurrence velocity); (5) UWB `secure_ranged` confirmation
-> where supported.
+> **#6 step 2 — server-issued opaque token batches (0031 + client), SHIPPED.**
+> Beacon tokens are now minted by the SERVER (`issue_token_batch`: 96 opaque
+> 122-bit tokens/day) instead of derived client-side from an HMAC secret shipped
+> in the app (which was cosmetic — anyone with the binary could compute it). The
+> client fetches a day's batch and advertises the slot covering now
+> (`BatchTokenSource`, replacing `EphemeralTokenGenerator`); it still claims per
+> rotation so GPS/range stay dynamic, but the token VALUE is server-owned and
+> unguessable. `claim_token` consumes the caller's batch token and, when
+> `app_settings.enforce_batch_tokens >= 1`, rejects any token not issued to that
+> account. Rollout is **non-breaking**: the flag defaults 0 so current clients
+> keep working; flip it (a data change, no migration) once the batch-aware client
+> has rolled out. Observer-side offline scanning is unchanged (resolution stays
+> via `token_claim_history`). Validated on local Supabase + harness T9 (96
+> distinct opaque tokens, idempotent re-issue, own-token consume, self-minted and
+> cross-user tokens rejected under enforcement). Deployed to prod, ledgered 0031,
+> flag OFF. **Cutover TODO:** after client rollout, `UPDATE app_settings SET
+> value_num=1 WHERE key='enforce_batch_tokens';`.
+>
+> **Remaining #6 roadmap (not yet built):** (3) App Attest / Play Integrity around
+> token issuance + sighting submission; (4) relay-abuse detection (token fan-out,
+> geographically incompatible honest observations, unusual recurrence velocity);
+> (5) UWB `secure_ranged` confirmation where supported.
 >
 > The SQL fixes #1/#10 and #5/#8/#13 were **validated against the local Supabase
 > Postgres container** (`supabase_db_in-range`): migrations 0020–0028 apply

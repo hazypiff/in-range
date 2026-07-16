@@ -1,7 +1,5 @@
 import 'dart:async';
-import 'dart:convert';
 
-import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_ble_peripheral/flutter_ble_peripheral.dart';
@@ -9,6 +7,7 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/core/network/supabase_client.dart';
+import 'package:in_range/features/beacon/batch_token_source.dart';
 import 'package:in_range/features/beacon/claim_manager.dart';
 import 'package:in_range/features/beacon/ephemeral_token_generator.dart';
 import 'package:in_range/features/beacon/range_estimator.dart';
@@ -37,16 +36,19 @@ class BeaconService {
     Duration rotationWindow = const Duration(minutes: 15),
     this.onSighting,
     this.onAdvertSample,
-  })  : _tokenGenerator = EphemeralTokenGenerator(
-          userIdSecret: userIdSecret,
-          userId: userId,
-          hmacSecret: hmacSecret,
-          rotationWindow: rotationWindow,
-        ),
-        _userId = userId,
-        _correlationSalt = hmacSecret;
+  })  : _userId = userId,
+        _correlationSalt = hmacSecret,
+        _rotationWindow = rotationWindow;
 
-  final EphemeralTokenGenerator _tokenGenerator;
+  // #6 step 2: opaque beacon tokens now come from the server
+  // (issue_token_batch), not a client-side HMAC keyed by a secret shipped in the
+  // app. `userIdSecret` is kept in the signature for API stability but is no
+  // longer used for token derivation.
+  late final BatchTokenSource _tokenSource = BatchTokenSource(
+    fetchBatch: _fetchTokenBatch,
+    rotationWindow: _rotationWindow,
+  );
+  final Duration _rotationWindow;
   final String _userId;
   final String _correlationSalt;
 
@@ -201,7 +203,7 @@ class BeaconService {
     _rotationTimer?.cancel();
     _rotationTimer = Timer.periodic(const Duration(seconds: 90), (_) {
       if (!_isOn) return;
-      if (_tokenGenerator.shouldRotate(_currentToken)) {
+      if (_tokenSource.shouldRotate(_currentToken)) {
         unawaited(_rotateToken(rangeType));
       }
     });
@@ -393,10 +395,44 @@ class BeaconService {
       '0000cafe-0000-1000-8000-00805f9b34fb';
   static const int _inRangeManufacturerId = 0xFFFF;
 
-  Uint8List _deriveCorrelationId(String token) {
-    final hmac = Hmac(sha256, utf8.encode(_correlationSalt));
-    final digest = hmac.convert(utf8.encode(token));
-    return Uint8List.fromList(digest.bytes.sublist(0, 16));
+  /// The advertised/claimed correlation id is now the raw 16 bytes of the
+  /// server-issued opaque token (32 hex chars) — no HMAC. Peers hex these bytes
+  /// back to the same token and report it; the server resolves it via the claim
+  /// history the advertiser wrote. (#6 step 2)
+  Uint8List _hexTo16Bytes(String hex) {
+    final out = Uint8List(16);
+    for (var i = 0; i < 16; i++) {
+      out[i] = int.parse(hex.substring(i * 2, i * 2 + 2), radix: 16);
+    }
+    return out;
+  }
+
+  /// Fetches this user's server-issued opaque token batch for [dayUtc]. Returns
+  /// [] in local mode or on failure, so the token source falls back to a random
+  /// token and advertising never stalls.
+  Future<List<BatchSlot>> _fetchTokenBatch(
+      DateTime dayUtc, int windowMinutes) async {
+    if (!AppConfig.hasRealSupabase) return const <BatchSlot>[];
+    final dayStr = dayUtc.toIso8601String().split('T').first;
+    final rows = await InRangeSupabase.client.rpc('issue_token_batch', params: {
+      'p_day': dayStr,
+      'p_window_minutes': windowMinutes,
+    });
+    if (rows is! List) return const <BatchSlot>[];
+    final out = <BatchSlot>[];
+    for (final r in rows) {
+      if (r is Map &&
+          r['token'] is String &&
+          r['valid_from'] != null &&
+          r['valid_until'] != null) {
+        out.add(BatchSlot(
+          token: r['token'] as String,
+          validFrom: DateTime.parse('${r['valid_from']}').toUtc(),
+          validUntil: DateTime.parse('${r['valid_until']}').toUtc(),
+        ));
+      }
+    }
+    return out;
   }
 
   Future<void> _startAdvertising() => _serialAdvOp(_startAdvertisingLocked);
@@ -851,8 +887,8 @@ class BeaconService {
   }
 
   Future<void> _refreshClaim({required String rangeType}) async {
-    _currentToken = _tokenGenerator.generate();
-    _currentCorrelationId = _deriveCorrelationId(_currentToken!.token);
+    _currentToken = await _tokenSource.nextToken();
+    _currentCorrelationId = _hexTo16Bytes(_currentToken!.token);
     // Remember every token we advertise so the scanner never self-sights a
     // stale one (leaked advertiser after off→on). Bounded to stay tiny.
     _ownCorrHexes.add(_currentCorrelationId!

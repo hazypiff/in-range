@@ -6,6 +6,11 @@ import 'package:crypto/crypto.dart';
 
 /// EphemeralTokenGenerator
 ///
+/// SUPERSEDED by [BatchTokenSource] (#6 step 2): beacon tokens are now minted by
+/// the server (`issue_token_batch`) as opaque values, not derived client-side
+/// from a shipped HMAC secret. This class is retained only for reference and its
+/// own tests; [EphemeralToken] below is still the shared token value type.
+///
 /// Implements the v1 token format from docs/ephemeral-token-spec.md:
 ///
 ///   `user_hash_8bytes|epoch_4bytes|random_16bytes|hmac_8bytes`
