@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -21,6 +23,21 @@ class PermissionService {
     debugPrint('PERM locationWhenInUse: $foreground');
     if (!foreground.isGranted) {
       return false;
+    }
+
+    // iOS has NO scan/advertise/connect permissions — those are Android 12+
+    // (BLUETOOTH_SCAN/ADVERTISE/CONNECT) only. On iOS permission_handler
+    // returns `denied` for them permanently, so requiring them here bricked
+    // the beacon on every iPhone build (2026-07-16 incident). iOS gates BLE
+    // through the single `Permission.bluetooth` + the Info.plist usage
+    // strings; the OS prompts on first CBCentral/PeripheralManager use.
+    if (Platform.isIOS) {
+      final bt = await Permission.bluetooth.request();
+      debugPrint('PERM iOS bluetooth: $bt');
+      // isPermanentlyDenied only if the user explicitly refused; otherwise
+      // (granted / not-yet-determined) let the beacon proceed and let the
+      // CoreBluetooth manager surface any real block.
+      return !bt.isPermanentlyDenied;
     }
 
     // Android 12+ BLE "nearby devices" permissions. On API 31+ the app CANNOT

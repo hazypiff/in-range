@@ -1,8 +1,39 @@
 # iOS beacon start-failure audit — 2026-07-16
 
 **Device:** iPhone 14 (iOS 26.5.2) · **Machine:** Mac (Tahoe 26.5.2, Flutter
-3.44.6, Xcode 26.5) · **Status:** OPEN — on-device diagnostic shipped, awaiting
-its verdict.
+3.44.6, Xcode 26.5) · **Status:** ROOT-CAUSED. Permission bug **FIXED**; a
+second, deeper blocker (iOS advertising) surfaced behind it and is **deferred
+to hazypiff** — see `docs/IOS_ADVERTISING_CARRIER.md`.
+
+## RESOLUTION (permission gate)
+
+On-screen diagnostic returned:
+`loc=granted locAlways=permanentlyDenied btScan=denied btAdv=denied btConn=denied bt=granted`
+
+**Root cause:** `PermissionService.requestForegroundBle()` required
+`bluetoothScan` + `bluetoothAdvertise` to be *granted*. Those are **Android 12+
+only** permissions (`BLUETOOTH_SCAN`/`ADVERTISE`); on iOS permission_handler
+returns them permanently `denied`. So the gate could never pass on any iPhone
+— the beacon was unreachable on iOS regardless of build or settings. The
+real iOS permission (`bluetooth`) was granted the whole time. Fixed: the gate
+is now platform-branched — iOS checks `Permission.bluetooth` only.
+
+The Podfile `PERMISSION_*` macros (added earlier this session) were also a
+genuine latent bug (permission_handler compiles handlers out without them),
+kept. The `strings`-based binary gate used mid-debug is unreliable on Dart AOT
+snapshots (false negatives) — do not trust it.
+
+## SECOND BLOCKER (now the real one) — iOS advertising not implemented
+Fixing permissions let the beacon reach `_startAdvertisingLocked`, which
+**deliberately throws on iOS** (`beacon_service.dart:454`): the token rides in
+BLE manufacturerData, which the iOS `flutter_ble_peripheral` bridge can't
+send. Correct fail-closed guard, not a bug. Full spec + options handed to
+hazypiff in `docs/IOS_ADVERTISING_CARRIER.md`.
+
+---
+_Original investigation below (permission hunt) kept for the record._
+
+---
 
 ## Symptom
 
