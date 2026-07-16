@@ -100,8 +100,39 @@ Devices: iPhone 14 (release build, signed 2026-07-15 — valid through
    ways. Foreground first; repeat pocketed if time allows.
 3. **Boundary dwell**: hold at 20 ft and 75 ft (tier edges) for 3 min each —
    measure classification flicker rate to size hysteresis.
-4. Log everything to `run_logs/sessions/` and summarize as a journal entry in
+4. **Record station times**: note wall-clock arrive/leave time at every
+   distance station (photo of a watch works). The rssi_log rows are
+   timestamped; station times are how samples get labeled with true
+   distance afterward. Without them the raw log can't be sliced.
+5. Log everything to `run_logs/sessions/` and summarize as a journal entry in
    `DEVICE_TESTING_JOURNAL.md`.
+
+### Post-walk data extraction (dry-run verified 2026-07-15)
+
+iPhone (from the Mac; app must be installed, phone plugged in/trusted):
+```sh
+xcrun devicectl device copy from \
+  --device 27A0976C-78DD-5D1D-926E-0CE635E5C23A \
+  --domain-type appDataContainer --domain-identifier io.inrange.inRange \
+  --source Documents/in_range_local.db \
+  --destination run_logs/sessions/<date>_iphone.db
+```
+
+Android (from the Dell, as in prior walks):
+```sh
+adb pull $(adb shell run-as io.inrange.app sh -c 'ls /data/data/*/databases/in_range_local.db' | head -1) \
+  run_logs/sessions/<date>_android.db
+# or: adb root && adb pull, per device setup
+```
+
+Analysis query (per station window, per device pairing):
+```sql
+SELECT power, COUNT(*),
+       MIN(rssi), MAX(rssi), AVG(rssi)
+FROM rssi_log
+WHERE at_ms BETWEEN <station_start_ms> AND <station_end_ms>
+GROUP BY power;
+```
 
 Pre-walk checklist: iPhone + Android charged; Bluetooth + location granted
 on both; iPhone app opens from home screen (release build); `.env` cloud
