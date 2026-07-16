@@ -3,8 +3,8 @@
 **For:** the partner (and their AI agent) picking up the remaining anti-forgery work.
 **Last updated:** 2026-07-16. **Prod project ref:** `riigipzlyqeaadyvbuty`.
 
-This is an executable handoff. Each pending task below has a precondition, exact
-steps, and a verification. Do them in any order; keep the security harness green.
+This is an executable handoff. Tasks A, C, and D are still pending; Task B is a
+shipped operations reference. Keep the security harness green.
 
 ---
 
@@ -15,11 +15,11 @@ steps, and a verification. Do them in any order; keep the security harness green
 | 1 | Reciprocal confirmation (`trust_level='mutual_ble'`) — encounter only when both phones saw each other within ~3 min by **server** receipt time | `migrations/0029` | ✅ prod |
 | — | Rotation-boundary confirm fix (grace-valid tokens could confirm) | `migrations/0030` | ✅ prod |
 | 2 | Server-issued opaque token batches (`issue_token_batch`), client `BatchTokenSource` advertises them; `claim_token` batch-gated behind a flag | `migrations/0031`, `lib/features/beacon/batch_token_source.dart` | ✅ prod (enforcement **OFF**) |
-| 4 | Relay-abuse detection (`scan_relay_abuse` → `beacon_abuse_flags`) + 15-min pg_cron | `migrations/0032`, `ops/schedule_relay_abuse_scan.sql` | ✅ prod (telemetry live) |
+| 4 | Relay-abuse detection + evidence de-dupe + service-role triage/digest policy + 15-min pg_cron | `migrations/0032`–`0033`, `docs/RELAY_ABUSE_RUNBOOK.md` | ✅ prod |
 | 3 | App Attest / Play Integrity at issuance | — | ⛔ TODO (Task C) |
 | 5 | UWB `secure_ranged` confirmation | — | ⛔ TODO (Task D) |
 
-**Prod migration ledger:** through `0032`. **Enforcement flag:** `app_settings.enforce_batch_tokens = 0`.
+**Prod migration ledger:** through `0033`. **Enforcement flag:** `app_settings.enforce_batch_tokens = 0`.
 
 **Threat model wording (keep precise):** unilateral/API-only forgery is fixed;
 `mutual_ble` is **not** relay-proof (a relay forwarding both tokens + spoofing GPS
@@ -35,8 +35,8 @@ address); a true "we were physically together" proof needs secure ranging
    ```bash
    bash supabase/tests/run_security_tests.sh      # needs the local Supabase Postgres container
    ```
-   It checks: migrations 0020+ apply in order (idempotent); 10 reciprocity/batch/
-   relay invariants (T1–T10, transactional + rolled back); advisory-lock
+   It checks: migrations 0020+ apply in order (idempotent); 11 reciprocity/batch/
+   relay invariants (T1–T11, transactional + rolled back); advisory-lock
    concurrency. Add a Tn for any new invariant you introduce.
 2. **Deploy, then commit** (match the existing history). Deploy SQL via the
    Supabase SQL editor, `supabase db push`, or the management API
@@ -72,35 +72,32 @@ enforcement.
 
 ---
 
-## TASK B — Relay-abuse response surface + policy
+## TASK B — Relay-abuse response surface + policy (✅ shipped)
 
-The scan is **live** (pg_cron `relay-abuse-scan`, every 15 min) and writing to
-`public.beacon_abuse_flags`. What's missing is (1) a place to see flags and (2) a
-decided response. **Do NOT auto-punish** on `relay_geo` — in a forwarding relay
-both parties are victims; the distance veto already blocks the bogus encounter.
+Migration 0033 adds stable evidence fingerprints so the overlapping cron
+lookback cannot count one incident twice. It also adds service-role-only triage
+and digest views with an advisory policy. **Do NOT auto-punish** on `relay_geo` —
+the flagged token owner is normally a relay victim.
 
-**See the flags (service role):**
+**Operate (service role):**
 ```sql
-SELECT reason, count(*) AS n, max(created_at) AS latest
-FROM public.beacon_abuse_flags
-WHERE created_at > now() - interval '24 hours'
-GROUP BY reason ORDER BY n DESC;
+SELECT * FROM public.v_beacon_abuse_triage_24h
+ORDER BY attention_rank, latest_flag_at DESC;
 
-SELECT * FROM public.beacon_abuse_flags ORDER BY created_at DESC LIMIT 50;
+SELECT * FROM public.v_beacon_abuse_digest_24h
+ORDER BY highest_attention_rank, incident_count DESC;
 
 -- cron health:
 SELECT status, count(*), max(start_time) FROM cron.job_run_details
 WHERE jobid = (SELECT jobid FROM cron.job WHERE jobname='relay-abuse-scan')
 GROUP BY status;
 ```
-**Decide + implement:** thresholds and response per reason.
-- `claim_teleport` (the account's OWN GPS is impossible → spoof/compromise):
-  candidate for rate-limiting `issue_token_batch` / step-up verification / review.
-- `relay_geo` (a victim's token was relayed): review/telemetry only; consider
-  batch-revocation only with corroboration.
-Wire an admin view or Slack/email digest off the query above. Tune the scan
-constants in `scan_relay_abuse` (`c_max_mps`, `c_min_meters` in `migrations/0032`)
-if false positives appear; re-run the harness after any change.
+
+Policy: `claim_teleport` is monitor at 1 incident/24h, review at 2, and advisory
+step-up + manual review at 3+; `relay_geo` is telemetry at 1–2 and relay-pattern
+investigation at 3+, always with no user restriction from that signal alone.
+`automatic_restriction` is `false` for every triage row. The full response
+workflow and raw/cron queries are in `docs/RELAY_ABUSE_RUNBOOK.md`.
 
 **Disable the scan if needed:** `SELECT cron.unschedule('relay-abuse-scan');`
 
@@ -166,7 +163,9 @@ distinguishes the two trust levels.
 | Rotation-boundary fix | `supabase/migrations/0030_correlate_valid_from_grace.sql` |
 | Token batches + `claim_token` gate | `supabase/migrations/0031_server_issued_token_batches.sql` |
 | Relay-abuse detection | `supabase/migrations/0032_relay_abuse_detection.sql` |
+| Relay evidence de-dupe + response views | `supabase/migrations/0033_relay_abuse_response_surface.sql` |
 | Cron schedule (ops) | `supabase/ops/schedule_relay_abuse_scan.sql` |
+| Relay-abuse operations policy | `docs/RELAY_ABUSE_RUNBOOK.md` |
 | Security harness | `supabase/tests/run_security_tests.sh`, `supabase/tests/reciprocity_security_test.sql` |
 | Client token source | `lib/features/beacon/batch_token_source.dart` |
 | Beacon service (advertise/scan/claim) | `lib/features/beacon/beacon_service.dart` |

@@ -253,5 +253,97 @@ DO $$ BEGIN
     'T10 nearby observer was wrongly flagged as relay';
 END $$;
 
+-- ============ TEST 11: response policy + cross-run evidence de-dupe ============
+-- The production cron runs every 15 minutes with a 30-minute lookback. Move the
+-- first flags outside the old five-minute de-dupe window, then scan the same
+-- evidence again: stable evidence keys must keep each incident at one row.
+UPDATE public.beacon_abuse_flags
+SET created_at = NOW() - INTERVAL '10 minutes'
+WHERE user_id IN (
+  '61000000-0000-0000-0000-000000000061',
+  '63000000-0000-0000-0000-000000000063'
+);
+
+DO $$ BEGIN
+  PERFORM public.scan_relay_abuse(INTERVAL '1 day');
+  ASSERT (
+    SELECT count(*) FROM public.beacon_abuse_flags
+    WHERE user_id = '61000000-0000-0000-0000-000000000061'
+      AND reason = 'claim_teleport'
+  ) = 1, 'T11 overlapping scan duplicated claim_teleport evidence';
+  ASSERT (
+    SELECT count(*) FROM public.beacon_abuse_flags
+    WHERE user_id = '63000000-0000-0000-0000-000000000063'
+      AND reason = 'relay_geo'
+  ) = 1, 'T11 overlapping scan duplicated relay_geo evidence';
+
+  -- Add two genuinely different incidents per reason to exercise thresholds.
+  ASSERT public.note_abuse_flag(
+    '61000000-0000-0000-0000-000000000061',
+    'claim_teleport',
+    '{"previous_token":"11111111111111111111111111111111","token":"22222222222222222222222222222222","meters":500000,"seconds":60,"mps":8333}'::jsonb
+  ), 'T11 first distinct claim_teleport evidence was suppressed';
+  ASSERT public.note_abuse_flag(
+    '61000000-0000-0000-0000-000000000061',
+    'claim_teleport',
+    '{"previous_token":"22222222222222222222222222222222","token":"33333333333333333333333333333333","meters":600000,"seconds":60,"mps":10000}'::jsonb
+  ), 'T11 second distinct claim_teleport evidence was suppressed';
+  ASSERT public.note_abuse_flag(
+    '63000000-0000-0000-0000-000000000063',
+    'relay_geo',
+    '{"token":"44444444444444444444444444444444","max_meters":50000,"observers":1}'::jsonb
+  ), 'T11 first distinct relay_geo evidence was suppressed';
+  ASSERT public.note_abuse_flag(
+    '63000000-0000-0000-0000-000000000063',
+    'relay_geo',
+    '{"token":"55555555555555555555555555555555","max_meters":60000,"observers":2}'::jsonb
+  ), 'T11 second distinct relay_geo evidence was suppressed';
+
+  ASSERT (
+    SELECT incident_count = 3
+       AND priority = 'high'
+       AND recommended_response = 'step_up_verification_and_manual_review'
+       AND automatic_restriction IS FALSE
+    FROM public.v_beacon_abuse_triage_24h
+    WHERE user_id = '61000000-0000-0000-0000-000000000061'
+      AND reason = 'claim_teleport'
+  ), 'T11 repeated claim_teleport did not escalate to advisory step-up review';
+
+  ASSERT (
+    SELECT incident_count = 3
+       AND priority = 'investigate'
+       AND recommended_response = 'investigate_relay_pattern_no_user_restriction'
+       AND automatic_restriction IS FALSE
+    FROM public.v_beacon_abuse_triage_24h
+    WHERE user_id = '63000000-0000-0000-0000-000000000063'
+      AND reason = 'relay_geo'
+  ), 'T11 relay_geo policy could punish the flagged token owner';
+
+  ASSERT (
+    SELECT incident_count = 3 AND affected_users = 1
+    FROM public.v_beacon_abuse_digest_24h
+    WHERE reason = 'claim_teleport'
+  ), 'T11 24-hour digest did not aggregate distinct incidents';
+
+  ASSERT NOT EXISTS (
+    SELECT 1 FROM public.beacon_abuse_flags
+    WHERE user_id IN (
+      '61000000-0000-0000-0000-000000000061',
+      '63000000-0000-0000-0000-000000000063'
+    )
+      AND (evidence_key IS NULL OR length(evidence_key) <> 64)
+  ), 'T11 scanner evidence is missing a SHA-256 fingerprint';
+
+  ASSERT has_table_privilege(
+    'service_role', 'public.v_beacon_abuse_triage_24h', 'SELECT'
+  ), 'T11 service role cannot read the abuse triage view';
+  ASSERT NOT has_table_privilege(
+    'authenticated', 'public.v_beacon_abuse_triage_24h', 'SELECT'
+  ), 'T11 authenticated users can read the abuse triage view';
+  ASSERT NOT has_table_privilege(
+    'authenticated', 'public.beacon_abuse_flags', 'SELECT'
+  ), 'T11 authenticated users can read raw abuse flags';
+END $$;
+
 SELECT '✅ ALL RECIPROCITY SECURITY INVARIANTS PASSED' AS result;
 ROLLBACK;

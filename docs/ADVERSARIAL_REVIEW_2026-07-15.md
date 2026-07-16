@@ -2,7 +2,7 @@
 
 > **Partner picking up the remaining #6 work:** start at
 > [`docs/SECURITY_HANDOFF.md`](SECURITY_HANDOFF.md) — executable tasks (enforcement
-> cutover, relay-abuse response, App Attest/Play Integrity, UWB), ground rules, and
+> cutover, App Attest/Play Integrity, UWB), ground rules, and
 > a file map.
 
 > ## Fix status (2026-07-16, Android/laptop side)
@@ -56,19 +56,23 @@
 > flag OFF. **Cutover TODO:** after client rollout, `UPDATE app_settings SET
 > value_num=1 WHERE key='enforce_batch_tokens';`.
 >
-> **#6 step 4 — relay-abuse detection (0032), SHIPPED (telemetry).**
+> **#6 step 4 — relay-abuse detection + response surface (0032–0033), SHIPPED.**
 > `scan_relay_abuse()` (periodic, decoupled from the hot path) raises two signals
 > into `beacon_abuse_flags`: `claim_teleport` (an account whose consecutive claims
 > imply impossible speed — spoofed/injected GPS) and `relay_geo` (a token observed
 > kilometres from where its owner claimed it — beyond any GPS-accuracy story, so
 > relayed). This is **telemetry, not auto-punishment**: in a forwarding relay both
-> parties are victims, so flags feed review/rate-limiting while the existing
-> distance veto still blocks the bogus encounter. Validated + harness T10
+> parties are victims, so flags feed review/relay-pattern investigation while
+> the existing distance veto still blocks the bogus encounter. Validated + harness T10
 > (teleporter and relayed-owner flagged; honest movement and nearby observers
 > not). Deployed 0032, and scheduled via pg_cron (`relay-abuse-scan`, every 15
 > min — `supabase/ops/schedule_relay_abuse_scan.sql`), so telemetry now
-> accumulates live. **Remaining:** ops review surface + response policy
-> (rate-limit / batch-revoke / manual review) — see the handoff, Task B.
+> accumulates live. Migration 0033 prevents the overlapping cron lookback from
+> counting one incident twice and adds service-role-only 24-hour triage/digest
+> views. The encoded policy escalates repeated `claim_teleport` to review/step-up
+> but keeps all responses advisory; `relay_geo` explicitly never restricts the
+> flagged token owner. Harness T11 covers evidence de-dupe, thresholds, and view
+> privileges. See `docs/RELAY_ABUSE_RUNBOOK.md`.
 >
 > **Remaining #6 roadmap (needs device + platform work, not buildable here):**
 > (3) App Attest / Play Integrity around token issuance + sighting submission —

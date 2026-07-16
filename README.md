@@ -8,10 +8,10 @@ Location-based dating app using Bluetooth (feet) + GPS (miles) to surface only p
 
 Active anti-forgery hardening (the "#6" roadmap). If you're picking this up, read
 **[`docs/SECURITY_HANDOFF.md`](docs/SECURITY_HANDOFF.md)** — current state, the
-executable remaining tasks (enforcement cutover, relay-abuse response, App Attest/
-Play Integrity, UWB), and ground rules. Full narrative in
+executable remaining tasks (enforcement cutover, App Attest/Play Integrity, UWB),
+the shipped relay-abuse operations policy, and ground rules. Full narrative in
 [`docs/ADVERSARIAL_REVIEW_2026-07-15.md`](docs/ADVERSARIAL_REVIEW_2026-07-15.md).
-Shipped through migration `0032` (prod). Gate for any change:
+Shipped through migration `0033` (prod). Gate for any change:
 `bash supabase/tests/run_security_tests.sh`.
 
 ## Current Status (2026-07-07)

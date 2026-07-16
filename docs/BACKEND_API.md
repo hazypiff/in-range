@@ -77,6 +77,13 @@ All RPCs are `SECURITY DEFINER` with `auth.uid()` checks unless noted.
 | `photo-review` | AI stub → manual/auto approve |
 | `maintenance` | expire feet + cleanup + queue alerts |
 
+## Ops-only views
+
+| View | Role |
+|------|------|
+| `v_beacon_abuse_triage_24h` | Per-account relay-abuse queue (service role) |
+| `v_beacon_abuse_digest_24h` | Aggregate 24-hour relay-abuse digest (service role) |
+
 ## Tables (public)
 
 profiles, token_claims, sightings, location_pings, encounters, encounter_actions, matches, messages, blocks, reports, subscriptions, boosts, ad_impressions, device_push_tokens, notification_outbox, photo_verifications, ai_runs, ai_events, ai_feedback
