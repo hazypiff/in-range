@@ -122,6 +122,10 @@ class LocalEncounter {
 }
 
 class LocalEncounterStore extends StateNotifier<Map<String, LocalEncounter>> {
+  /// Hard cap on locally-held encounters — a hostile advertiser can't grow
+  /// state/disk without bound (reviewer #9). Far above any real crowd.
+  static const int _maxLocalEncounters = 500;
+
   LocalEncounterStore(this._db, {bool hydrate = true}) : super(const {}) {
     if (hydrate) {
       _hydrate();
@@ -221,7 +225,24 @@ class LocalEncounterStore extends StateNotifier<Map<String, LocalEncounter>> {
         bestBand: _narrowest(existing.bestBand, _validBand(estimatedBand)),
       );
     }
-    state = {...state, correlationId: next};
+    var updated = {...state, correlationId: next};
+    // Global cap: a hostile peripheral rotating 16-byte payloads would
+    // otherwise grow this map (and the SQLite table) without bound before the
+    // server ever rejects a token (reviewer #9). Keep the most-recently-seen.
+    if (updated.length > _maxLocalEncounters) {
+      final keep = updated.values.toList()
+        ..sort((a, b) => b.lastSeenAt.compareTo(a.lastSeenAt));
+      final trimmed = keep.take(_maxLocalEncounters).toList();
+      final trimmedIds = trimmed.map((e) => e.correlationId).toSet();
+      for (final e in keep.skip(_maxLocalEncounters)) {
+        await _db?.deleteSighting(e.correlationId);
+      }
+      updated = {
+        for (final e in trimmed) e.correlationId: e,
+        if (trimmedIds.contains(correlationId)) correlationId: next,
+      };
+    }
+    state = updated;
     await _db?.upsertSighting(
       correlationId: next.correlationId,
       firstSeenMs: next.firstSeenAt.millisecondsSinceEpoch,

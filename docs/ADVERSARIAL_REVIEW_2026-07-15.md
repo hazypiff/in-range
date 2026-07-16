@@ -1,5 +1,45 @@
 # Adversarial correctness and design review — In Range
 
+> ## Fix status (2026-07-16, Android/laptop side)
+>
+> **19 of 24 fixed and pushed to `inrangeai`** (commits `1554e23` → this one).
+> All fixes verified with `flutter test` (60 pass) + `flutter analyze` clean; the
+> lifecycle coordinator was additionally smoke-tested on both S9s (normal
+> operation + a rapid on/off storm, 0 errors, no scan leaks).
+>
+> | Fixed | Notes |
+> |---|---|
+> | **#1, #10** | Deployment blockers — DROP+recreate / drop old overloads. |
+> | **#7, #12, #16** | Stale-GPS veto; coherent best-evidence sighting; GPS veto-only confidence. |
+> | **#14, #15** | Recurrence backfill; midnight distinct-day count (both branches). |
+> | **#17, #22, #23, #24, #9** | Estimator clear/dwell; hashed() staleness; unified median; real cap eviction; local-encounter global cap. |
+> | **#18, #19, #21** | PII log/retention gating + full wipe; hydration race; BT permission denial. |
+> | **#20** | Recurrence ordering + last-seen expiry. |
+> | **#2** | iOS fail-closed (throws instead of falsely showing "findable"). |
+> | **#3, #4** | BLE startup + scan coordinator (generation guards, scan op-chain). |
+>
+> **5 remaining — need a live Postgres and/or a product decision (best done on
+> the Mac side, which has the DB reproduction harness):**
+>
+> - **#11** claim retry-with-backoff + rotation state to UI (code; moderate).
+> - **#13** sighting idempotency (DB unique constraint/upsert) + real per-call
+>   rate limit — needs DB validation.
+> - **#8** recurrence survives the 24 h encounter expiry — needs a durable
+>   pair-level aggregate (new table) validated against Postgres.
+> - **#5** overlapping token-claim history on rotation — schema change, DB-tested.
+> - **#6** forgeable one-way encounters — **product decision**: requiring
+>   reciprocal observation (or server-signed tokens) changes core matching
+>   semantics; should be designed deliberately, not patched in.
+>
+> These five were deliberately NOT rushed: #5/#8/#13 are schema/SQL rewrites of
+> the same `correlate_encounter`/claim functions whose fragility produced #1, and
+> validating them needs the local-Postgres harness the reviewer used (not
+> available on the laptop). #6 is a matching-semantics decision. The original
+> report follows unchanged.
+
+---
+
+
 Review date: 2026-07-15  
 Reviewed commit: `e293e9b` (`main`)  
 Package: `io.inrange.app`  
