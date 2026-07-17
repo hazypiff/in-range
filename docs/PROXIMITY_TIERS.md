@@ -19,23 +19,34 @@ Working boundaries (owner decision 2026-07-17) — contiguous, no gap:
 | **Near by** | 76–150 ft | Same block / large venue | Weak windowed RSSI, near the detection edge |
 | **In range** | 151+ ft | Detected but far (edge of range) | Beacon heard at the detection limit |
 
-**Status: PROVISIONAL — pending the outdoor high-distance sweep.** These are a
-reasonable design, but two things are unmeasured and the data must confirm them
-(WALK_IPHONE_FIRST_PROTOCOL, high-distance section):
+**Status: CALIBRATED (iPhone 14 ↔ iPhone 15 Plus, outdoor line-of-sight,
+2026-07-17).** Tiers are **qualitative** — the UI shows the tier name, never
+feet — so the feet are approximate by design; "151+" just means "far."
 
-1. **The detection ceiling.** Phone↔phone BLE typically dies around ~100–200 ft
-   line-of-sight (less indoors/pocketed). If the phones stop hearing each other
-   before 151 ft, "In range" becomes edge-of-detection, and a true 151+/far tier
-   would have to come from **GPS** (the app's `miles` mode), not BLE.
-2. **Whether 75 ft and 150 ft are separable by signal.** Indoor test 2026-07-17
-   proved RSSI does NOT track distance at the **5–25 ft** scale (same 25 ft read
-   −63 then −73 on repeat — multipath/orientation swamp distance in an enclosed
-   space; see DEVICE_TESTING_JOURNAL). Making **Close by a single wide 0–75 ft
-   bucket is the right response** — don't split what RSSI can't resolve. The 75
-   and 150 boundaries need OUTDOOR line-of-sight data (bigger gaps, less
-   multipath) to validate.
+Outdoor RSSI-vs-distance curve (median, both directions agreed within ~2 dB):
 
-The outdoor sweep decides the final numbers; these boundaries move to match it.
+| Distance | Median RSSI | Samples/90 s | Notes |
+|---|---|---|---|
+| 35 ft | −77 | 1,900 | clean |
+| 65 ft | −83 | 1,760 | clean (edge of Close) |
+| 110 ft | −89 | 1,510 | clean |
+| 150 ft | −96 | 240–525 | weak; one earlier run read stronger |
+| 175 ft | −90 | 1,540 | **still robust — BLE does NOT cut off here** |
+
+Findings that set the tiers:
+- **35–110 ft is the clean, distance-tracking zone** (monotonic ~6–7 dB/step).
+  The **Close/Near boundary at 75 ft ≈ −84 dBm** is well-separated and reliable.
+- **Past ~110 ft RSSI gets noisy** — 150 ft read −96 but 175 ft read −90 (6–8 dB
+  station-to-station scatter from multipath/orientation). Fine for qualitative
+  tiers: "Near" vs "In range" is a soft, approximate boundary, not a precise one.
+- **BLE reaches well past 151 ft** (175 ft still 1,500 samples). So **"In range
+  151+" lives on BLE** — the earlier "BLE dies at 150 → needs GPS" was a bad
+  reading (close-range setup contamination). GPS/`miles` mode is only for the
+  genuinely-far feed, not for In Range.
+- **Indoors, RSSI does NOT track distance at all** at 5–25 ft (same 25 ft read
+  −63 then −73; multipath dominates). Enclosed spaces are unusable for
+  calibration and blur the close tiers — expected, and why Close is one wide
+  0–75 bucket rather than split.
 
 ## Classification rules
 
@@ -70,9 +81,9 @@ carries past 60 ft); "In Range" is presence out to the ~60–80 ft S9 ceiling.
 | Advertiser → Scanner | Close By | Near By | In Range | Source |
 |---|---|---|---|---|
 | S9 → S9 | median ≥ **−80 dBm** (≈ ≤10–15 ft) | heard on **medium slot** (≈ ≤25–40 ft) | any packet (≤ ~80 ft) | walk #3, provisional; walk #4 tightens |
-| iPhone 14 → S9 | TBD | TBD | TBD | cross-platform test 2026-07-16 |
-| S9 → iPhone 14 | TBD | TBD | TBD | cross-platform test |
-| iPhone 14 → iPhone 14 | TBD | TBD | TBD | cross-platform test |
+| iPhone 14 ↔ iPhone 15 Plus | median ≥ **−84 dBm** (≤~75 ft) | **−84 to −96 dBm** (~76–150 ft) | **< −96 dBm** (151 ft → ~175–200 ceiling) | outdoor sweep 2026-07-17 (symmetric both directions) |
+| iPhone 14 → S9 | TBD | TBD | TBD | needs Android scan-filter widen to 0xCAFE (issue #1) |
+| S9 → iPhone 14 | TBD | TBD | TBD | needs Android scan-filter widen to 0xCAFE (issue #1) |
 
 ## Close By — confidence roadmap (the flagship feature)
 

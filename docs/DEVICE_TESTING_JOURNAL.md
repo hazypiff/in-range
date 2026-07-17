@@ -105,5 +105,34 @@ not rediscover them:
   separate — the data decides the tier boundaries. Far tier (201+) likely exceeds
   BLE range → may need GPS (the app's miles mode), TBD by the ceiling measurement.
 
+### 2026-07-17 (afternoon) — outdoor iPhone↔iPhone distance sweep (CALIBRATION DONE)
+- iPhone 14 + iPhone 15 Plus, outdoor line-of-sight, stop-and-return, beacon-on-
+  only-at-station, 90 s each, isolated by rssi_log id baseline.
+- Clean monotonic curve (median RSSI, both directions within ~2 dB):
+  35 ft −77 · 65 ft −83 · 110 ft −89 · 150 ft −96 · 175 ft −90.
+- **Calibrated tier cutoffs:** Close 0–75 = RSSI ≥ **−84**; Near 76–150 =
+  **−84…−96**; In Range 151+ = **< −96**. Written into PROXIMITY_TIERS.
+- **BLE reaches past 151 ft** — 175 ft still 1,540 samples at −90, robust. So In
+  Range 151+ is BLE, NOT GPS (earlier "dies at 150" was a contaminated reading:
+  beacon turned on while phones were close → −34 burst + only 3 real 150 ft
+  packets; redo with beacon-on-at-station gave the clean −96).
+- **Distance-tracking zone is 35–110 ft** (monotonic). Past ~110 ft RSSI is noisy
+  (150 ft −96 vs 175 ft −90 — station-to-station scatter 6–8 dB from
+  multipath/orientation). Fine for QUALITATIVE tiers (UI shows tier name not
+  feet); the Near/In-Range boundary is intentionally soft.
+- **Method lessons:** (1) beacon must be turned on only AFTER reaching the station
+  separated — a close-range setup burst contaminates the window. (2) Continuous
+  back-to-back with one timestamp is unsliceable + screen-lock kills advertising;
+  stop-and-return with id baselines is the reliable method. (3) Keep both phones
+  same orientation/height every station (±20 dB otherwise). (4) rssi=127 = BLE
+  invalid sentinel, filter rssi<0.
+- **Beacon lag bug found + FIXED (commit pending):** the iPhone 14 beacon
+  intermittently needed 2–3 toggle presses / errored after many on/off cycles.
+  Root cause: the BLE-adapter-ready wait used adapterState.firstWhere (emits only
+  on CHANGE) — if BT flipped to `on` between the check and subscribe, the event
+  was missed and it spuriously timed out (6 s). Fixed: poll adapterStateNow
+  (can't miss the transition) + 12 s window + one-shot auto-retry on transient
+  not-ready, so no repeated pressing.
+
 ### (add Android baseline summary here — hazypiff: link walks #1–4 data and
 the S9 RSSI curve so the iOS sweep has a comparison target)

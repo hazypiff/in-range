@@ -594,6 +594,20 @@ class BeaconService {
 
   bool _capsLogged = false;
 
+  /// Polls the BLE adapter until it reports `on`, up to [timeout]. Robust to
+  /// the adapterState-stream race (see _startScanningLocked). Returns true as
+  /// soon as it's on; false if the timeout elapses still-not-on.
+  Future<bool> _waitAdapterOn(Duration timeout) async {
+    final deadline = DateTime.now().add(timeout);
+    while (true) {
+      if (FlutterBluePlus.adapterStateNow == BluetoothAdapterState.on) {
+        return true;
+      }
+      if (DateTime.now().isAfter(deadline)) return false;
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+    }
+  }
+
   Future<void> _startScanning() => _serialScanOp(_startScanningLocked);
 
   Future<void> _startScanningLocked() async {
@@ -601,22 +615,19 @@ class BeaconService {
     if (!_scanningWanted) return;
 
     // iOS: CoreBluetooth starts in CBManagerStateUnknown and only reports
-    // poweredOn asynchronously a beat after first use. Calling startScan
-    // before then throws PlatformException(startScan, "bluetooth must be
-    // turned on (CBManagerStateUnknown)") even though BT is on (2026-07-16).
-    // Android reports `on` immediately, so this wait is a no-op there.
-    if (FlutterBluePlus.adapterStateNow != BluetoothAdapterState.on) {
-      try {
-        await FlutterBluePlus.adapterState
-            .firstWhere((s) => s == BluetoothAdapterState.on)
-            .timeout(const Duration(seconds: 6));
-      } catch (_) {
-        // Still not on after the wait — surface the real state, not a
-        // generic failure, so the UI can say "turn Bluetooth on".
-        throw StateError(
-            'Bluetooth is not ready (${FlutterBluePlus.adapterStateNow.name}). '
-            'Turn Bluetooth on and try again.');
-      }
+    // poweredOn asynchronously a beat after first use (and re-initialises
+    // slowly after many beacon on/off cycles). Calling startScan before then
+    // throws "bluetooth must be turned on (CBManagerStateUnknown)" even though
+    // BT is on. We POLL adapterStateNow rather than await adapterState.firstWhere
+    // — the stream only emits on CHANGES, so if BT flips to `on` between the
+    // check and the subscription the event is missed and the wait spuriously
+    // times out (root cause of the "press the toggle 2-3 times" lag,
+    // 2026-07-17). Polling can't miss the transition. Android reports `on`
+    // immediately → returns on the first poll.
+    if (!await _waitAdapterOn(const Duration(seconds: 12))) {
+      throw StateError(
+          'Bluetooth is not ready (${FlutterBluePlus.adapterStateNow.name}). '
+          'Turn Bluetooth on and try again.');
     }
 
     await _logRadioCapabilities();

@@ -155,7 +155,22 @@ class BeaconController extends StateNotifier<BeaconState> {
       }
       final range = _ref.read(selectedRangeProvider);
       try {
-        await _service.turnOnBeacon(rangeType: range);
+        // Auto-retry once on a transient BLE-not-ready failure so the user
+        // doesn't have to tap the toggle repeatedly (2026-07-17): after many
+        // on/off cycles CoreBluetooth can take a moment to re-initialise, and
+        // the first attempt may fire before it's ready. A 1 s pause + one
+        // retry clears it invisibly.
+        try {
+          await _service.turnOnBeacon(rangeType: range);
+        } on StateError catch (e) {
+          if (e.message.contains('Bluetooth is not ready')) {
+            debugPrint('Beacon start not-ready; auto-retrying once…');
+            await Future<void>.delayed(const Duration(seconds: 1));
+            await _service.turnOnBeacon(rangeType: range);
+          } else {
+            rethrow;
+          }
+        }
         state = BeaconState(
           isOn: true,
           tokenExpiresAt: _service.currentToken?.expiresAt,
