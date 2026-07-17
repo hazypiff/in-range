@@ -51,6 +51,33 @@ Both phones ~1 ft apart, beacons ON, foreground.
 - After ~60 s, pull one DB (command below) and confirm `rssi_log` has rows.
   **If the table is empty, stop — do not walk.** Something isn't logging.
 
+## High-distance sweep — validate the tier boundaries (PRIORITY)
+
+The indoor session (2026-07-17) proved RSSI can't resolve 5–25 ft in an
+enclosed space (multipath). The open question the product needs answered:
+**where do the tier boundaries actually fall, and how far do the phones reach?**
+This needs OPEN OUTDOOR line-of-sight — reflections indoors make it unmeasurable.
+
+Working tiers to validate: Close 0–75 · Near 76–150 · In Range 151+.
+
+Stations (ft), 90 s each, same method as below:
+**25, 50, 75, 100, 125, 150, 175, 200, 225, 250 — then keep going in +50 ft
+steps until the phones stop hearing each other.**
+
+Two things this measures:
+1. **Detection ceiling** — the last distance with reliable rows. If it's < 151
+   ft, the "In Range 151+" tier can't come from BLE (→ GPS/miles mode instead).
+2. **Boundary separability** — does median RSSI at 75 ft clearly differ from
+   150 ft, and 150 from 200? If the medians overlap (like 5 vs 25  indoors), the
+   boundary isn't real and tiers must widen.
+
+Method that WORKED indoors (use it): stop-and-return, **beacon OFF between
+stations**, one station at a time, tell Claude the distance each time → Claude
+diffs the rssi_log by row-id baseline for a clean per-station reading. Keep
+**both phones the same orientation + height at every station** (orientation
+alone swings RSSI ±20 dB). Auto-Lock = Never / screens awake (a locked iPhone
+stops advertising — that caused a 4.5 min data gap on 2026-07-17).
+
 ## Step 1 — static distance sweep
 
 Open outdoor line-of-sight, ≥250 ft. Both phones held at chest height,

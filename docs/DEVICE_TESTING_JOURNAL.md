@@ -75,5 +75,35 @@ not rediscover them:
   - [ ] Decide on paid Apple Developer account before any multi-day walk
         (7-day expiry kills longer studies)
 
+### 2026-07-17 — iPhone↔iPhone indoor bring-up + close-range findings
+- Platform(s): iOS↔iOS (iPhone 14 + iPhone 15 Plus, both foreground service-UUID carrier)
+- Setup: enclosed indoor room; stop-and-return method, beacon off between stations,
+  90 s/station, per-station isolated by rssi_log id baseline.
+- **Pipeline verified end-to-end**: both phones advertise (Mac CoreBluetooth
+  scanner confirmed marker+token on both), mutual detection confirmed, rssi_log
+  captures abundantly (1549 / 1137 rows in a 1–2 ft smoke test). RSSI=127 is a
+  BLE "invalid" sentinel — filter `rssi < 0`.
+- Readings (median, both directions agree within 1 dB):
+  - 5 ft → **−73 dBm** (~1150 samples/dir)
+  - 25 ft run 1 → **−63 dBm** (~2200 samples)
+  - 25 ft run 2 → **−73 dBm** (~2100 samples)
+- **KEY FINDING — RSSI is NOT distance-tracking at 5–25 ft indoors.** The same
+  25 ft gave −63 then −73 on repeat (10 dB), and run-2 25 ft == 5 ft. Between-repeat
+  variance ≈ between-distance variance ≈ within-station IQR (~8–10 dB). Multipath +
+  phone orientation dominate over distance at this scale in an enclosed space.
+  Confirms the qualitative-tier design; precise close-range feet are not
+  recoverable indoors.
+- **Method notes:** continuous back-to-back stations FAILED — a 4.5 min data gap
+  showed screen-lock/backgrounding kills iOS advertising mid-walk. Stop-and-return
+  with beacon-off-between is the reliable method. Auto-Lock must be Never (or
+  screens kept awake). iOS advertising does NOT survive lock/background (payload →
+  overflow area) — foreground-only prototype; production background needs the GATT
+  carrier (IOS_CARRIER_DECISION §3).
+- **Action:** close-range boundaries are unresolvable indoors. NEXT = outdoor
+  high-distance sweep (docs/WALK_IPHONE_FIRST_PROTOCOL.md, high-distance section)
+  to (1) find the phone↔phone detection ceiling and (2) test whether 60/100/200 ft
+  separate — the data decides the tier boundaries. Far tier (201+) likely exceeds
+  BLE range → may need GPS (the app's miles mode), TBD by the ceiling measurement.
+
 ### (add Android baseline summary here — hazypiff: link walks #1–4 data and
 the S9 RSSI curve so the iOS sweep has a comparison target)

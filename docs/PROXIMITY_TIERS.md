@@ -11,18 +11,31 @@ names.
 
 ## Tiers
 
-| Tier | Target range | Meaning | Radio basis |
-|---|---|---|---|
-| **Close by** | ~0–20 ft | Same-conversation distance | Strong, stable windowed RSSI; UWB-confirmable later (iPhone 11+ / UWB Androids) |
-| **Near by** | ~20–75 ft | Same room / patio / storefront | Medium windowed RSSI |
-| **In range** | ~75 ft → detection limit | Detectable at all ("they're around") | Beacon heard; no finer distance claim |
+Working boundaries (owner decision 2026-07-17) — contiguous, no gap:
 
-Rationale: nearly all of BLE RSSI's distance resolution lives in the first
-~50 ft (log-distance path loss). Boundaries beyond ~75 ft are not
-distinguishable by signal strength; "in range" therefore means detection
-itself. Phone-to-phone detection ceiling is ~100–200 ft line-of-sight
-outdoors, and ~30–80 ft with bodies/pockets/indoors — there is no reliable
-"200+ ft" tier on this hardware.
+| Tier | Range | Meaning | Radio basis |
+|---|---|---|---|
+| **Close by** | 0–75 ft | Nearby / same space | Strong-to-medium windowed RSSI |
+| **Near by** | 76–150 ft | Same block / large venue | Weak windowed RSSI, near the detection edge |
+| **In range** | 151+ ft | Detected but far (edge of range) | Beacon heard at the detection limit |
+
+**Status: PROVISIONAL — pending the outdoor high-distance sweep.** These are a
+reasonable design, but two things are unmeasured and the data must confirm them
+(WALK_IPHONE_FIRST_PROTOCOL, high-distance section):
+
+1. **The detection ceiling.** Phone↔phone BLE typically dies around ~100–200 ft
+   line-of-sight (less indoors/pocketed). If the phones stop hearing each other
+   before 151 ft, "In range" becomes edge-of-detection, and a true 151+/far tier
+   would have to come from **GPS** (the app's `miles` mode), not BLE.
+2. **Whether 75 ft and 150 ft are separable by signal.** Indoor test 2026-07-17
+   proved RSSI does NOT track distance at the **5–25 ft** scale (same 25 ft read
+   −63 then −73 on repeat — multipath/orientation swamp distance in an enclosed
+   space; see DEVICE_TESTING_JOURNAL). Making **Close by a single wide 0–75 ft
+   bucket is the right response** — don't split what RSSI can't resolve. The 75
+   and 150 boundaries need OUTDOOR line-of-sight data (bigger gaps, less
+   multipath) to validate.
+
+The outdoor sweep decides the final numbers; these boundaries move to match it.
 
 ## Classification rules
 
