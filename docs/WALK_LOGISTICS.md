@@ -66,3 +66,20 @@ Promotion gates (fail-closed, already live): ≥3 independent trainable
 walks, every class in ≥2 walks, valid held-out folds only, must beat the
 rules baseline. Nothing about a single walk — iPhone or Android — unlocks
 runtime changes.
+
+## Data sensitivity — what may leave the machine
+
+Raw walk data contains **GPS coordinates and WiFi BSSIDs** (they can
+identify homes/venues). Tiers, from most to least sensitive:
+
+| Tier | Contains | Policy |
+|---|---|---|
+| Raw logs + `walk.json` + `meta*.json` | lat/lon fixes, raw BSSIDs | **LOCAL ONLY.** Gitignored (`run_logs/`). Never commit, push, paste into chats, or feed to any LLM |
+| `dataset.jsonl` | aggregate features only (venue score, GPS *delta* in meters — no coords/BSSIDs) | gitignored by convention; shareable between the two machines if needed |
+| Registry `model.json` / `report.md` / `LEARNING_LOG.md` | means/variances, metrics, hashes | committed + shareable; this is the reproducibility layer |
+| LLM narration | derived from `report.md` ONLY | `learn/report_llm.py` hard-refuses any input that is not a registry report.md, and only talks to the LOCAL model (127.0.0.1:18080) |
+
+Mac-side flow must mirror this: iPhone raw `rssi_log` archives stay on the
+Mac; only extracted aggregates/metrics cross machines or reach any model.
+The production app already salts-and-hashes BSSIDs before upload — the
+calibration pipeline must not be the place that leaks what the app protects.
