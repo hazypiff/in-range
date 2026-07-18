@@ -78,7 +78,13 @@ def load_walk_rows(walk, fallback_id, pair):
     if mpair and mpair != pair:
         return wid, "pair_mismatch", []
     status = "ok" if mpair else "unverified_pair"
-    return wid, status, rows_from_walk(walk, wid, pair)
+    rows = rows_from_walk(walk, wid, pair)
+    # identity_verified rides every row into the dataset and model artifact —
+    # unverified walks may train (visibility) but can never promote or export
+    # for production.
+    for r in rows:
+        r["identity_verified"] = status == "ok"
+    return wid, status, rows
 
 
 def sha256_file(path):

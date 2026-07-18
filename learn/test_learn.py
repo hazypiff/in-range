@@ -99,6 +99,14 @@ class IngestTest(unittest.TestCase):
         self.assertEqual(status, "unverified_pair")
         self.assertEqual(wid, "old-dir")
         self.assertTrue(rows)
+        self.assertTrue(all(r["identity_verified"] is False for r in rows))
+
+    def test_verified_walk_rows_flagged_true(self):
+        walk = synth_walk(random.Random(1))
+        walk["meta"] = {"manifest": {"walk_id": "cafe1234", "pair_id": "p"}}
+        _, status, rows = ingest.load_walk_rows(walk, "d", "p")
+        self.assertEqual(status, "ok")
+        self.assertTrue(all(r["identity_verified"] is True for r in rows))
 
 
 class GnbTest(unittest.TestCase):
@@ -239,7 +247,20 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(model["schema"], "inrange-gnb-1")
         self.assertTrue(model["dataset_sha256"])
         self.assertTrue(model["cv"]["held_out"])
-        self.assertTrue(os.path.exists(os.path.join(registry, runs[0], "report.md")))
+        # synth walks carry no manifest -> every walk unverified -> recorded
+        # in the artifact and called out in the report
+        self.assertEqual(len(model["cv"]["unverified_walks"]), 2)
+        report = open(os.path.join(registry, runs[0], "report.md")).read()
+        self.assertIn("UNVERIFIED", report)
+
+        # idempotent publish: identical rerun must not crash or clobber
+        r2 = subprocess.run([sys.executable, os.path.join(here, "train.py"),
+                             dataset, "--tiers",
+                             "close:0-75,near:76-150,inrange:151-100000",
+                             "--rules", "iphone", "--registry", registry],
+                            capture_output=True, text=True)
+        self.assertEqual(r2.returncode, 0, r2.stderr)
+        self.assertTrue(all(not d.endswith(".tmp") for d in os.listdir(registry)))
 
 
 if __name__ == "__main__":

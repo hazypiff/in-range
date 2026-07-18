@@ -25,6 +25,10 @@ REGISTRY = os.path.join(HERE, "registry")
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", default=os.path.join(REGISTRY, "promoted_model.json"))
+    ap.add_argument("--non-production", action="store_true",
+                    help="allow exporting a model trained on identity-"
+                         "unverified walks; the artifact is stamped "
+                         "non_production=true and must never ship")
     args = ap.parse_args()
 
     pointer = os.path.join(REGISTRY, "PROMOTED")
@@ -50,6 +54,19 @@ def main():
     if cv.get("invalid_folds"):
         raise SystemExit(f"{run} had invalid folds (training sets missing "
                          "classes) — refusing to export")
+    unverified = cv.get("unverified_walks")
+    if unverified is None:
+        raise SystemExit(f"{run} predates the identity contract (no "
+                         "unverified_walks record) — retrain before export")
+    if unverified:
+        if not args.non_production:
+            raise SystemExit(
+                f"{run} trained on identity-unverified walks "
+                f"({', '.join(unverified)}) — refusing production export. "
+                "Re-extract those walks with --pair/--capture-meta, or pass "
+                "--non-production for a stamped non-shippable artifact.")
+        model["non_production"] = True
+        print("WARNING: artifact stamped non_production=true — NOT for runtime")
 
     with open(args.out, "w") as f:
         json.dump(model, f, indent=1, sort_keys=True)

@@ -15,12 +15,18 @@ that and trust `--pair`. Now `extract_walk.py --pair --capture-meta
 collision-proof), `pair_id`, `devices[]` (serials+models), `freeze` tag,
 `archive_digests`. `ingest.py` **verifies instead of assigns**: manifest
 pair mismatch → walk REFUSED; legacy archives ingest with a loud
-unverified-pair warning. Desk archive retro-stamped.
+unverified-pair warning AND `identity_verified: false` on every row —
+carried into the model artifact (`cv.unverified_walks`), blocking
+promotion; export refuses unless `--non-production` (artifact then
+stamped `non_production: true`, never shippable). Desk archive
+retro-stamped.
 
 ### C5. Concurrency — exact handoff + atomic publish
 - run id = `<utc-ts>-<pair>-<dataset_sha[:8]>` (collision-proof).
 - train writes the run dir as `.tmp` then atomic-renames — readers never
-  see a half-written run.
+  see a half-written run. Publication is idempotent: an identical twin run
+  (same second, same inputs → same id) treats the existing dir as success
+  and never clobbers it.
 - train emits `RUN_ID=<run>`; loop.sh consumes exactly that (the old
   `ls -1t | head -1` could pick a concurrent run's output).
 - LEARNING_LOG appends go through `flock`.

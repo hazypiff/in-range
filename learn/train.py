@@ -17,6 +17,7 @@ import hashlib
 import json
 import math
 import os
+import shutil
 from collections import defaultdict
 
 FEATURES = ["high_med", "iqr_w", "rate", "high_n", "med_n", "venue_v", "gps_delta"]
@@ -211,10 +212,15 @@ def main():
     walks = sorted({r["walk_id"] for r in rows})
 
     gnb_m, rules_m, info = cross_validate(rows, tiers, RULES[args.rules])
+    # missing key counts as unverified — datasets predating the manifest
+    # contract fail safe, not open
+    info["unverified_walks"] = sorted(
+        {r["walk_id"] for r in rows if not r.get("identity_verified")})
     beats = (gnb_m["macro_f1"] >= rules_m["macro_f1"]
              and gnb_m["dangerous"] <= rules_m["dangerous"])
     promotable = (info["held_out"] and info["coverage_ok"]
-                  and not info["invalid_folds"] and beats)
+                  and not info["invalid_folds"]
+                  and not info["unverified_walks"] and beats)
 
     final_model = fit_gnb(rows, tiers)  # deployed artifact trains on ALL walks
     now = datetime.datetime.now(datetime.timezone.utc)
@@ -247,6 +253,10 @@ def main():
     elif info["invalid_folds"]:
         verdict = ("NOT PROMOTABLE — invalid folds present (training sets "
                    "missing classes)")
+    elif info["unverified_walks"]:
+        verdict = ("NOT PROMOTABLE — unverified walk identity: "
+                   f"{', '.join(info['unverified_walks'])} (re-extract with "
+                   "--pair/--capture-meta, or export --non-production only)")
     else:
         verdict = ("NOT PROMOTABLE — does not beat the rules baseline "
                    "(macro-F1 and dangerous errors)")
@@ -265,6 +275,8 @@ def main():
 - tiers: `{args.tiers}` | baseline: `{args.rules}`
 - validation: {"leave-one-walk-out (valid folds only)" if info['held_out'] else "IN-SAMPLE ONLY — cannot promote"}
 - walks per class: {wpc_md} (promotion floor: >=3 walks, >=2 per class)
+- identity: {len(walks) - len(info['unverified_walks'])}/{len(walks)} walks \
+verified{" — UNVERIFIED: " + ", ".join(info["unverified_walks"]) if info["unverified_walks"] else ""}
 {invalid_md}
 
 | metric | GNB | rules |
@@ -285,7 +297,18 @@ def main():
 """
     with open(os.path.join(tmp_dir, "report.md"), "w") as f:
         f.write(report)
-    os.rename(tmp_dir, run_dir)  # atomic publish
+    # Idempotent atomic publish: the run id is fully input-derived (utc-second
+    # + pair + dataset hash), so an identical concurrent run may compute the
+    # SAME id — treat an already-published dir as success, never clobber it.
+    if os.path.exists(run_dir):
+        shutil.rmtree(tmp_dir)
+        print(f"(run {run} already published — identical inputs; idempotent)")
+    else:
+        try:
+            os.rename(tmp_dir, run_dir)  # atomic publish
+        except OSError:
+            shutil.rmtree(tmp_dir, ignore_errors=True)  # lost race to twin run
+            print(f"(run {run} published by a concurrent twin; idempotent)")
 
     print(report)
     print(f"registry run: {run_dir}")
