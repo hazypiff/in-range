@@ -3,6 +3,10 @@
 One walk, three radios, every remaining unknown. The phones are already built,
 installed, and beaconing — nothing to set up.
 
+> Logistics (who needs a computer when, Android vs iPhone capture paths,
+> and the requirements for a walk to join the training dataset):
+> **docs/WALK_LOGISTICS.md** — required reading before running a walk.
+
 **What this walk decides:**
 1. The **Near** tier's real distance (BLE medium-power cutoff) — the last uncalibrated number.
 2. Whether **WiFi can tell "same room" from "next room"** — and at what score.
