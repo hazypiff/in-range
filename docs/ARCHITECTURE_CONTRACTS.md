@@ -76,6 +76,19 @@ model selection routes:
 iOS is a genuinely different modality profile (no medium TX slot, no
 WiFi layer) — feature masks per profile, not one global feature set.
 
+## Provenance axes (keep distinct)
+
+- **Collection artifact**: the freeze tag in each walk's manifest
+  (`calib-freeze-2026-07-18b`) — pins the walk-producing code. Only
+  capture/extraction changes require a new freeze.
+- **Analysis artifact**: `trainer_commit` + `dataset_sha256` inside each
+  model.json — analysis code may evolve freely; every run self-identifies.
+
+Runtime loader contract (already enforced at the seam):
+`GnbClassifier.fromJson` **rejects `non_production: true`** — a
+non-production export structurally cannot load in the app, independent of
+C2/C4 discipline.
+
 ## Standing verdict
 
 | Dimension | Status |

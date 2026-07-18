@@ -232,7 +232,20 @@ def main():
     tmp_dir = run_dir + ".tmp"
     os.makedirs(tmp_dir, exist_ok=True)
 
+    # Analysis-provenance axis: trainer commit + dataset hash identify the
+    # analysis artifact; the collection freeze tag (in each walk's manifest)
+    # identifies the data-producing code. Two axes, kept distinct.
+    try:
+        import subprocess
+        trainer_commit = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            capture_output=True, text=True, timeout=5).stdout.strip() or None
+    except Exception:  # noqa: BLE001 — provenance is best-effort outside git
+        trainer_commit = None
+
     model = {"schema": "inrange-gnb-1", "trained_at": now.isoformat(),
+             "trainer_commit": trainer_commit,
              "dataset_sha256": dataset_sha, "pair": pair, "walks": walks,
              "tiers": args.tiers, "features": FEATURES, "classes": final_model,
              "cv": {"gnb": gnb_m, "rules": rules_m, **info}}
