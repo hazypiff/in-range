@@ -14,10 +14,11 @@ installed, and beaconing — nothing to set up.
 ## Before you leave
 
 0. **Run `bash scripts/walk_capture.sh prep`** (phones plugged in). It resizes
-   every phone's logcat ring buffer (16M, reproducibly — no manual `-G`) and
-   records each phone's clock offset vs this laptop into
-   `run_logs/walks/<date>/meta-prep.json`. Note: resizing clears the buffer,
-   which is exactly what you want pre-walk.
+   every phone's logcat ring buffer (64M — 16M was ~60% consumed before full
+   WiFi AP logging existed), **verifies the effective size and aborts if the
+   resize didn't take**, and records each phone's clock offset vs this laptop
+   into `run_logs/walks/<date>/meta-prep.json`. Note: resizing clears the
+   buffer, which is exactly what you want pre-walk.
 1. **Turn the phones' WiFi hotspot/tethering OFF** (leave WiFi itself ON).
    An active hotspot shares the 2.4 GHz antenna with the BLE scanner and is a
    self-inflicted handicap — every previous walk ran with `pixhub` tethering

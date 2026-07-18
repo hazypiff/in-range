@@ -19,7 +19,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 EXCLUDE="${EXCLUDE:-0A081JECB06627}"   # Pixel proxy — never touch
-BUF="${BUF:-16M}"
+# 64M: the earlier audit found 16M already ~60% consumed on a walk, and full
+# WiFi AP logging adds substantial volume on top.
+BUF="${BUF:-64M}"
 MODE="${1:-}"
 NAME="${2:-}"
 DIR="run_logs/walks/$(date +%F)${NAME:+-$NAME}"
@@ -80,8 +82,23 @@ mkdir -p "$DIR"
 case "$MODE" in
   prep)
     for S in $(devices); do
-      echo "prep $(label_for "$S"): logcat buffer -> $BUF (buffer cleared)"
+      L=$(label_for "$S")
+      echo "prep $L: logcat buffer -> $BUF (buffer cleared)"
       adb -s "$S" logcat -G "$BUF"
+      # Verify the resize actually took — walking with a silently-small buffer
+      # loses the start of the walk. Normalizes "64Mb" / "64 MiB" style output.
+      line=$(adb -s "$S" logcat -g main 2>/dev/null | head -1 | tr -d '\r')
+      got=$(echo "$line" | grep -oiE 'ring buffer is *[0-9]+ *[kmg]i?b' \
+              | tr -d ' ' | tr '[:upper:]' '[:lower:]' \
+              | sed 's/ringbufferis//; s/ib$/b/')
+      want=$(echo "${BUF}b" | tr '[:upper:]' '[:lower:]')
+      if [ "$got" != "$want" ]; then
+        echo "ERROR: $L buffer verify failed — wanted $want, device reports:" >&2
+        echo "  $line" >&2
+        echo "aborting; do not walk on this buffer." >&2
+        exit 1
+      fi
+      echo "  verified: $got"
     done
     write_meta prep
     echo "ready — walk now; station times on the HOST clock, then: $0 pull${NAME:+ $NAME}"
