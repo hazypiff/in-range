@@ -7,6 +7,12 @@
 # Usage:
 #   bash scripts/beacon_monitor.sh            # monitor all connected devices
 #   EXCLUDE="0A081JECB06627" bash scripts/... # exclude serials (default: the Pixel)
+#   CALIB=1 bash scripts/beacon_monitor.sh    # also pass the calibration record
+#                                             # types (Advert/WifiScan/WifiAp/
+#                                             # GpsFix) so walk health is visible
+#                                             # live. Monitoring is a VIEW only —
+#                                             # extraction always uses the raw
+#                                             # walk_capture.sh logcat dumps.
 #
 # Wireless: before unplugging a phone, run:
 #   adb -s <serial> tcpip 5555
@@ -21,6 +27,9 @@ COMBINED="$OUT_DIR/combined_$(date +%H%M%S).log"
 echo "combined timeline: $COMBINED"
 
 PATTERN='Started BLE advertising|BLE scan started|Sighting observed|record_sighting|claim_token|Encounter|encounter|turnOnBeacon|Beacon refused|advertising stopped|scan (re)?start|release_token|Locals server sync|record_location_ping|token rotat|Rotated token'
+if [ "${CALIB:-0}" = "1" ]; then
+  PATTERN="$PATTERN|Advert corr=|WifiScan seq=|WifiAp seq=|GpsFix lat="
+fi
 
 pids=()
 cleanup() { for p in "${pids[@]}"; do kill "$p" 2>/dev/null; done; }
