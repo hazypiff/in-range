@@ -13,6 +13,11 @@ installed, and beaconing — nothing to set up.
 
 ## Before you leave
 
+0. **Run `bash scripts/walk_capture.sh prep`** (phones plugged in). It resizes
+   every phone's logcat ring buffer (16M, reproducibly — no manual `-G`) and
+   records each phone's clock offset vs this laptop into
+   `run_logs/walks/<date>/meta-prep.json`. Note: resizing clears the buffer,
+   which is exactly what you want pre-walk.
 1. **Turn the phones' WiFi hotspot/tethering OFF** (leave WiFi itself ON).
    An active hotspot shares the 2.4 GHz antenna with the BLE scanner and is a
    self-inflicted handicap — every previous walk ran with `pixhub` tethering
@@ -68,17 +73,33 @@ real target environment anyway.
 
 ## What to record
 
-**Just the clock time at the start of each stop.** That's it. Say the times and
+**The clock time (this laptop's / your watch synced to it) at the start of each
+stop.** That's it. Stops do NOT need to be back-to-back — the extractor takes
+an explicit start time per station and handles gaps (stop-and-return is the
+validated method per DEVICE_TESTING_JOURNAL 2026-07-17). Say the times and
 I'll do the rest — the phones are logging every BLE advert, every WiFi
 fingerprint, and every GPS fix with its accuracy.
 
 If something feels wrong, keep going. The logs will tell us.
 
+Optional live view while walking (tethered/wireless adb):
+`CALIB=1 bash scripts/beacon_monitor.sh` (Work repo) — shows the calibration
+record types streaming. View only; extraction uses the raw dumps below.
+
 ---
 
 ## When you're back
 
-Plug both phones in and say **"extract"**.
+Plug both phones in, run **`bash scripts/walk_capture.sh pull`** (raw
+threadtime dumps → dated gzip archive + `meta-pull.json` with clock offsets),
+and say **"extract"** with the station times. Extraction:
+
+```
+python3 scripts/extract_walk.py <A>.threadtime.log.gz <B>.threadtime.log.gz \
+    --stations 5ft@HH:MM:SS+90 10ft@HH:MM:SS+90 ... \
+    --offset-a <A host_minus_device_s> --offset-b <B ...> \
+    --json walk.json --csv walk.csv
+```
 
 You'll get: the Near tier's real cutoff, the venue-score thresholds measured
 rather than guessed, a verdict on blocked-vs-far, GPS's true error, and the
