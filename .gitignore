@@ -61,3 +61,4 @@ docs/smoke/
 
 android/app/src/main/AndroidManifest.xml.bak
 graphify-out/
+__pycache__/
