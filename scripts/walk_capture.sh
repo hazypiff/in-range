@@ -83,8 +83,12 @@ case "$MODE" in
   prep)
     for S in $(devices); do
       L=$(label_for "$S")
-      echo "prep $L: logcat buffer -> $BUF (buffer cleared)"
+      echo "prep $L: logcat buffer -> $BUF + clear"
       adb -s "$S" logcat -G "$BUF"
+      # -G does NOT reliably clear on the S9s (desk test 2026-07-18 found
+      # hours of retained backlog) — clear explicitly so the walk starts on
+      # an empty buffer.
+      adb -s "$S" logcat -c
       # Verify the resize actually took — walking with a silently-small buffer
       # loses the start of the walk. Normalizes "64Mb" / "64 MiB" style output.
       line=$(adb -s "$S" logcat -g main 2>/dev/null | head -1 | tr -d '\r')
