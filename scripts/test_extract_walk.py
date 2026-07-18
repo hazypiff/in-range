@@ -134,6 +134,23 @@ class ExtractionTest(unittest.TestCase):
         d = ew.parse_log(path)
         self.assertEqual(len(d["adverts"]), 1)
 
+    def test_manifest_content_hash_identity(self):
+        a = write_log([advert("10:00:10.000", -70)])
+        b = write_log([advert("10:00:11.000", -72)])
+        self.addCleanup(os.remove, a)
+        self.addCleanup(os.remove, b)
+        m1 = ew.build_manifest(a, b, "s9-s9", freeze="tag1")
+        self.assertEqual(m1["version"], "walk_manifest.v1")
+        self.assertEqual(m1["pair_id"], "s9-s9")
+        self.assertEqual(len(m1["walk_id"]), 16)
+        # content-derived: same archives -> same id, regardless of arg order
+        m2 = ew.build_manifest(b, a, "s9-s9")
+        self.assertEqual(m1["walk_id"], m2["walk_id"])
+        # different content -> different id
+        c = write_log([advert("10:00:12.000", -80)])
+        self.addCleanup(os.remove, c)
+        self.assertNotEqual(m1["walk_id"], ew.build_manifest(a, c, "s9-s9")["walk_id"])
+
     def test_raw_observations_preserved(self):
         d = self.data([
             advert("10:00:10.000", -70),

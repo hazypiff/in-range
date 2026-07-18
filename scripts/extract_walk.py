@@ -36,8 +36,10 @@ Usage:
 import argparse
 import csv
 import gzip
+import hashlib
 import json
 import math
+import os
 import re
 import statistics as st
 
@@ -259,6 +261,30 @@ def extract(dataA, dataB, stations, trim=TRIM_S, max_ap_age=MAX_AP_AGE):
     return rows
 
 
+def file_sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def build_manifest(log_a, log_b, pair, capture_meta_path=None, freeze=None):
+    """walk_manifest.v1 — immutable identity for this walk. walk_id is a
+    content hash of the raw archives, so it survives renames and cannot
+    collide across walks; pair/devices are captured HERE so training can
+    VERIFY identity instead of assigning it via CLI."""
+    digests = {os.path.basename(p): file_sha256(p) for p in (log_a, log_b)}
+    walk_id = hashlib.sha256(
+        "".join(sorted(digests.values())).encode()).hexdigest()[:16]
+    devices = None
+    if capture_meta_path:
+        devices = json.load(open(capture_meta_path)).get("devices")
+    return {"version": "walk_manifest.v1", "walk_id": walk_id,
+            "pair_id": pair, "devices": devices, "freeze": freeze,
+            "archive_digests": digests}
+
+
 CSV_FIELDS = ["station", "start", "end",
               "a_high_n", "a_high_med", "a_high_p25", "a_high_p75", "a_rate", "a_med_n",
               "b_high_n", "b_high_med", "b_high_p25", "b_high_p75", "b_rate", "b_med_n",
@@ -305,6 +331,14 @@ def main():
                     help="stamp meta.trainable — 'no' marks a smoke fixture / "
                          "unmeasured capture that the learn pipeline must "
                          "archive but never train on")
+    ap.add_argument("--pair", help="device pair id for the walk manifest "
+                    "(e.g. s9-s9) — ingest VERIFIES against this instead of "
+                    "trusting its own CLI stamp")
+    ap.add_argument("--capture-meta",
+                    help="walk_capture meta-pull.json — copies device "
+                         "serials/models into the manifest")
+    ap.add_argument("--freeze", help="calibration freeze tag this walk ran "
+                    "under (e.g. calib-freeze-2026-07-18)")
     args = ap.parse_args()
 
     if not args.stations and not args.stations_file:
@@ -343,11 +377,14 @@ def main():
                 "offset_a": args.offset_a, "offset_b": args.offset_b,
                 "trim_s": args.trim, "max_ap_age_s": args.max_ap_age,
                 "gate_dbm": GATE, "trainable": args.trainable == "yes",
+                "manifest": build_manifest(args.logA, args.logB, args.pair,
+                                           args.capture_meta, args.freeze),
                 "stations": [{"label": l, "start": hms(a), "end": hms(b)}
                              for (l, a, b) in stations]}
         with open(args.json, "w") as f:
             json.dump({"meta": meta, "stations": rows}, f, indent=1)
-        print(f"\nwrote {args.json}")
+        print(f"\nwrote {args.json} (walk_id {meta['manifest']['walk_id']}, "
+              f"pair {args.pair or 'UNSET — ingest cannot verify identity'})")
     if args.csv:
         with open(args.csv, "w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
