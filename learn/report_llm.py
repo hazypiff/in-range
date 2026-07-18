@@ -29,6 +29,12 @@ REPORT:
 def main():
     if len(sys.argv) != 2:
         raise SystemExit(__doc__)
+    # Data-sensitivity guard: ONLY the metrics report may reach an LLM.
+    # walk.json / dataset.jsonl / raw logs contain GPS coordinates and WiFi
+    # BSSIDs — refuse anything that is not a registry report.md.
+    if not sys.argv[1].endswith("report.md"):
+        raise SystemExit("refusing: only a registry report.md may be sent to "
+                         "the LLM (raw archives contain GPS/BSSID data)")
     report = open(sys.argv[1]).read()
     body = json.dumps({
         "model": "local",

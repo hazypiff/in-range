@@ -40,6 +40,11 @@ walk_capture.sh prep                      (app repo — verified 64M buffers + c
    auto-promotes, ever.
 5. **Losses are data.** Every run appends one line to `LEARNING_LOG.md` —
    failed experiments stay on the record with why.
+6. **Raw stays local.** Raw logs / walk.json / meta.json carry GPS
+   coordinates and WiFi BSSIDs: local-only, never committed or LLM-fed.
+   Only aggregates and metrics travel; `report_llm.py` hard-refuses any
+   input that is not a registry report.md and only talks to 127.0.0.1.
+   Full tier table: app repo `docs/WALK_LOGISTICS.md`.
 
 ## Files
 
