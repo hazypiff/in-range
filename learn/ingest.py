@@ -44,6 +44,11 @@ def phone_features(p, venue_v, gps_delta):
 
 
 def rows_from_walk(walk, walk_id, pair):
+    # Smoke fixtures / unmeasured captures are archived but never trained on:
+    # extract_walk.py --trainable no stamps meta.trainable=false (a desk test
+    # at an eyeballed distance would distort class variance and priors).
+    if walk.get("meta", {}).get("trainable") is False:
+        return []
     rows = []
     for s in walk["stations"]:
         meta = station_meta(s["station"])
@@ -78,9 +83,15 @@ def main():
     args = ap.parse_args()
 
     rows = []
+    skipped = []
     for path in args.walks:
         walk_id = os.path.basename(os.path.dirname(os.path.abspath(path))) or path
-        rows.extend(rows_from_walk(json.load(open(path)), walk_id, args.pair))
+        got = rows_from_walk(json.load(open(path)), walk_id, args.pair)
+        if not got:
+            skipped.append(walk_id)
+        rows.extend(got)
+    if skipped:
+        print(f"skipped (untrainable or no labeled stations): {', '.join(skipped)}")
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     with open(args.out, "w") as f:

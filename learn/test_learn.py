@@ -72,6 +72,11 @@ class IngestTest(unittest.TestCase):
         self.assertIsNone(silent[0]["features"]["high_med"])
         self.assertEqual(silent[0]["features"]["rate"], 0.0)
 
+    def test_untrainable_walk_skipped(self):
+        walk = synth_walk(random.Random(1))
+        walk["meta"] = {"trainable": False}
+        self.assertEqual(ingest.rows_from_walk(walk, "w", "p"), [])
+
 
 class GnbTest(unittest.TestCase):
     def test_fit_and_predict_separable(self):
@@ -98,16 +103,48 @@ class GnbTest(unittest.TestCase):
 
     def test_cv_beats_or_ties_rules_on_separable_data(self):
         rows = make_dataset(3)
-        gnb_m, rules_m, held_out = train.cross_validate(rows, TIERS,
-                                                        train.RULES["iphone"])
-        self.assertTrue(held_out)
+        gnb_m, rules_m, info = train.cross_validate(rows, TIERS,
+                                                    train.RULES["iphone"])
+        self.assertTrue(info["held_out"])
+        self.assertTrue(info["coverage_ok"])  # 3 walks, all classes in each
+        self.assertEqual(info["invalid_folds"], [])
         self.assertGreaterEqual(gnb_m["macro_f1"], 0.8)
         self.assertGreaterEqual(gnb_m["macro_f1"], rules_m["macro_f1"] - 0.05)
 
     def test_single_walk_not_held_out(self):
         rows = [r for r in make_dataset(3) if r["walk_id"] == "walk0"]
-        _, _, held_out = train.cross_validate(rows, TIERS, train.RULES["iphone"])
-        self.assertFalse(held_out)
+        _, _, info = train.cross_validate(rows, TIERS, train.RULES["iphone"])
+        self.assertFalse(info["held_out"])
+        self.assertFalse(info["coverage_ok"])
+
+    def test_missing_class_fold_is_invalid_not_zero(self):
+        rows = make_dataset(2)  # walk0, walk1: all classes each
+        # walk2 = single-class desk-style run (close only)
+        rows += [{"walk_id": "walk2", "pair": "p", "station": "10ft",
+                  "direction": d, "distance_ft": 10, "blocked": False,
+                  "features": {"high_med": -60.0, "iqr_w": 4.0, "rate": 1.7,
+                               "high_n": 80, "med_n": 40, "venue_v": 0.5,
+                               "gps_delta": 2.0}} for d in "ab"]
+        gnb_m, _, info = train.cross_validate(rows, TIERS, train.RULES["iphone"])
+        # No fold is invalid here (dropping any one walk keeps all classes),
+        # but coverage must fail: near/inrange exist in only 2 walks... they do
+        # exist in 2 (walk0, walk1) — coverage passes with 3 walks. Now drop
+        # walk1 so near/inrange live ONLY in walk0:
+        two = [r for r in rows if r["walk_id"] != "walk1"]
+        gnb_m, _, info = train.cross_validate(two, TIERS, train.RULES["iphone"])
+        # held-out walk0 fold trains on walk2 alone (close only) -> INVALID
+        self.assertEqual(len(info["invalid_folds"]), 1)
+        self.assertEqual(info["invalid_folds"][0]["held_out_walk"], "walk0")
+        self.assertIn("near", info["invalid_folds"][0]["training_missing"])
+        self.assertFalse(info["coverage_ok"])
+        # metrics come only from the valid fold (held-out walk2, 2 rows)
+        self.assertEqual(gnb_m["n"], 2)
+
+    def test_coverage_floor_two_walks_insufficient(self):
+        rows = make_dataset(2)
+        _, _, info = train.cross_validate(rows, TIERS, train.RULES["iphone"])
+        self.assertTrue(info["held_out"])       # folds are valid...
+        self.assertFalse(info["coverage_ok"])   # ...but 2 walks < floor of 3
 
     def test_model_json_roundtrip(self):
         rows = make_dataset()

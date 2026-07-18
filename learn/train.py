@@ -133,28 +133,53 @@ def evaluate(pairs, class_names):
 
 
 def cross_validate(rows, tiers, rules_fn):
-    """Leave-one-walk-out. Returns (gnb_metrics, rules_metrics, promotable)."""
+    """Leave-one-walk-out with fold-validity rules:
+    - a fold whose TRAINING set is missing any target class is INVALID —
+      recorded and excluded from metrics, never scored as zero-evidence;
+    - coverage_ok (required for promotion) needs >=3 walks total and every
+      class present in >=2 independent walks, so any single held-out walk
+      still leaves every class represented in training.
+    Returns (gnb_metrics, rules_metrics, info)."""
     class_names = [t[0] for t in tiers]
     groups = sorted({r["walk_id"] for r in rows})
-    gnb_pairs, rules_pairs = [], []
+    walks_per_class = defaultdict(set)
+    for r in rows:
+        walks_per_class[tier_for(r["distance_ft"], tiers)].add(r["walk_id"])
+    coverage_ok = (len(groups) >= 3 and
+                   all(len(walks_per_class.get(c, ())) >= 2 for c in class_names))
+
+    gnb_pairs, rules_pairs, invalid_folds = [], [], []
+    held_out = False
     if len(groups) >= 2:
         for g in groups:
-            train = [r for r in rows if r["walk_id"] != g]
-            test = [r for r in rows if r["walk_id"] == g]
-            model = fit_gnb(train, tiers)
-            for r in test:
+            train_rows = [r for r in rows if r["walk_id"] != g]
+            test_rows = [r for r in rows if r["walk_id"] == g]
+            train_classes = {tier_for(r["distance_ft"], tiers) for r in train_rows}
+            missing = sorted(set(class_names) - train_classes)
+            if missing:
+                invalid_folds.append({"held_out_walk": g,
+                                      "training_missing": missing})
+                continue
+            model = fit_gnb(train_rows, tiers)
+            for r in test_rows:
                 true = tier_for(r["distance_ft"], tiers)
                 gnb_pairs.append((true, gnb_predict(model, r["features"])[0]))
                 rules_pairs.append((true, rules_fn(r["features"])))
-        held_out = True
-    else:
+        held_out = bool(gnb_pairs)
+    if not held_out:
+        # in-sample fallback: numbers are printed for orientation only and
+        # can never promote (held_out stays False)
+        gnb_pairs, rules_pairs = [], []
         model = fit_gnb(rows, tiers)
         for r in rows:
             true = tier_for(r["distance_ft"], tiers)
             gnb_pairs.append((true, gnb_predict(model, r["features"])[0]))
             rules_pairs.append((true, rules_fn(r["features"])))
-        held_out = False
-    return evaluate(gnb_pairs, class_names), evaluate(rules_pairs, class_names), held_out
+    info = {"held_out": held_out, "coverage_ok": coverage_ok,
+            "invalid_folds": invalid_folds, "n_walks": len(groups),
+            "walks_per_class": {c: sorted(walks_per_class.get(c, []))
+                                for c in class_names}}
+    return evaluate(gnb_pairs, class_names), evaluate(rules_pairs, class_names), info
 
 
 def confusion_md(cm):
@@ -185,10 +210,11 @@ def main():
     pair = rows[0]["pair"]
     walks = sorted({r["walk_id"] for r in rows})
 
-    gnb_m, rules_m, held_out = cross_validate(rows, tiers, RULES[args.rules])
+    gnb_m, rules_m, info = cross_validate(rows, tiers, RULES[args.rules])
     beats = (gnb_m["macro_f1"] >= rules_m["macro_f1"]
              and gnb_m["dangerous"] <= rules_m["dangerous"])
-    promotable = held_out and beats
+    promotable = (info["held_out"] and info["coverage_ok"]
+                  and not info["invalid_folds"] and beats)
 
     final_model = fit_gnb(rows, tiers)  # deployed artifact trains on ALL walks
     now = datetime.datetime.now(datetime.timezone.utc)
@@ -199,22 +225,43 @@ def main():
     model = {"schema": "inrange-gnb-1", "trained_at": now.isoformat(),
              "dataset_sha256": dataset_sha, "pair": pair, "walks": walks,
              "tiers": args.tiers, "features": FEATURES, "classes": final_model,
-             "cv": {"gnb": gnb_m, "rules": rules_m, "held_out": held_out}}
+             "cv": {"gnb": gnb_m, "rules": rules_m, **info}}
     with open(os.path.join(run_dir, "model.json"), "w") as f:
         json.dump(model, f, indent=1, sort_keys=True)
 
-    verdict = ("PROMOTABLE — human review required (write run name into "
-               "learn/registry/PROMOTED to deploy)" if promotable else
-               "NOT PROMOTABLE — " +
-               ("needs >=2 walks for held-out validation" if not held_out else
-                "does not beat the rules baseline (macro-F1 and dangerous errors)"))
+    if promotable:
+        verdict = ("PROMOTABLE — human review required (write run name into "
+                   "learn/registry/PROMOTED to deploy)")
+    elif not info["held_out"]:
+        verdict = ("NOT PROMOTABLE — no valid held-out folds (needs >=2 walks "
+                   "whose training sets contain every class)")
+    elif not info["coverage_ok"]:
+        wpc = {c: len(w) for c, w in info["walks_per_class"].items()}
+        verdict = ("NOT PROMOTABLE — coverage floor not met: needs >=3 walks "
+                   f"and >=2 walks per class (have {info['n_walks']} walks, "
+                   f"walks-per-class {wpc})")
+    elif info["invalid_folds"]:
+        verdict = ("NOT PROMOTABLE — invalid folds present (training sets "
+                   "missing classes)")
+    else:
+        verdict = ("NOT PROMOTABLE — does not beat the rules baseline "
+                   "(macro-F1 and dangerous errors)")
 
+    invalid_md = ""
+    if info["invalid_folds"]:
+        invalid_md = "\n## Invalid folds (excluded from metrics, NOT zero-scored)\n" + "\n".join(
+            f"- held-out `{f['held_out_walk']}`: training missing "
+            f"{', '.join(f['training_missing'])}" for f in info["invalid_folds"]) + "\n"
+
+    wpc_md = ", ".join(f"{c}: {len(w)}" for c, w in info["walks_per_class"].items())
     report = f"""# Training run {run}
 
 - pair: **{pair}**, walks: {', '.join(walks)} ({gnb_m['n']} eval rows)
 - dataset sha256: `{dataset_sha}`
 - tiers: `{args.tiers}` | baseline: `{args.rules}`
-- validation: {"leave-one-walk-out" if held_out else "IN-SAMPLE ONLY (single walk)"}
+- validation: {"leave-one-walk-out (valid folds only)" if info['held_out'] else "IN-SAMPLE ONLY — cannot promote"}
+- walks per class: {wpc_md} (promotion floor: >=3 walks, >=2 per class)
+{invalid_md}
 
 | metric | GNB | rules |
 |---|---|---|

@@ -40,9 +40,16 @@ def main():
     model = json.load(open(model_path))
     if not model.get("dataset_sha256") or model.get("schema") != "inrange-gnb-1":
         raise SystemExit("model.json missing schema/dataset hash — refusing to export")
-    if not model.get("cv", {}).get("held_out"):
-        raise SystemExit(f"{run} was trained without held-out validation — "
-                         "refusing to export (needs >=2 walks)")
+    cv = model.get("cv", {})
+    if not cv.get("held_out"):
+        raise SystemExit(f"{run} was trained without valid held-out folds — "
+                         "refusing to export")
+    if not cv.get("coverage_ok"):
+        raise SystemExit(f"{run} misses the coverage floor (>=3 walks, >=2 "
+                         "walks per class) — refusing to export")
+    if cv.get("invalid_folds"):
+        raise SystemExit(f"{run} had invalid folds (training sets missing "
+                         "classes) — refusing to export")
 
     with open(args.out, "w") as f:
         json.dump(model, f, indent=1, sort_keys=True)

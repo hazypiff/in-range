@@ -23,9 +23,13 @@ walk_capture.sh prep                      (app repo — verified 64M buffers + c
 1. **Labeled calibration walks only.** No self-labeling of production data —
    distribution shift + label noise. A row exists only because a human stood
    at a measured distance.
-2. **Grouped hold-out.** Cross-validation is leave-one-WALK-out (group =
-   walk archive). No promotion with fewer than 2 walks — in-sample numbers
-   are printed but stamped NOT PROMOTABLE.
+2. **Grouped hold-out with fold validity.** Cross-validation is
+   leave-one-WALK-out (group = walk archive). A fold whose training set is
+   missing any class is INVALID — excluded from metrics, never scored as
+   zero-evidence. Promotion floor: **>=3 walks and every class present in
+   >=2 independent walks** (5 walks across venues/orientations is the
+   comfortable target). Smoke fixtures (`extract_walk.py --trainable no`,
+   `meta.trainable=false`) are archived but never ingested.
 3. **Rules baseline always runs.** The fitted model must beat (or tie) the
    current hand-tuned thresholds on macro-F1 AND not increase dangerous
    errors (Close↔In-Range swaps) before it can be promoted.
