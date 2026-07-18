@@ -60,6 +60,12 @@ class GnbClassifier implements ProximityClassifier {
     if (json['schema'] != 'inrange-gnb-1') {
       throw FormatException('unsupported model schema: ${json['schema']}');
     }
+    // Contract: artifacts exported with --non-production (trained on
+    // identity-unverified walks) must never load in the runtime.
+    if (json['non_production'] == true) {
+      throw const FormatException(
+          'model is stamped non_production — refusing to load');
+    }
     final classes = <String, _GnbClass>{};
     (json['classes'] as Map<String, dynamic>).forEach((name, c) {
       final stats = <String, List<double>>{};

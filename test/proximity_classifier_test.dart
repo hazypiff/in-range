@@ -44,6 +44,11 @@ void main() {
       expect(s['close']!, greaterThan(s['inrange']!));
     });
 
+    test('rejects non_production artifacts', () {
+      final stamped = Map<String, dynamic>.from(model)..['non_production'] = true;
+      expect(() => GnbClassifier.fromJson(stamped), throwsFormatException);
+    });
+
     test('rejects unknown schema and empty models', () {
       expect(() => GnbClassifier.fromJson({'schema': 'nope', 'classes': {}}),
           throwsFormatException);
