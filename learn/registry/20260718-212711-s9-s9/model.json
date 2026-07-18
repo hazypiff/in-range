@@ -1,0 +1,103 @@
+{
+ "classes": {
+  "close": {
+   "prior": 1.0,
+   "stats": {
+    "gps_delta": [
+     2.2,
+     1e-06
+    ],
+    "high_med": [
+     -58.0,
+     8.0
+    ],
+    "high_n": [
+     105.5,
+     9384.5
+    ],
+    "iqr_w": [
+     8.0,
+     1e-06
+    ],
+    "med_n": [
+     50.5,
+     2112.5
+    ],
+    "rate": [
+     1.055,
+     0.93845
+    ],
+    "venue_v": [
+     0.48,
+     1e-06
+    ]
+   }
+  }
+ },
+ "cv": {
+  "gnb": {
+   "accuracy": 1.0,
+   "confusion": {
+    "close": {
+     "close": 2,
+     "inrange": 0,
+     "near": 0
+    },
+    "inrange": {
+     "close": 0,
+     "inrange": 0,
+     "near": 0
+    },
+    "near": {
+     "close": 0,
+     "inrange": 0,
+     "near": 0
+    }
+   },
+   "dangerous": 0,
+   "macro_f1": 0.3333,
+   "n": 2
+  },
+  "held_out": false,
+  "rules": {
+   "accuracy": 1.0,
+   "confusion": {
+    "close": {
+     "close": 2,
+     "inrange": 0,
+     "near": 0
+    },
+    "inrange": {
+     "close": 0,
+     "inrange": 0,
+     "near": 0
+    },
+    "near": {
+     "close": 0,
+     "inrange": 0,
+     "near": 0
+    }
+   },
+   "dangerous": 0,
+   "macro_f1": 0.3333,
+   "n": 2
+  }
+ },
+ "dataset_sha256": "4c92d78d1c99690a52eddfc26e9f5d4ec87da0fdea71394057506bd45971d460",
+ "features": [
+  "high_med",
+  "iqr_w",
+  "rate",
+  "high_n",
+  "med_n",
+  "venue_v",
+  "gps_delta"
+ ],
+ "pair": "s9-s9",
+ "schema": "inrange-gnb-1",
+ "tiers": "close:0-15,near:16-40,inrange:41-100000",
+ "trained_at": "2026-07-18T21:27:11.297567+00:00",
+ "walks": [
+  "2026-07-18-desk-test"
+ ]
+}
