@@ -599,6 +599,21 @@ class BeaconService {
   /// soon as it's on; false if the timeout elapses still-not-on.
   Future<bool> _waitAdapterOn(Duration timeout) async {
     final deadline = DateTime.now().add(timeout);
+    // Prime the plugin before polling. adapterStateNow is a passive cache
+    // populated only by platform state-change events, and on iOS the native
+    // CBCentralManager (whose creation triggers the first such event) is
+    // created lazily on the first method-channel call — so on a cold process
+    // with no prior FlutterBluePlus call the poll below would read `unknown`
+    // until the deadline. The adapterState getter invokes getAdapterState,
+    // which initializes the plugin and seeds the cache with the current
+    // state; after that the event listener keeps it fresh and polling is
+    // race-proof.
+    try {
+      await FlutterBluePlus.adapterState.first
+          .timeout(deadline.difference(DateTime.now()));
+    } catch (_) {
+      // Priming failed or timed out — fall through; the poll decides.
+    }
     while (true) {
       if (FlutterBluePlus.adapterStateNow == BluetoothAdapterState.on) {
         return true;

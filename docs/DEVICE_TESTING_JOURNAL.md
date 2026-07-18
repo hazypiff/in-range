@@ -111,7 +111,8 @@ not rediscover them:
 - Clean monotonic curve (median RSSI, both directions within ~2 dB):
   35 ft −77 · 65 ft −83 · 110 ft −89 · 150 ft −96 · 175 ft −90.
 - **Calibrated tier cutoffs:** Close 0–75 = RSSI ≥ **−84**; Near 76–150 =
-  **−84…−96**; In Range 151+ = **< −96**. Written into PROXIMITY_TIERS.
+  **−85…−96**; In Range 151+ = **< −96** (integer-dBm bands; closer tier owns
+  its cutoff, so −84 is Close, not Near). Written into PROXIMITY_TIERS.
 - **BLE reaches past 151 ft** — 175 ft still 1,540 samples at −90, robust. So In
   Range 151+ is BLE, NOT GPS (earlier "dies at 150" was a contaminated reading:
   beacon turned on while phones were close → −34 burst + only 3 real 150 ft

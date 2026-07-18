@@ -81,9 +81,16 @@ carries past 60 ft); "In Range" is presence out to the ~60–80 ft S9 ceiling.
 | Advertiser → Scanner | Close By | Near By | In Range | Source |
 |---|---|---|---|---|
 | S9 → S9 | median ≥ **−80 dBm** (≈ ≤10–15 ft) | heard on **medium slot** (≈ ≤25–40 ft) | any packet (≤ ~80 ft) | walk #3, provisional; walk #4 tightens |
-| iPhone 14 ↔ iPhone 15 Plus | median ≥ **−84 dBm** (≤~75 ft) | **−84 to −96 dBm** (~76–150 ft) | **< −96 dBm** (151 ft → ~175–200 ceiling) | outdoor sweep 2026-07-17 (symmetric both directions) |
+| iPhone 14 ↔ iPhone 15 Plus | median ≥ **−84 dBm** (≤~75 ft) | **−85 to −96 dBm** (~76–150 ft) | **< −96 dBm** (151 ft → ~175–200 ceiling) | outdoor sweep 2026-07-17 (symmetric both directions) |
 | iPhone 14 → S9 | TBD | TBD | TBD | needs Android scan-filter widen to 0xCAFE (issue #1) |
 | S9 → iPhone 14 | TBD | TBD | TBD | needs Android scan-filter widen to 0xCAFE (issue #1) |
+
+> **Not yet wired into runtime**: `RangeEstimator` still runs the S9-row logic
+> (median ≥ −80 + medium-slot gating). The iPhone −84/−96 cutoffs above are
+> calibration results only; wiring them in requires the per-model threshold
+> table (rule 4) so the S9 fleet keeps its own row. Boundary convention:
+> integer-dBm bands, closer tier owns its cutoff (Close ≥ −84, Near −85…−96
+> inclusive, In Range < −96).
 
 ## Close By — confidence roadmap (the flagship feature)
 
