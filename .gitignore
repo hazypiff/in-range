@@ -63,3 +63,4 @@ docs/smoke/
 android/app/src/main/AndroidManifest.xml.bak
 graphify-out/
 learn/data/
+learn/.log.lock

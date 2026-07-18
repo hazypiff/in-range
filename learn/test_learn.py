@@ -77,6 +77,29 @@ class IngestTest(unittest.TestCase):
         walk["meta"] = {"trainable": False}
         self.assertEqual(ingest.rows_from_walk(walk, "w", "p"), [])
 
+    def test_manifest_pair_mismatch_refused(self):
+        walk = synth_walk(random.Random(1))
+        walk["meta"] = {"manifest": {"version": "walk_manifest.v1",
+                                     "walk_id": "abc123", "pair_id": "s9-s9"}}
+        wid, status, rows = ingest.load_walk_rows(walk, "dir", "iphone14-iphone15")
+        self.assertEqual(status, "pair_mismatch")
+        self.assertEqual(rows, [])
+        self.assertEqual(wid, "abc123")
+
+    def test_manifest_walk_id_preferred_over_dirname(self):
+        walk = synth_walk(random.Random(1))
+        walk["meta"] = {"manifest": {"walk_id": "deadbeef", "pair_id": "p"}}
+        wid, status, rows = ingest.load_walk_rows(walk, "some-dir", "p")
+        self.assertEqual(status, "ok")
+        self.assertTrue(all(r["walk_id"] == "deadbeef" for r in rows))
+
+    def test_legacy_archive_warns_but_ingests(self):
+        walk = synth_walk(random.Random(1))
+        wid, status, rows = ingest.load_walk_rows(walk, "old-dir", "p")
+        self.assertEqual(status, "unverified_pair")
+        self.assertEqual(wid, "old-dir")
+        self.assertTrue(rows)
+
 
 class GnbTest(unittest.TestCase):
     def test_fit_and_predict_separable(self):
@@ -205,8 +228,13 @@ class EndToEndTest(unittest.TestCase):
                             "--rules", "iphone", "--registry", registry],
                            capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("RUN_ID=", r.stdout)  # exact handoff for loop.sh
         runs = os.listdir(registry)
         self.assertEqual(len(runs), 1)
+        self.assertFalse(runs[0].endswith(".tmp"))  # atomic publish completed
+        run_id = [l for l in r.stdout.splitlines()
+                  if l.startswith("RUN_ID=")][0].split("=", 1)[1]
+        self.assertEqual(run_id, runs[0])
         model = json.load(open(os.path.join(registry, runs[0], "model.json")))
         self.assertEqual(model["schema"], "inrange-gnb-1")
         self.assertTrue(model["dataset_sha256"])

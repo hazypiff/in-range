@@ -8,8 +8,12 @@ is down — the loop must work fully offline.
 Usage: python3 learn/report_llm.py learn/registry/<run>/report.md
 """
 import json
+import os
 import sys
 import urllib.request
+
+REGISTRY = os.path.realpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "registry"))
 
 ENDPOINT = "http://127.0.0.1:18080/v1/chat/completions"
 TIMEOUT_S = 25
@@ -29,13 +33,16 @@ REPORT:
 def main():
     if len(sys.argv) != 2:
         raise SystemExit(__doc__)
-    # Data-sensitivity guard: ONLY the metrics report may reach an LLM.
-    # walk.json / dataset.jsonl / raw logs contain GPS coordinates and WiFi
-    # BSSIDs — refuse anything that is not a registry report.md.
-    if not sys.argv[1].endswith("report.md"):
-        raise SystemExit("refusing: only a registry report.md may be sent to "
-                         "the LLM (raw archives contain GPS/BSSID data)")
-    report = open(sys.argv[1]).read()
+    # Data-sensitivity guard: ONLY a registry run's metrics report may reach
+    # an LLM (raw archives contain GPS coordinates and WiFi BSSIDs). Resolve
+    # symlinks and require exactly learn/registry/<run>/report.md — a suffix
+    # check alone would accept a cleverly named path outside the registry.
+    path = os.path.realpath(sys.argv[1])
+    if (os.path.basename(path) != "report.md"
+            or os.path.dirname(os.path.dirname(path)) != REGISTRY):
+        raise SystemExit("refusing: input must be learn/registry/<run>/"
+                         "report.md (raw archives contain GPS/BSSID data)")
+    report = open(path).read()
     body = json.dumps({
         "model": "local",
         "messages": [{"role": "user", "content": PROMPT + report}],
@@ -52,7 +59,7 @@ def main():
         return 0
     print("\n--- LLM reviewer (advisory only) ---")
     print(out)
-    dest = sys.argv[1].replace("report.md", "report-llm.md")
+    dest = os.path.join(os.path.dirname(path), "report-llm.md")
     with open(dest, "w") as f:
         f.write(out + "\n")
     print(f"--- saved to {dest} ---")

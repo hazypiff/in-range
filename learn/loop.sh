@@ -33,14 +33,20 @@ echo "walks: ${WALKS[*]}"
 
 DATASET="learn/data/dataset-$PAIR.jsonl"
 python3 learn/ingest.py "${WALKS[@]}" --pair "$PAIR" --out "$DATASET"
-python3 learn/train.py "$DATASET" --tiers "$TIERS" --rules "$RULES"
 
-RUN=$(ls -1t learn/registry | grep -v -e PROMOTED -e promoted_model | head -1)
+# Exact run-id handoff: train prints RUN_ID=<run>; never guess by mtime —
+# a concurrent loop's run would win an ls -t race.
+TRAIN_OUT=$(python3 learn/train.py "$DATASET" --tiers "$TIERS" --rules "$RULES")
+printf '%s\n' "$TRAIN_OUT"
+RUN=$(printf '%s\n' "$TRAIN_OUT" | sed -n 's/^RUN_ID=//p' | tail -1)
+[ -n "$RUN" ] || { echo "ERROR: train emitted no RUN_ID" >&2; exit 1; }
+
 python3 learn/report_llm.py "learn/registry/$RUN/report.md" || true
 
 STAMP=$(date +%F)
 LINE="- $STAMP run $RUN: pair=$PAIR walks=${#WALKS[@]} — see learn/registry/$RUN/report.md"
-echo "$LINE" >> LEARNING_LOG.md
+# flock: concurrent loops append whole lines, never interleave
+( flock 9; printf '%s\n' "$LINE" >> LEARNING_LOG.md ) 9>> learn/.log.lock
 echo
 echo "logged to LEARNING_LOG.md."
 echo "HUMAN REVIEW: read learn/registry/$RUN/report.md — if (and only if) the"

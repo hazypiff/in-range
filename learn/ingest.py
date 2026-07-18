@@ -66,6 +66,21 @@ def rows_from_walk(walk, walk_id, pair):
     return rows
 
 
+def load_walk_rows(walk, fallback_id, pair):
+    """Identity is VERIFIED, not assigned: if the archive carries a
+    walk_manifest.v1 (extract_walk.py --pair), its pair_id must match ours or
+    the walk is refused. walk_id prefers the manifest's content hash over the
+    directory name. Returns (walk_id, status, rows); status is one of
+    ok | pair_mismatch | unverified_pair (legacy archive, trusting CLI)."""
+    man = (walk.get("meta") or {}).get("manifest") or {}
+    wid = man.get("walk_id") or fallback_id
+    mpair = man.get("pair_id")
+    if mpair and mpair != pair:
+        return wid, "pair_mismatch", []
+    status = "ok" if mpair else "unverified_pair"
+    return wid, status, rows_from_walk(walk, wid, pair)
+
+
 def sha256_file(path):
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -85,13 +100,21 @@ def main():
     rows = []
     skipped = []
     for path in args.walks:
-        walk_id = os.path.basename(os.path.dirname(os.path.abspath(path))) or path
-        got = rows_from_walk(json.load(open(path)), walk_id, args.pair)
+        fallback = os.path.basename(os.path.dirname(os.path.abspath(path))) or path
+        wid, status, got = load_walk_rows(json.load(open(path)), fallback, args.pair)
+        if status == "pair_mismatch":
+            print(f"REFUSED {wid}: manifest pair != --pair {args.pair!r} "
+                  "(wrong walk for this dataset)")
+            skipped.append(wid)
+            continue
+        if status == "unverified_pair":
+            print(f"WARNING {wid}: legacy archive without manifest — pair "
+                  "trusted from CLI, re-extract with --pair to fix")
         if not got:
-            skipped.append(walk_id)
+            skipped.append(wid)
         rows.extend(got)
     if skipped:
-        print(f"skipped (untrainable or no labeled stations): {', '.join(skipped)}")
+        print(f"skipped: {', '.join(skipped)}")
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     with open(args.out, "w") as f:

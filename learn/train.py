@@ -218,15 +218,19 @@ def main():
 
     final_model = fit_gnb(rows, tiers)  # deployed artifact trains on ALL walks
     now = datetime.datetime.now(datetime.timezone.utc)
-    run = now.strftime("%Y%m%d-%H%M%S") + "-" + pair
+    # dataset-hash suffix makes the id collision-proof under concurrent runs
+    run = f"{now.strftime('%Y%m%d-%H%M%S')}-{pair}-{dataset_sha[:8]}"
     run_dir = os.path.join(args.registry, run)
-    os.makedirs(run_dir, exist_ok=True)
+    # write into a temp dir, publish with an atomic rename — a concurrent
+    # reader never sees a half-written run
+    tmp_dir = run_dir + ".tmp"
+    os.makedirs(tmp_dir, exist_ok=True)
 
     model = {"schema": "inrange-gnb-1", "trained_at": now.isoformat(),
              "dataset_sha256": dataset_sha, "pair": pair, "walks": walks,
              "tiers": args.tiers, "features": FEATURES, "classes": final_model,
              "cv": {"gnb": gnb_m, "rules": rules_m, **info}}
-    with open(os.path.join(run_dir, "model.json"), "w") as f:
+    with open(os.path.join(tmp_dir, "model.json"), "w") as f:
         json.dump(model, f, indent=1, sort_keys=True)
 
     if promotable:
@@ -279,11 +283,13 @@ def main():
 
 **{verdict}**
 """
-    with open(os.path.join(run_dir, "report.md"), "w") as f:
+    with open(os.path.join(tmp_dir, "report.md"), "w") as f:
         f.write(report)
+    os.rename(tmp_dir, run_dir)  # atomic publish
 
     print(report)
     print(f"registry run: {run_dir}")
+    print(f"RUN_ID={run}")  # exact handoff for loop.sh — never mtime-guessed
     return 0
 
 
