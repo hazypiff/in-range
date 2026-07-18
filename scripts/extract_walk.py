@@ -301,6 +301,10 @@ def main():
                     help=f"reject cached APs older than this, s (default {MAX_AP_AGE})")
     ap.add_argument("--json", help="write full results (incl. raw observations)")
     ap.add_argument("--csv", help="write per-station summary CSV")
+    ap.add_argument("--trainable", choices=["yes", "no"], default="yes",
+                    help="stamp meta.trainable — 'no' marks a smoke fixture / "
+                         "unmeasured capture that the learn pipeline must "
+                         "archive but never train on")
     args = ap.parse_args()
 
     if not args.stations and not args.stations_file:
@@ -338,7 +342,7 @@ def main():
         meta = {"logA": args.logA, "logB": args.logB,
                 "offset_a": args.offset_a, "offset_b": args.offset_b,
                 "trim_s": args.trim, "max_ap_age_s": args.max_ap_age,
-                "gate_dbm": GATE,
+                "gate_dbm": GATE, "trainable": args.trainable == "yes",
                 "stations": [{"label": l, "start": hms(a), "end": hms(b)}
                              for (l, a, b) in stations]}
         with open(args.json, "w") as f:
@@ -355,7 +359,8 @@ def main():
     print("\nNotes:")
     print("  * high med/IQR = median (p25,p75) of HIGH-power RSSI — the Close By signal")
     print("  * medN = medium-slot packets received — the Near By gate (>0 => within medium range)")
-    print("  * venue V >=0.60 same venue, 0.30-0.60 same building, <0.30 different")
+    print("  * venue V thresholds PROVISIONAL (0.60/0.30 uncalibrated — "
+          "co-located phones measured V=0.48 on 2026-07-18)")
     print("  * fingerprints union ALL in-window scans (best RSSI per BSSID), stale APs rejected")
     print("  * GPS Δm from per-phone MEDIAN fix; worst accuracy per phone is in the CSV/JSON")
 
