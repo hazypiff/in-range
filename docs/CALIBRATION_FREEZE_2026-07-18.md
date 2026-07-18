@@ -1,4 +1,4 @@
-# Calibration freeze — 2026-07-18 (tag `calib-freeze-2026-07-18`)
+# Calibration freeze — 2026-07-18 (tag `calib-freeze-2026-07-18b`)
 
 Everything a walk touches is pinned here. **Use exactly these versions for
 every walk in this collection round** — if any component must change
@@ -9,8 +9,8 @@ freeze (mixed-version walks cannot share a training dataset without review).
 
 | Component | Where | Version |
 |---|---|---|
-| App repo (capture, extractor, protocol, classifier stub) | `inrangeai/in-range` | tag `calib-freeze-2026-07-18` = `225b661` |
-| Calibration repo (learn pipeline, monitor) | `hazypiff/in-range` (Work) | tag `calib-freeze-2026-07-18` = `fc7c499` |
+| App repo (capture, extractor, protocol, classifier stub) | `inrangeai/in-range` | tag `calib-freeze-2026-07-18b` = `a2de130` |
+| Calibration repo (learn pipeline, monitor) | `hazypiff/in-range` (Work) | tag `calib-freeze-2026-07-18b` = `<this commit>` |
 | Feature schema | `learn/train.py` / artifact | `inrange-gnb-1`: high_med, iqr_w, rate, high_n, med_n, venue_v, gps_delta |
 | Extractor defaults | `scripts/extract_walk.py` | trim 20 s, max AP age 60 s, AP gate −70 dBm |
 | Walk protocol | `docs/WALK4_PROTOCOL.md` (app repo, at tag) | stop-and-return, explicit host-clock stop times, 90 s stations |
@@ -41,3 +41,12 @@ class, beats rules baseline on macro-F1 without more dangerous
 close↔inrange errors, human writes PROMOTED, export re-verifies.
 RH-1/RH-2 stay on the separate reliability track — they gate *fleet
 health*, not this dataset round.
+
+## Freeze b (2026-07-18, supersedes the original tag — zero trainable walks existed)
+
+Re-frozen after the architecture-contracts hardening landed:
+walk_manifest.v1 identity (extract_walk `--pair --capture-meta --freeze`),
+ingest pair verification, atomic registry publish + RUN_ID handoff,
+path-hard LLM guard. Walks in this round must pass
+`--pair <pair> --capture-meta <meta-pull.json> --freeze calib-freeze-2026-07-18b`
+at extraction so every archive carries verifiable identity.
