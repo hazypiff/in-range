@@ -19,7 +19,8 @@ legislature texts, developer.apple.com, support.google.com).
 
 **Confidence:** statutory citations, FTC orders, EU case law, and store policy
 text below were read from primary sources. Items marked ⚠️ are unverified.
-**The minors / age-assurance section is materially incomplete** (§4).
+Minors / age assurance is now covered in
+`docs/research/minors-age-assurance-2026-07.md` — see §4.
 
 ---
 
