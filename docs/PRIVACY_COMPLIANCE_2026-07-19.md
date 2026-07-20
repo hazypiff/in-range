@@ -1,12 +1,13 @@
 # Privacy compliance — audit, fixes shipped, and what's left
 
-**Date:** 2026-07-19. **Author:** Claude (audit + fixes). **Repo:** `3ae3bf8` on `main`.
-**Prod:** Supabase `riigipzlyqeaadyvbuty`, migration `0036`.
+**Date:** 2026-07-19. **Author:** Claude (audit + fixes). **Repo:** `94ec6e3` on `main`.
+**Prod:** Supabase `riigipzlyqeaadyvbuty`, migration `0037`.
 **Status:** mechanical + platform-policy issues fixed. Legal-document work is
 open and needs counsel. **Not legal advice.**
 
-Companion research: `docs/research/privacy-law-landscape-2026-07.md` (full
-statutory analysis with sources). This file is the executable summary.
+Companion research: `docs/research/privacy-law-landscape-2026-07.md` (statutory
+analysis) and `docs/research/minors-age-assurance-2026-07.md` (COPPA, app-store
+age laws, TAKE IT DOWN, §2258A). This file is the executable summary.
 
 ---
 
@@ -43,6 +44,7 @@ All verified against live prod, not just code.
 | 5 | Missing `PrivacyInfo.xcprivacy` → ITMS-91053/91061 at upload | ✅ **Fixed**, wired into Runner target | `ios/Runner/` |
 | 6 | Background location requested with **no prominent disclosure** (Play rejection cause) | ✅ **Fixed** — fail-closed gate, tested at channel level | `permission_service.dart` |
 | 7 | **False `neverForLocation` assertion** while WiFi is used as a proximity signal | ✅ **Fixed** — flag dropped, reasoning recorded inline | `AndroidManifest.xml` |
+| 8 | **The 15-min purge would have destroyed §2258A evidence automatically** — preservation duty runs 1 year from a CyberTipline filing, and nothing blocked the purge | ✅ **Fixed** — service-role legal holds; deletion deferred, not refused | `0037`, T15 |
 
 **Correction to the research report:** its §8.2 claims retention "exists on
 paper but is not scheduled," inferred from commented-out `pg_cron` blocks in
@@ -134,17 +136,116 @@ Needs a published standards page, an in-app feedback mechanism, CSAM handling
 protocol, a **named human** as child-safety point of contact, and a Console
 declaration. Real work for a 2-person team; cannot be skipped.
 
-### 2.7 🔴 Hard 18+ gate
+### 2.7 🔴🔴 TAKE IT DOWN Act + §2258A — these outrank everything else here
 
-Highest-leverage single decision available. Enforcing it eliminates NJDPA §7,
-Maryland's under-18 rules, Connecticut's categorical minor prohibition,
-Oregon's under-16 sale ban, and COPPA in one move. We already collect DOB, so
-we **cannot claim ignorance of age**.
+**Corrected priority.** An earlier draft ranked the 18+ gate as the top minors
+item. That was wrong. These two outrank it on urgency and exposure for three
+reasons: **both deadlines have already passed**, penalties are six-figure per
+incident, and **neither has a Section 230 defense**. We are pre-launch with
+photos and private chat and currently have neither.
 
-**Do NOT build facial age estimation.** Nothing in a US-only launch requires
-it, and it imports Illinois BIPA exposure ($1,000–$5,000 per violation **plus
-fees**, no actual injury needed) to satisfy no actual requirement. Store
-signals + neutral DOB gate + a rigorous removal pipeline is the right stack.
+**TAKE IT DOWN Act** — enforceable since **2026-05-19**. Covers any service
+"primarily providing a forum for user-generated content," **explicitly
+including messaging and image sharing**. We qualify. FTC-enforced as a §5
+violation at **$53,088 per violation**; the FTC sent compliance letters to 15
+companies **including Bumble and Match Group**.
+
+Required:
+1. **NCII removal intake** reachable **without an account**, from app and website
+2. **Published plain-language notice** of that process
+3. **Removal within 48 hours** of a valid request
+4. **Remove known identical copies** — in practice a **hash column on the media
+   table** plus a lookup before deletion completes, not just deleting one URL
+5. **Log every request and its resolution timestamp** — the 48h clock is the
+   enforcement hook and we must be able to prove we met it
+
+**18 U.S.C. §2258A — CyberTipline reporting.** **$600,000** first violation /
+**$850,000** subsequent for a provider our size. Company-ending on one miss.
+
+**The realistic trigger is not CSAM uploads — it is §2422(b) online enticement:
+an adult soliciting a minor in chat, with no image involved at all.** That is
+the pattern a proximity dating app will actually surface.
+
+**§2258A(f) expressly bars any duty to affirmatively search, screen, or scan.**
+Report what you know; do not over-build monitoring.
+
+Required:
+1. **Register with NCMEC** before launch — registration is not instant
+2. **Named reporter + backup** (with two people, both)
+3. **Escalation runbook** from the report queue to the reporter, with a time budget
+4. **Preservation-hold procedure** — 1 year from filing ✅ **shipped**
+5. **Train triage on §2422(b) enticement**, not just imagery
+
+✅ **The preservation hold is built** (`0037`, harness T15). This closed a real
+conflict we had created: `purge_deleted_accounts()` runs every 15 minutes, so
+without it the chain *incident → report filed → subject deletes account → 30d
+grace → automated purge* would have destroyed evidence automatically, with no
+human in the loop. Holds are service-role only — the subject must never learn
+of one. Deletion is **deferred, not refused**: it completes on release.
+
+### 2.8 🔴 Hard 18+ gate
+
+Still high-leverage: enforcing it eliminates NJDPA §7, Maryland's under-18
+rules, Connecticut's categorical minor prohibition, Oregon's under-16 sale ban,
+and COPPA in one move. We collect DOB, so we **cannot claim ignorance of age**.
+
+**A neutral self-attested gate is legally sufficient for COPPA** — the FTC says
+operators "may rely on the age information its users enter, **even if that age
+information is not accurate**." The spec matters: free entry of **month, day
+and year** (not a year dropdown that only permits 13+), **no "you must be 18"
+messaging before the gate** (that coaches falsification), no "I am over 12"
+checkbox, and a cookie to prevent back-button re-entry.
+
+**The trap: asking and then ignoring the answer is worse than not asking.** If
+we collect age and neither screen out under-13s nor obtain parental consent, we
+are liable. The gate is worthless without the **removal pipeline** — and an
+**auditable log of minors detected and removed** is also the evidence that
+defends NJDPA "willfully disregards" and AADC "reasonably likely to be accessed
+by children."
+
+**Do NOT build facial age estimation.** Nothing in a US-only launch requires it
+— Texas requires *consuming store signals*, not estimating faces; COPPA is
+satisfied by the neutral gate; NJDPA does not require it. It imports Illinois
+BIPA exposure (facial templates are biometric identifiers, and BIPA reaches
+**collection**, so a claim survives even if we never store the image) and adds a
+biometric vendor to the exact photos-plus-location pipeline the FTC just pursued
+Match/OkCupid over. **Reverses only on UK entry or a state mandate.**
+
+**Counterweight worth knowing:** in *Doe v. Grindr* the Ninth Circuit affirmed
+dismissal with prejudice on facts we would fear — a 15-year-old who lied about
+his age, was matched by geolocation, and was assaulted — and the opinion notes
+users "have represented to the App that they are over eighteen years old."
+**The self-attested gate helped the defense. Blind-eye moderation is the theory
+that fails; specific safety promises are the theory that succeeds** — which is
+why the removal pipeline and the marketing copy matter more than the gate.
+
+### 2.9 🔴 Store age signals — two possibly-blocking checks TODAY
+
+- **Apple:** the 12+/17+ ratings became **13+/16+/18+**, and developers had to
+  answer the new age-rating questionnaire by **2026-01-31** or be **blocked from
+  submitting new apps and updates**. If In Range missed it, submissions are
+  already blocked and nothing else here matters. Cheapest possible check.
+- **Play:** **Restrict Minor Access** + 18+ target-audience declaration, and
+  **Child Safety Standards self-certification** — reported overdue. Binary,
+  checkable in Play Console in minutes.
+
+**Texas SB 2420 is in force** (enjoined Dec 2025, stay granted by the Fifth
+Circuit ~June 2026, SCOTUS declined to reinstate the block 2026-07-06). Being
+18+ does **not** exempt us from *calling* the store signal — that duty attaches
+to every user. What 18+ removes is everything downstream (parental consent,
+re-consent, revocation).
+
+**Two API details that are painful to retrofit:**
+- **Resolve to the LOWEST age category** between the store signal and our own
+  DOB. Our in-app gate **cannot raise** a user above what the store reports.
+- **Treat `UNKNOWN`/`null` as the normal path, not an error.** Play Age Signals
+  rolled out only in Brazil and Texas (Texas accounts created after 2026-05-28),
+  so **for a New Jersey beta it returns nothing today** — that is the only path
+  we will actually exercise.
+
+**Play age signals may be used ONLY for age-appropriate experiences and legal
+compliance — never advertising, marketing, profiling, or analytics.** Misuse
+means API termination and takedown. Flag this before any ad monetization design.
 
 ---
 

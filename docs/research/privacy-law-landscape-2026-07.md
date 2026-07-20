@@ -601,45 +601,29 @@ precedent excusing it; there is simply no case yet.
 
 ---
 
-## 4. Minors and age assurance — ⚠️ NOT FULLY RESEARCHED
+## 4. Minors and age assurance — see the dedicated file
 
-**The sub-agent assigned to this never delivered its main report. COPPA
-amended-Rule dates and content, AADC litigation status, *Free Speech Coalition
-v. Paxton*, App Store Accountability Act developer obligations, Apple/Google
-age-signal API requirements, and the self-attested-DOB analysis are MISSING and
-must be researched before launch.**
+Now researched separately: **`docs/research/minors-age-assurance-2026-07.md`**
+(COPPA and the amended Rule, self-attestation sufficiency, App Store
+Accountability Acts, Apple Declared Age Range / Play Age Signals, TAKE IT DOWN,
+§2258A, AADC laws, NJ dating-app disclosure, UK OSA).
 
-Low-confidence items from the partial return:
+**The headline reverses the priority stated elsewhere in this file:** TAKE IT
+DOWN Act compliance and an 18 U.S.C. §2258A CyberTipline pipeline **outrank the
+entire age-assurance question** on both urgency and exposure. Both deadlines
+have already passed, penalties are six-figure per incident, and neither has a
+Section 230 defense. In Range has photos and private chat and qualifies.
 
-- **Do NOT build facial age estimation.** Nothing in a US-only launch mandates
-  it — app-store laws require consuming *store signals*, not estimating faces;
-  COPPA is satisfied by a neutral DOB gate. Building it imports BIPA exposure
-  and vendor data-flow risk of exactly the kind the FTC pursued in OkCupid.
-- **BIPA trap:** Tinder's Face Check is marketed as liveness/anti-duplication,
-  but its policy reportedly states the FaceMap "is used to estimate your age" —
-  liveness and age estimation fused in one FaceTec flow. If reaching for a
-  "liveness only" vendor as a BIPA workaround, **verify at the contract level.**
-- ⚠️ Possibly blocking, cheap to check in Play Console: **Restrict Minor Access
-  + 18+ targeting**, and **Child Safety Standards self-certification** —
-  reported overdue.
-- ⚠️ TAKE IT DOWN Act flow, deadline reported as 2026-05-19. Unverified.
-- 18 U.S.C. §2258A CyberTipline reporting pipeline.
-- NJ/CT/TX/NY dating-app disclosure notices. ⚠️ NJ reportedly enforced **$315k
-  against Bumble for *understating* its screening** — penalized for describing
-  screening **inaccurately**, not for screening too little. **Say less, and say
-  it precisely.**
-- **UK Online Safety Act** (live 2025-07-25): **no size exemption**, and 18+
-  terms don't help — the test is whether children *can* access. Self-declared
-  DOB is explicitly **not** "highly effective age assurance." **Geo-fence the UK**
-  — the one scenario that would force the biometric stack.
-- ⚠️ Texas SB 2420 and Louisiana effective dates unverified; **Utah's moved from
-  2026-05 to 2027-05 by a 2026 amendment** — the failure mode is reading
-  enrolled text without checking for later amendments.
+Second headline: **a neutral self-attested DOB gate is legally sufficient for
+COPPA** and helped the defense in *Doe v. Grindr*. **Do not build facial age
+estimation** for a US-only launch — it satisfies no requirement in any state we
+launch in and imports Illinois BIPA exposure.
 
-**Highest-leverage decision regardless: a hard, enforced 18+ gate at
-registration.**
-
----
+⚠️ Texas SB 2420 is **in force** (Fifth Circuit stayed the injunction; SCOTUS
+declined to reinstate 2026-07-06) but its statutory text was **not verified
+against current session law** — nor was Louisiana's. The one confirmed error the
+research surfaced (Utah's date moving 2026→2027) came from reading enrolled text
+without checking for later amendments.
 
 ## 5. BLE tokens and WiFi BSSIDs
 
