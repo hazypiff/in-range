@@ -375,5 +375,89 @@ DO $$ BEGIN
   EXCEPTION WHEN sqlstate '42501' THEN NULL; END;
 END $$;
 
+-- ============ TEST 13: account deletion completeness (privacy) ============
+-- request_account_deletion() must erase every regulated field synchronously,
+-- and purge_deleted_accounts() must survive the ON DELETE NO ACTION foreign
+-- keys (matches.user_a/user_b, messages.sender_id) that would otherwise make
+-- DELETE FROM auth.users fail for any user who ever matched or chatted.
+INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+ ('81000000-0000-0000-0000-000000000081','00000000-0000-0000-0000-000000000000','authenticated','authenticated','del_h@t.local',now(),now()),
+ ('82000000-0000-0000-0000-000000000082','00000000-0000-0000-0000-000000000000','authenticated','authenticated','del_i@t.local',now(),now());
+UPDATE public.profiles SET display_name='H',dob='1990-01-01',gender='male',sexual_preference='women',
+  interests=ARRAY['x'],photo_urls=ARRAY['h.jpg'],email_hint='h@t.local',phone_hint='555',
+  neighborhood='Hoboken',is_active=true,age_verified=true
+  WHERE id='81000000-0000-0000-0000-000000000081';
+UPDATE public.profiles SET display_name='I',dob='1991-01-01',is_active=true
+  WHERE id='82000000-0000-0000-0000-000000000082';
+
+DO $$
+DECLARE
+  v_h UUID := '81000000-0000-0000-0000-000000000081';
+  v_match BIGINT;
+  v_purged INT;
+BEGIN
+  -- Give H the exact dependents that block a naive hard delete.
+  INSERT INTO public.matches (user_a,user_b,status,matched_at)
+    VALUES (v_h,'82000000-0000-0000-0000-000000000082','active',now())
+    RETURNING id INTO v_match;
+  INSERT INTO public.messages (match_id,sender_id,content,message_type,created_at)
+    VALUES (v_match,v_h,'secret text', 'text', now());
+  INSERT INTO public.location_pings (user_id,geo,created_at)
+    VALUES (v_h, ST_SetSRID(ST_MakePoint(-74.03,40.74),4326)::geography, now());
+
+  -- Phase 1: the user asks to be deleted.
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"81000000-0000-0000-0000-000000000081","role":"authenticated"}', true);
+  PERFORM public.request_account_deletion();
+  PERFORM set_config('request.jwt.claims', NULL, true);
+
+  -- Every regulated field must be gone IMMEDIATELY, not at purge time.
+  ASSERT (SELECT sexual_preference IS NULL AND dob IS NULL AND gender IS NULL
+            AND email_hint IS NULL AND phone_hint IS NULL AND neighborhood IS NULL
+            AND photo_urls IS NULL AND interests IS NULL AND bio IS NULL
+            AND age_verified = FALSE AND is_active = FALSE
+            AND deleted_at IS NOT NULL
+          FROM public.profiles WHERE id = v_h),
+    'T13 deletion left regulated PII on the profile';
+  ASSERT NOT EXISTS (SELECT 1 FROM public.location_pings WHERE user_id = v_h),
+    'T13 deletion left location history';
+  ASSERT (SELECT content = '[deleted]' FROM public.messages WHERE sender_id = v_h),
+    'T13 deletion did not redact message content';
+
+  -- Not yet eligible: the grace window has not elapsed.
+  ASSERT public.purge_deleted_accounts(INTERVAL '30 days') = 0,
+    'T13 purge removed an account still inside its grace window';
+  ASSERT EXISTS (SELECT 1 FROM auth.users WHERE id = v_h),
+    'T13 account vanished before its grace window elapsed';
+
+  -- Phase 2: age the request past the window and purge for real.
+  UPDATE public.profiles SET deleted_at = NOW() - INTERVAL '31 days' WHERE id = v_h;
+  v_purged := public.purge_deleted_accounts(INTERVAL '30 days');
+  ASSERT v_purged = 1, format('T13 expected 1 purged account, got %s', v_purged);
+  ASSERT NOT EXISTS (SELECT 1 FROM auth.users WHERE id = v_h),
+    'T13 purge did not remove the auth.users row (NO ACTION FK likely blocked it)';
+  ASSERT NOT EXISTS (SELECT 1 FROM public.profiles WHERE id = v_h),
+    'T13 purge left the profile behind';
+  ASSERT NOT EXISTS (SELECT 1 FROM public.messages WHERE sender_id = v_h),
+    'T13 purge left message rows behind';
+  ASSERT NOT EXISTS (SELECT 1 FROM public.matches WHERE user_a = v_h OR user_b = v_h),
+    'T13 purge left match rows behind';
+
+  -- The counterpart must be untouched.
+  ASSERT EXISTS (SELECT 1 FROM auth.users WHERE id = '82000000-0000-0000-0000-000000000082'),
+    'T13 purge removed the counterpart account';
+END $$;
+
+-- Deletion is self-service only: it must key off auth.uid(), never a caller
+-- argument, and the raw scrub helper must not be reachable by app users.
+DO $$ BEGIN
+  ASSERT NOT has_function_privilege('authenticated','public.scrub_account_pii(uuid)','EXECUTE'),
+    'T13 authenticated users can execute scrub_account_pii directly';
+  ASSERT NOT has_function_privilege('authenticated','public.purge_deleted_accounts(interval)','EXECUTE'),
+    'T13 authenticated users can execute purge_deleted_accounts directly';
+  ASSERT has_function_privilege('authenticated','public.request_account_deletion()','EXECUTE'),
+    'T13 authenticated users cannot delete their own account';
+END $$;
+
 SELECT '✅ ALL RECIPROCITY SECURITY INVARIANTS PASSED' AS result;
 ROLLBACK;
