@@ -21,12 +21,25 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
 
     <!-- WiFi AP scanning for venue co-location (docs/PROXIMITY_ALGORITHM.md L1).
-         Reading cached scan results needs WIFI_STATE + location; NEARBY_WIFI_DEVICES
-         is the Android 13+ way to scan without claiming location intent. -->
+         Reading cached scan results needs WIFI_STATE + ACCESS_FINE_LOCATION.
+
+         NOTE: usesPermissionFlags="neverForLocation" is deliberately NOT set
+         here. That flag is a strong assertion that the app never uses the
+         permission to derive physical location -- and it would be false: the
+         venue matcher scores WiFi AP overlap as a proximity signal
+         (_wifiAgreeBoost / _wifiConflictPenalty in venue_matcher.dart), which
+         is deriving location. Declaring it would be exactly the kind of
+         misrepresentation Play's Data Safety review targets.
+
+         It would also buy nothing: NEARBY_WIFI_DEVICES does not gate
+         getScanResults(), which still requires ACCESS_FINE_LOCATION regardless.
+
+         (By contrast BLUETOOTH_SCAN below correctly omits the flag too --
+         adding it there would filter beacon-shaped advertisements out of scan
+         results and break detection outright.) -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
-        android:usesPermissionFlags="neverForLocation"
         tools:targetApi="33" />
 
     <!-- Foreground service for reliable background scanning (critical per research) -->
