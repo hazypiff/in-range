@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/core/network/supabase_client.dart';
+import 'package:in_range/shared/services/media_hash_service.dart';
 import 'package:in_range/core/privacy/image_sanitizer.dart';
 import 'package:in_range/core/session/app_session.dart';
 import 'package:in_range/core/session/age_gate.dart';
@@ -85,6 +86,12 @@ class ProfileSyncService {
                 contentType: 'image/jpeg',
               ),
             );
+        // TAKE IT DOWN: record the digest so a removal reaches identical copies.
+        await MediaHashService.record(
+          bucketId: 'profile_photos',
+          objectName: storagePath,
+          file: clean,
+        );
 
         await client.rpc('submit_photo_for_verification', params: {
           'p_photo_path': storagePath,

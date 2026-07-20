@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:in_range/core/network/supabase_client.dart';
+import 'package:in_range/shared/services/media_hash_service.dart';
 import 'package:in_range/features/matches/match_store.dart';
 import 'package:in_range/shared/services/encounters_api.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -123,6 +124,12 @@ class ChatSyncService {
             contentType: 'image/jpeg',
           ),
         );
+    // TAKE IT DOWN: record the digest so a removal reaches identical copies.
+    await MediaHashService.record(
+      bucketId: 'chat_media',
+      objectName: storagePath,
+      file: File(localPath),
+    );
     try {
       final id = await _api.sendMessage(
         matchId: matchId,

@@ -78,6 +78,11 @@ COMMENT ON TABLE public.storage_deletion_queue IS
 -- Phase 1 helper: erase every piece of regulated data we hold for one user.
 -- Split out from the RPC so the backfill and the purge can reuse it.
 -- ---------------------------------------------------------------------------
+-- Dropped first so this migration stays re-appliable: 0037 redefines this
+-- function as RETURNS BOOLEAN, and Postgres will not change a return type in
+-- place. Without the drop, replaying the migration set fails here.
+DROP FUNCTION IF EXISTS public.scrub_account_pii(UUID);
+
 CREATE OR REPLACE FUNCTION public.scrub_account_pii(p_uid UUID)
 RETURNS VOID
 LANGUAGE plpgsql

@@ -591,5 +591,94 @@ DO $$ BEGIN
     'T15 users can probe whether they are under a legal hold';
 END $$;
 
+-- ============ TEST 16: TAKE IT DOWN NCII intake + copy removal ============
+-- The intake must work with NO account (statutory), must not let anyone read
+-- other people's reports, and removal must reach every identical copy.
+INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+ ('b1000000-0000-0000-0000-0000000000b1','00000000-0000-0000-0000-000000000000','authenticated','authenticated','ncii_m@t.local',now(),now()),
+ ('b2000000-0000-0000-0000-0000000000b2','00000000-0000-0000-0000-000000000000','authenticated','authenticated','ncii_n@t.local',now(),now());
+
+DO $$
+DECLARE
+  v_m UUID := 'b1000000-0000-0000-0000-0000000000b1';
+  v_n UUID := 'b2000000-0000-0000-0000-0000000000b2';
+  v_sha TEXT := repeat('ab', 32);   -- 64 hex chars
+  v_other TEXT := repeat('cd', 32);
+  v_id BIGINT;
+  v_copies INT;
+BEGIN
+  -- The same image uploaded by two different users, into two buckets, plus an
+  -- unrelated image that must survive.
+  INSERT INTO public.media_hashes (bucket_id, object_name, sha256, user_id) VALUES
+    ('profile_photos', v_m::TEXT || '/a.jpg', v_sha,   v_m),
+    ('chat_media',     '1/' || v_n::TEXT || '/b.jpg', v_sha,   v_n),
+    ('profile_photos', v_n::TEXT || '/c.jpg', v_other, v_n);
+
+  -- Intake with NO authenticated user -- the statutory requirement.
+  PERFORM set_config('request.jwt.claims', NULL, true);
+  v_id := public.submit_ncii_report(
+    'victim@example.com',
+    'Intimate image of me posted without consent, visible on a profile.',
+    'A Victim', 'profile: someuser', v_sha, TRUE);
+
+  ASSERT v_id IS NOT NULL, 'T16 anonymous NCII intake failed';
+  ASSERT (SELECT reporter_user_id IS NULL FROM public.ncii_reports WHERE id = v_id),
+    'T16 anonymous report was attributed to a user';
+
+  -- The 48-hour statutory clock must be stamped at intake.
+  ASSERT (SELECT deadline_at BETWEEN NOW() + INTERVAL '47 hours'
+                                 AND NOW() + INTERVAL '49 hours'
+            FROM public.ncii_reports WHERE id = v_id),
+    'T16 48-hour TAKE IT DOWN deadline was not stamped at intake';
+  ASSERT (SELECT count(*) FROM public.v_ncii_sla WHERE id = v_id) = 1,
+    'T16 open report is not on the SLA board';
+
+  -- Garbage in must be rejected, not silently stored.
+  BEGIN
+    PERFORM public.submit_ncii_report('not-an-email', 'a valid description here');
+    ASSERT false, 'T16 accepted a report with no usable contact address';
+  EXCEPTION WHEN sqlstate '22023' THEN NULL; END;
+  BEGIN
+    PERFORM public.submit_ncii_report('v@example.com', 'short');
+    ASSERT false, 'T16 accepted a report with no meaningful description';
+  EXCEPTION WHEN sqlstate '22023' THEN NULL; END;
+
+  -- Resolution must reach EVERY identical copy across buckets and owners.
+  v_copies := public.ncii_resolve(v_id, 'removed', 'test-runner', 'verified');
+  ASSERT v_copies = 2, format('T16 expected 2 identical copies queued, got %s', v_copies);
+  ASSERT (SELECT count(*) FROM public.storage_deletion_queue
+           WHERE object_name LIKE '%a.jpg' OR object_name LIKE '%b.jpg') = 2,
+    'T16 identical copies were not queued for storage deletion';
+  ASSERT NOT EXISTS (SELECT 1 FROM public.media_hashes WHERE sha256 = v_sha),
+    'T16 hash rows for removed content survived';
+  ASSERT EXISTS (SELECT 1 FROM public.media_hashes WHERE sha256 = v_other),
+    'T16 removal destroyed an unrelated image';
+
+  -- Resolved reports leave the SLA board but stay as the compliance record.
+  ASSERT (SELECT count(*) FROM public.v_ncii_sla WHERE id = v_id) = 0,
+    'T16 resolved report still shows as open';
+  ASSERT (SELECT status = 'removed' AND resolved_at IS NOT NULL AND copies_removed = 2
+            FROM public.ncii_reports WHERE id = v_id),
+    'T16 resolution was not recorded for the compliance trail';
+END $$;
+
+-- Privilege boundaries on the only anon-writable surface in the system.
+DO $$ BEGIN
+  ASSERT has_function_privilege('anon','public.submit_ncii_report(text,text,text,text,text,boolean)','EXECUTE'),
+    'T16 victims without an account cannot file a report (statutory requirement)';
+  ASSERT NOT has_table_privilege('anon','public.ncii_reports','SELECT'),
+    'T16 anonymous callers can read NCII reports';
+  ASSERT NOT has_table_privilege('authenticated','public.ncii_reports','SELECT'),
+    'T16 users can read NCII reports';
+  ASSERT NOT has_function_privilege('authenticated','public.ncii_resolve(bigint,text,text,text)','EXECUTE'),
+    'T16 users can resolve their own NCII reports';
+  -- media_hashes must be write-only for users: readable, it is an oracle for
+  -- whether a given image exists anywhere in the system.
+  ASSERT NOT has_table_privilege('authenticated','public.media_hashes','SELECT'),
+    'T16 media_hashes is readable by users (existence oracle)';
+  ASSERT has_table_privilege('authenticated','public.media_hashes','INSERT'),
+    'T16 users cannot record hashes for their own uploads';
+END $$;
+
 SELECT '✅ ALL RECIPROCITY SECURITY INVARIANTS PASSED' AS result;
 ROLLBACK;
