@@ -1,7 +1,7 @@
 # Privacy compliance — audit, fixes shipped, and what's left
 
-**Date:** 2026-07-19. **Author:** Claude (audit + fixes). **Repo:** `9bc44c9` on `main`.
-**Prod:** Supabase `riigipzlyqeaadyvbuty`, migration `0039`.
+**Date:** 2026-07-19. **Author:** Claude (audit + fixes). **Repo:** `1dc37d4` on `main`.
+**Prod:** Supabase `riigipzlyqeaadyvbuty`, migration `0040`.
 **Status:** mechanical + platform-policy issues fixed. Legal-document work is
 open and needs counsel. **Not legal advice.**
 
@@ -50,6 +50,7 @@ All verified against live prod, not just code.
 | 11 | **Age gate was not neutral** — DOB prefilled to `now.year - 25`, pre-answering with an adult age | ✅ **Fixed** — empty field, picker opens at minimum adult age | `profile_setup_screen.dart` |
 | 12 | **No consent UI** | ✅ **Built** — nothing pre-checked, one toggle per purpose, no accept-all, withdrawal with no save gate. Links point at policy URLs that **do not exist yet** | `consent_screen.dart` |
 | 13 | **No public NCII intake; no Play-required web deletion URL** | ✅ **Built** — `web/report.html`, `web/delete-account.html`. **Need hosting + the 48h triage owner** | `web/` |
+| 14 | **`require_consent()` had no callers** — flipping `enforce_consent` would have been a silent no-op that still read as enforced | ✅ **Fixed** — gated `claim_token`, `record_sighting`, `record_location_ping`, `upsert_my_profile` | `0040`, T18 |
 
 **Correction to the research report:** its §8.2 claims retention "exists on
 paper but is not scheduled," inferred from commented-out `pg_cron` blocks in
@@ -265,6 +266,29 @@ re-consent, revocation).
 **Play age signals may be used ONLY for age-appropriate experiences and legal
 compliance — never advertising, marketing, profiling, or analytics.** Misuse
 means API termination and takedown. Flag this before any ad monetization design.
+
+---
+
+## 2b. Rollout flags — the order matters
+
+All three ship at **0** and must stay there until the matching client is on
+real devices. Flipping early locks out every existing client.
+
+| Flag | Flip after | Gates |
+|---|---|---|
+| `enforce_consent` | consent UI live on devices **and** policy URLs resolve | `claim_token`, `record_sighting`, `record_location_ping`, `upsert_my_profile` |
+| `enforce_batch_tokens` | batch-aware client live (commit `2fb33b8`) | `claim_token` |
+| `require_attestation` | Edge Function verifier + client attestation call exist | `issue_token_batch` |
+
+Verify with:
+```sql
+SELECT key, value_num FROM app_settings
+ WHERE key LIKE 'enforce%' OR key LIKE 'require%';
+```
+
+**Do not flip `enforce_consent` while the policy links 404.** Users would be
+required to consent to documents they cannot read, which is worse than the
+status quo, not better.
 
 ---
 
