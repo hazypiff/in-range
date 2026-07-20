@@ -122,6 +122,17 @@ class ProfileSyncService {
     await InRangeSupabase.client.rpc('delete_my_location_history');
   }
 
+  /// Right-of-access export of everything the server holds for this account.
+  ///
+  /// Returns the raw `in_range.export.v1` document, or null when running
+  /// without a cloud backend. The server scopes this to the caller: a
+  /// counterpart appears only as an opaque user id.
+  Future<Map<String, dynamic>?> exportMyData() async {
+    if (!cloudReady) return null;
+    final result = await InRangeSupabase.client.rpc('export_my_data');
+    return (result as Map).cast<String, dynamic>();
+  }
+
   Future<void> setIncognito(bool enabled) async {
     if (!cloudReady) return;
     try {

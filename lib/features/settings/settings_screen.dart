@@ -1,4 +1,9 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:in_range/core/permissions/permission_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:in_range/core/backend/backend_status.dart';
@@ -70,9 +75,9 @@ class SettingsScreen extends ConsumerWidget {
               try {
                 if (v && ref.read(beaconControllerProvider).isOn) {
                   await ref.read(beaconControllerProvider.notifier).toggle(
-          onBackgroundDisclosure: () =>
-              showBackgroundLocationDisclosure(context),
-        );
+                        onBackgroundDisclosure: () =>
+                            showBackgroundLocationDisclosure(context),
+                      );
                 }
                 if (v) await ref.read(localsControllerProvider.notifier).stop();
                 await ref.read(sessionControllerProvider.notifier).setPaused(v);
@@ -103,9 +108,9 @@ class SettingsScreen extends ConsumerWidget {
                 await ref.read(safetyStoreProvider.notifier).setIncognito(v);
                 if (v && ref.read(beaconControllerProvider).isOn) {
                   await ref.read(beaconControllerProvider.notifier).toggle(
-          onBackgroundDisclosure: () =>
-              showBackgroundLocationDisclosure(context),
-        );
+                        onBackgroundDisclosure: () =>
+                            showBackgroundLocationDisclosure(context),
+                      );
                   await ref.read(localsControllerProvider.notifier).stop();
                 }
               } catch (e) {
@@ -304,9 +309,9 @@ class SettingsScreen extends ConsumerWidget {
             onTap: () async {
               if (ref.read(beaconControllerProvider).isOn) {
                 await ref.read(beaconControllerProvider.notifier).toggle(
-          onBackgroundDisclosure: () =>
-              showBackgroundLocationDisclosure(context),
-        );
+                      onBackgroundDisclosure: () =>
+                          showBackgroundLocationDisclosure(context),
+                    );
               }
               await ref.read(localsControllerProvider.notifier).stop();
               await ref.read(matchStoreProvider.notifier).clearAll();
@@ -321,18 +326,28 @@ class SettingsScreen extends ConsumerWidget {
             },
           ),
           ListTile(
+            leading: const Icon(Icons.download_outlined),
+            title: const Text('Download my data'),
+            subtitle: const Text('Everything we store about your account'),
+            onTap: () => _exportMyData(context),
+          ),
+          ListTile(
             leading: Icon(Icons.delete_forever, color: Colors.red.shade700),
             title: Text(
-              'Request account deletion',
+              'Delete my account',
               style: TextStyle(color: Colors.red.shade700),
             ),
             onTap: () async {
               final ok = await showDialog<bool>(
                 context: context,
                 builder: (ctx) => AlertDialog(
-                  title: const Text('Deactivate account?'),
+                  title: const Text('Delete account?'),
                   content: const Text(
-                    'Scrubs and deactivates the cloud profile, then clears profile, likes, matches, and sightings on this device. The auth record requires the server retention purge.',
+                    'This permanently erases your profile, photos, messages, '
+                    'and location history. It cannot be undone.\n\n'
+                    'Your account is removed from this device immediately and '
+                    'fully deleted from our servers within 30 days.\n\n'
+                    'Download your data first if you want a copy.',
                   ),
                   actions: [
                     TextButton(
@@ -350,9 +365,9 @@ class SettingsScreen extends ConsumerWidget {
                 try {
                   if (ref.read(beaconControllerProvider).isOn) {
                     await ref.read(beaconControllerProvider.notifier).toggle(
-          onBackgroundDisclosure: () =>
-              showBackgroundLocationDisclosure(context),
-        );
+                          onBackgroundDisclosure: () =>
+                              showBackgroundLocationDisclosure(context),
+                        );
                   }
                   await ref.read(localsControllerProvider.notifier).stop();
                   await ref
@@ -382,6 +397,90 @@ class SettingsScreen extends ConsumerWidget {
       ),
     );
   }
+}
+
+/// Right-of-access export. Fetches the server-side document, writes it next to
+/// the app's documents, and offers it on the clipboard.
+///
+/// Clipboard + on-disk copy rather than a share sheet: a share sheet needs
+/// share_plus, and adding a native dependency mid-iOS-bring-up costs a pod
+/// install and a rebuild on the Mac. Worth revisiting -- a share sheet is the
+/// better answer for getting the file off the device.
+Future<void> _exportMyData(BuildContext context) async {
+  final messenger = ScaffoldMessenger.of(context);
+  showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => const AlertDialog(
+      content: Row(children: [
+        CircularProgressIndicator(),
+        SizedBox(width: 16),
+        Expanded(child: Text('Preparing your data…')),
+      ]),
+    ),
+  );
+
+  String? path;
+  String? pretty;
+  String? failure;
+  try {
+    final doc = await ProfileSyncService().exportMyData();
+    if (doc == null) {
+      failure = 'Data export needs a cloud account.';
+    } else {
+      pretty = const JsonEncoder.withIndent('  ').convert(doc);
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File(
+        '${dir.path}/in-range-data-${DateTime.now().toIso8601String().split('T').first}.json',
+      );
+      await file.writeAsString(pretty, flush: true);
+      path = file.path;
+    }
+  } catch (e) {
+    debugPrint('Data export failed: $e');
+    failure = 'Could not prepare your data. Please try again.';
+  }
+
+  if (!context.mounted) return;
+  Navigator.of(context).pop(); // dismiss the progress dialog
+
+  if (failure != null) {
+    messenger.showSnackBar(SnackBar(content: Text(failure)));
+    return;
+  }
+
+  final sizeKb = (pretty!.length / 1024).toStringAsFixed(1);
+  if (!context.mounted) return;
+  await showDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Your data'),
+      content: SingleChildScrollView(
+        child: Text(
+          'Prepared $sizeKb KB of data.\n\n'
+          'Saved to:\n$path\n\n'
+          'People you have met appear only as anonymous IDs — their profiles '
+          'are their own data, not yours.',
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('Close'),
+        ),
+        FilledButton(
+          onPressed: () async {
+            await Clipboard.setData(ClipboardData(text: pretty!));
+            if (ctx.mounted) Navigator.pop(ctx);
+            messenger.showSnackBar(
+              const SnackBar(content: Text('Copied to clipboard')),
+            );
+          },
+          child: const Text('Copy'),
+        ),
+      ],
+    ),
+  );
 }
 
 Future<void> _showSystemFeedbackDialog(BuildContext context) async {

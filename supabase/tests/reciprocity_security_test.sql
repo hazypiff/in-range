@@ -459,5 +459,72 @@ DO $$ BEGIN
     'T13 authenticated users cannot delete their own account';
 END $$;
 
+-- ============ TEST 14: data export scope (right of access) ============
+-- export_my_data() must return the caller's own data and must NOT become a
+-- bulk-extraction endpoint for the counterpart's profile.
+INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+ ('91000000-0000-0000-0000-000000000091','00000000-0000-0000-0000-000000000000','authenticated','authenticated','exp_j@t.local',now(),now()),
+ ('92000000-0000-0000-0000-000000000092','00000000-0000-0000-0000-000000000000','authenticated','authenticated','exp_k@t.local',now(),now());
+UPDATE public.profiles SET display_name='J',dob='1990-01-01',gender='female',
+  sexual_preference='men',bio='my bio',is_active=true WHERE id='91000000-0000-0000-0000-000000000091';
+UPDATE public.profiles SET display_name='KOUNTERPART',dob='1992-01-01',gender='male',
+  sexual_preference='women',bio='counterpart secret bio',is_active=true
+  WHERE id='92000000-0000-0000-0000-000000000092';
+
+DO $$
+DECLARE
+  v_j UUID := '91000000-0000-0000-0000-000000000091';
+  v_k UUID := '92000000-0000-0000-0000-000000000092';
+  v_match BIGINT;
+  v_doc JSONB;
+  v_txt TEXT;
+BEGIN
+  INSERT INTO public.matches (user_a,user_b,status,matched_at)
+    VALUES (v_j,v_k,'active',now()) RETURNING id INTO v_match;
+  INSERT INTO public.messages (match_id,sender_id,content,message_type,created_at)
+    VALUES (v_match,v_j,'mine',   'text', now()),
+           (v_match,v_k,'theirs', 'text', now());
+  INSERT INTO public.reports (reporter_id,reported_id,reason,details,status,created_at)
+    VALUES (v_k,v_j,'spam','K reported J','open',now());
+
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"91000000-0000-0000-0000-000000000091","role":"authenticated"}', true);
+  v_doc := public.export_my_data();
+  PERFORM set_config('request.jwt.claims', NULL, true);
+
+  ASSERT v_doc->>'export_format' = 'in_range.export.v1', 'T14 missing export format tag';
+  ASSERT v_doc#>>'{profile,display_name}' = 'J', 'T14 export omitted the caller profile';
+  ASSERT v_doc#>>'{account,email}' = 'exp_j@t.local', 'T14 export omitted the account email';
+  ASSERT jsonb_array_length(v_doc->'matches') = 1, 'T14 export omitted matches';
+  ASSERT jsonb_array_length(v_doc->'messages') = 2,
+    'T14 export did not include the full conversation the caller took part in';
+
+  -- The counterpart must appear ONLY as an opaque id.
+  v_txt := v_doc::TEXT;
+  ASSERT position('KOUNTERPART' in v_txt) = 0,
+    'T14 export leaked the counterpart display_name';
+  ASSERT position('counterpart secret bio' in v_txt) = 0,
+    'T14 export leaked the counterpart bio';
+  ASSERT position(v_k::TEXT in v_txt) > 0,
+    'T14 export should still reference the counterpart by opaque id';
+
+  -- Reports filed ABOUT the caller must not be disclosed (protects reporters).
+  ASSERT position('K reported J' in v_txt) = 0,
+    'T14 export disclosed a report filed about the caller';
+
+  -- Unauthenticated callers get nothing.
+  BEGIN
+    PERFORM public.export_my_data();
+    ASSERT false, 'T14 export succeeded with no authenticated user';
+  EXCEPTION WHEN sqlstate '42501' THEN NULL; END;
+END $$;
+
+DO $$ BEGIN
+  ASSERT has_function_privilege('authenticated','public.export_my_data()','EXECUTE'),
+    'T14 authenticated users cannot export their own data';
+  ASSERT NOT has_function_privilege('anon','public.export_my_data()','EXECUTE'),
+    'T14 anonymous callers can execute the data export';
+END $$;
+
 SELECT '✅ ALL RECIPROCITY SECURITY INVARIANTS PASSED' AS result;
 ROLLBACK;

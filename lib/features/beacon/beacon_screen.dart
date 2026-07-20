@@ -28,9 +28,9 @@ class _BeaconScreenState extends ConsumerState<BeaconScreen> {
       final beacon = ref.read(beaconControllerProvider);
       if (beacon.isOn) {
         await ref.read(beaconControllerProvider.notifier).toggle(
-          onBackgroundDisclosure: () =>
-              showBackgroundLocationDisclosure(context),
-        );
+              onBackgroundDisclosure: () =>
+                  showBackgroundLocationDisclosure(context),
+            );
         if (isMiles) await ref.read(localsControllerProvider.notifier).stop();
         return;
       }
@@ -48,9 +48,9 @@ class _BeaconScreenState extends ConsumerState<BeaconScreen> {
         await ref.read(localsControllerProvider.notifier).start();
         try {
           await ref.read(beaconControllerProvider.notifier).toggle(
-          onBackgroundDisclosure: () =>
-              showBackgroundLocationDisclosure(context),
-        );
+                onBackgroundDisclosure: () =>
+                    showBackgroundLocationDisclosure(context),
+              );
         } catch (_) {
           await ref.read(localsControllerProvider.notifier).stop();
           rethrow;
@@ -58,9 +58,9 @@ class _BeaconScreenState extends ConsumerState<BeaconScreen> {
         // BLE still runs for hybrid discovery; miles is continuous GPS.
       } else {
         await ref.read(beaconControllerProvider.notifier).toggle(
-          onBackgroundDisclosure: () =>
-              showBackgroundLocationDisclosure(context),
-        );
+              onBackgroundDisclosure: () =>
+                  showBackgroundLocationDisclosure(context),
+            );
       }
 
       final s = ref.read(beaconControllerProvider);

@@ -19,30 +19,26 @@ class _OnboardingFlowState extends ConsumerState<OnboardingFlow> {
   static const _slides = <_Slide>[
     _Slide(
       title: 'Welcome to In Range',
-      body:
-          'Real encounters. Real connections.\n\n'
+      body: 'Real encounters. Real connections.\n\n'
           'You only swipe on people you\'ve actually crossed paths with.',
       icon: Icons.radar,
     ),
     _Slide(
       title: 'The Beacon',
-      body:
-          'Turn your Beacon ON to become findable.\n\n'
+      body: 'Turn your Beacon ON to become findable.\n\n'
           'When two people nearby both have Beacon on, In Range logs a real '
           'run-in — not a stranger from the internet.',
       icon: Icons.bluetooth_searching,
     ),
     _Slide(
       title: 'Feet vs Miles',
-      body:
-          'Feet (10 / 20 / 30): urgent BLE proximity — 24h to swipe.\n\n'
+      body: 'Feet (10 / 20 / 30): urgent BLE proximity — 24h to swipe.\n\n'
           'Miles (Locals): broader GPS near-you list that stays until you swipe.',
       icon: Icons.straighten,
     ),
     _Slide(
       title: 'Encounters',
-      body:
-          'See a photo + neighborhood only at first.\n\n'
+      body: 'See a photo + neighborhood only at first.\n\n'
           'Like each other → full profile unlocks + chat.\n\n'
           'That built-in story: "we were both there."',
       icon: Icons.favorite_outline,
