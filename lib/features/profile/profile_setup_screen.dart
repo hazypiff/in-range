@@ -20,9 +20,11 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
   final _name = TextEditingController();
   final _bio = TextEditingController();
   final _customInterest = TextEditingController();
-  final _dob = TextEditingController(
-    text: AgeGate.format(DateTime(DateTime.now().year - 25, 1, 1)),
-  );
+  // Deliberately EMPTY. Prefilling an adult birthdate pre-answers the age
+  // question with an adult answer, which is not a neutral age gate: the FTC
+  // requires screening that avoids "encouraging children to falsify their age
+  // information". The user must enter their own date of birth.
+  final _dob = TextEditingController();
   String _gender = 'prefer-not-to-say';
   String _pref = 'women';
   final _selectedInterests = <String>{};
@@ -80,7 +82,10 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
     try {
       initial = AgeGate.parseIsoDate(_dob.text);
     } catch (_) {
-      initial = DateTime(now.year - 25, 1, 1);
+      // Neutral starting point: the minimum adult age, not a comfortably-adult
+      // default. Opening on a 25-year-old's birthday is a nudge toward an
+      // answer, which is what the FTC's neutrality requirement rules out.
+      initial = DateTime(now.year - AgeGate.minimumAge, now.month, now.day);
     }
     final picked = await showDatePicker(
       context: context,

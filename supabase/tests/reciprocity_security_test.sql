@@ -680,5 +680,97 @@ DO $$ BEGIN
     'T16 users cannot record hashes for their own uploads';
 END $$;
 
+-- ============ TEST 17: unbundled, revocable, purpose-scoped consent ============
+-- NJDPA excludes bundled ToS acceptance and dark patterns from "consent"; the
+-- FTC orders require precise-location consent to be purpose-scoped. The schema
+-- must make bundling impossible and keep an unforgeable audit trail.
+INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+ ('c1000000-0000-0000-0000-0000000000c1','00000000-0000-0000-0000-000000000000','authenticated','authenticated','consent_o@t.local',now(),now());
+UPDATE public.profiles SET display_name='O',dob='1990-01-01',is_active=true
+  WHERE id='c1000000-0000-0000-0000-0000000000c1';
+
+DO $$
+DECLARE
+  v_o UUID := 'c1000000-0000-0000-0000-0000000000c1';
+  v_first BIGINT;
+  v_again BIGINT;
+  v_granted_at TIMESTAMPTZ;
+BEGIN
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"c1000000-0000-0000-0000-0000000000c1","role":"authenticated"}', true);
+
+  v_first := public.grant_consent('precise_location','2026-07-20','onboarding.consent_step');
+  ASSERT public.has_consent(v_o,'precise_location'), 'T17 granted consent not detected';
+
+  -- Purpose-scoped: consenting to one purpose must NOT imply another.
+  ASSERT NOT public.has_consent(v_o,'sensitive_profile'),
+    'T17 consent for one purpose leaked into another (bundling)';
+  ASSERT NOT public.has_consent(v_o,'background_location'),
+    'T17 precise-location consent implied background collection';
+
+  -- Re-granting is idempotent and must NOT restamp granted_at: the original
+  -- moment of consent is the fact we have to evidence later.
+  SELECT granted_at INTO v_granted_at FROM public.consent_records WHERE id = v_first;
+  v_again := public.grant_consent('precise_location','2026-07-20','settings');
+  ASSERT v_again = v_first, 'T17 re-grant created a duplicate active consent row';
+  ASSERT (SELECT granted_at FROM public.consent_records WHERE id = v_first) = v_granted_at,
+    'T17 re-grant overwrote the original granted_at';
+
+  -- Consent must record which policy version it was given against.
+  BEGIN
+    PERFORM public.grant_consent('ble_proximity', '');
+    ASSERT false, 'T17 accepted consent with no policy version';
+  EXCEPTION WHEN sqlstate '22023' THEN NULL; END;
+
+  -- Withdrawal must take effect AND actually stop the processing.
+  INSERT INTO public.location_pings (user_id, geo, created_at)
+    VALUES (v_o, ST_SetSRID(ST_MakePoint(-74.03,40.74),4326)::geography, now());
+  ASSERT public.withdraw_consent('precise_location'), 'T17 withdrawal reported no effect';
+  ASSERT NOT public.has_consent(v_o,'precise_location'), 'T17 withdrawn consent still active';
+  ASSERT NOT EXISTS (SELECT 1 FROM public.location_pings WHERE user_id = v_o),
+    'T17 withdrawing location consent left the location data in place';
+
+  -- Append-only: the withdrawn grant survives as the audit trail.
+  ASSERT (SELECT count(*) FROM public.consent_records
+           WHERE user_id = v_o AND purpose = 'precise_location') = 1,
+    'T17 withdrawal deleted the consent history';
+  ASSERT (SELECT withdrawn_at IS NOT NULL FROM public.consent_records WHERE id = v_first),
+    'T17 withdrawal did not stamp withdrawn_at';
+
+  -- Re-granting after withdrawal is a NEW grant, not a resurrection.
+  v_again := public.grant_consent('precise_location','2026-07-20','settings');
+  ASSERT v_again <> v_first, 'T17 re-grant resurrected the withdrawn row';
+  ASSERT (SELECT count(*) FROM public.consent_records
+           WHERE user_id = v_o AND purpose = 'precise_location') = 2,
+    'T17 re-grant did not preserve both grants in history';
+
+  -- Enforcement is OFF by default (non-breaking rollout).
+  PERFORM public.require_consent(v_o, 'sensitive_profile');   -- must not raise
+  UPDATE public.app_settings SET value_num = 1 WHERE key = 'enforce_consent';
+  BEGIN
+    PERFORM public.require_consent(v_o, 'sensitive_profile');
+    ASSERT false, 'T17 enforce_consent=1 did not gate an unconsented purpose';
+  EXCEPTION WHEN sqlstate '42501' THEN NULL; END;
+  PERFORM public.require_consent(v_o, 'precise_location');    -- consented, must not raise
+  UPDATE public.app_settings SET value_num = 0 WHERE key = 'enforce_consent';
+
+  PERFORM set_config('request.jwt.claims', NULL, true);
+END $$;
+
+DO $$ BEGIN
+  ASSERT (SELECT value_num FROM public.app_settings WHERE key='enforce_consent') = 0,
+    'T17 enforce_consent must ship OFF until the consent UI is on real devices';
+  -- Clients may read their own consent (access right) but never write it
+  -- directly, or the audit trail is forgeable.
+  ASSERT has_table_privilege('authenticated','public.consent_records','SELECT'),
+    'T17 users cannot see what they consented to';
+  ASSERT NOT has_table_privilege('authenticated','public.consent_records','INSERT'),
+    'T17 clients can forge consent records directly';
+  ASSERT NOT has_table_privilege('authenticated','public.consent_records','UPDATE'),
+    'T17 clients can rewrite their consent history';
+  ASSERT NOT has_table_privilege('anon','public.consent_records','SELECT'),
+    'T17 anonymous callers can read consent records';
+END $$;
+
 SELECT '✅ ALL RECIPROCITY SECURITY INVARIANTS PASSED' AS result;
 ROLLBACK;
