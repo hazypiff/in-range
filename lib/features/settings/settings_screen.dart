@@ -11,6 +11,7 @@ import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/core/privacy/safety_store.dart';
 import 'package:in_range/core/session/app_session.dart';
 import 'package:in_range/features/beacon/beacon_provider.dart';
+import 'package:in_range/features/consent/consent_screen.dart';
 import 'package:in_range/features/encounters/local_encounter_store.dart';
 import 'package:in_range/features/history/history_screen.dart';
 import 'package:in_range/features/locals/locals_service.dart';
@@ -324,6 +325,16 @@ class SettingsScreen extends ConsumerWidget {
                 Navigator.of(context).popUntil((route) => route.isFirst);
               }
             },
+          ),
+          ListTile(
+            leading: const Icon(Icons.privacy_tip_outlined),
+            title: const Text('Privacy choices'),
+            subtitle: const Text('What you have agreed to, and turning it off'),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const ConsentScreen(manage: true),
+              ),
+            ),
           ),
           ListTile(
             leading: const Icon(Icons.download_outlined),

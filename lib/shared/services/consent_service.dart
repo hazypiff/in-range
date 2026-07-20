@@ -47,9 +47,16 @@ class ConsentService {
   /// and its versioning scheme.
   static const String policyVersion = '2026-07-20';
 
-  bool get _ready =>
-      AppConfig.hasRealSupabase &&
-      InRangeSupabase.clientOrNull?.auth.currentUser != null;
+  /// Never throws: AppConfig reads dotenv, which is not initialised in every
+  /// context (tests, early boot). A consent screen must still render.
+  bool get _ready {
+    try {
+      return AppConfig.hasRealSupabase &&
+          InRangeSupabase.clientOrNull?.auth.currentUser != null;
+    } catch (_) {
+      return false;
+    }
+  }
 
   /// Records consent for one purpose. Idempotent — re-granting an active
   /// consent does not restamp the original moment, which is the fact we have
