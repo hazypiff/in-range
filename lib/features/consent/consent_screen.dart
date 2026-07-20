@@ -14,6 +14,13 @@ class PolicyLinks {
   static const privacyPolicy = 'https://inrange.app/privacy';
   static const healthDataPolicy = 'https://inrange.app/privacy/health-data';
   static const termsOfUse = 'https://inrange.app/terms';
+
+  /// TAKE IT DOWN Act intake (web/report.html). Must stay reachable from
+  /// inside the app as well as publicly — Apple 1.2 requires UGC apps to
+  /// publish a reporting mechanism and contact information.
+  static const reportIntimateImages = 'https://inrange.app/report';
+  static const accountDeletion = 'https://inrange.app/delete-account';
+  static const supportEmail = 'privacy@inrange.app';
 }
 
 /// One consent the user is asked for.

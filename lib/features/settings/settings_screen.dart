@@ -327,6 +327,32 @@ class SettingsScreen extends ConsumerWidget {
             },
           ),
           ListTile(
+            leading: const Icon(Icons.report_gmailerrorred_outlined),
+            title: const Text('Report an intimate image'),
+            subtitle: const Text(
+                'Shared without consent — we aim to remove within 48 hours'),
+            onTap: () => showDialog<void>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                title: const Text('Report an intimate image'),
+                content: const SelectableText(
+                  'If an intimate image or video of you was shared without '
+                  'your consent, report it here and we aim to remove it within '
+                  '48 hours:\n\n'
+                  '${PolicyLinks.reportIntimateImages}\n\n'
+                  'You can also email ${PolicyLinks.supportEmail}. You do not '
+                  'need to be signed in.',
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text('Close'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          ListTile(
             leading: const Icon(Icons.privacy_tip_outlined),
             title: const Text('Privacy choices'),
             subtitle: const Text('What you have agreed to, and turning it off'),
