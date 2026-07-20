@@ -772,5 +772,93 @@ DO $$ BEGIN
     'T17 anonymous callers can read consent records';
 END $$;
 
+-- ============ TEST 18: the consent flag actually gates collection ============
+-- 0039 shipped require_consent() with no callers, so flipping enforce_consent
+-- would have been a silent no-op -- a control that reads as enforced while
+-- collecting exactly as much data as before. Both halves are asserted here:
+-- silent when OFF (non-breaking rollout), enforcing when ON.
+INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+ ('d1000000-0000-0000-0000-0000000000d1','00000000-0000-0000-0000-000000000000','authenticated','authenticated','gate_p@t.local',now(),now());
+UPDATE public.profiles SET display_name='P',dob='1990-01-01',is_active=true,
+  age_verified=true,is_photo_verified=true,photo_urls=ARRAY['p.jpg'],
+  is_paused=false,is_incognito=false WHERE id='d1000000-0000-0000-0000-0000000000d1';
+
+DO $$
+DECLARE
+  v_p UUID := 'd1000000-0000-0000-0000-0000000000d1';
+  v_tok TEXT := repeat('1a', 16);   -- 32 hex chars
+BEGIN
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"d1000000-0000-0000-0000-0000000000d1","role":"authenticated"}', true);
+
+  -- Isolate from earlier tests: T9 leaves enforce_batch_tokens = 1, and the
+  -- whole harness runs in one transaction. This test is about the CONSENT
+  -- gate, so the batch gate must not fire first and mask the result.
+  UPDATE public.app_settings SET value_num = 0 WHERE key = 'enforce_batch_tokens';
+  UPDATE public.app_settings SET value_num = 0 WHERE key = 'require_attestation';
+
+  -- OFF (the shipped default): collection proceeds with no consent on file.
+  -- If this raises, the rollout is breaking and must not ship.
+  PERFORM public.claim_token(v_tok, NOW() + INTERVAL '15 minutes', 40.74, -74.03);
+  PERFORM public.record_location_ping(40.74, -74.03);
+  ASSERT NOT public.has_consent(v_p, 'ble_proximity'),
+    'T18 precondition: user should have no consent on file';
+
+  -- claim_token rate-limits to one claim per 5 seconds per user. Age the
+  -- marker rather than sleeping, so the suite stays fast and deterministic.
+  UPDATE public.token_claims SET last_claimed_at = NOW() - INTERVAL '1 minute'
+   WHERE user_id = v_p;
+
+  -- ON: every collection path must now refuse.
+  UPDATE public.app_settings SET value_num = 1 WHERE key = 'enforce_consent';
+
+  BEGIN
+    PERFORM public.claim_token(repeat('2b', 16), NOW() + INTERVAL '15 minutes', 40.74, -74.03);
+    ASSERT false, 'T18 claim_token collected a beacon token with no consent';
+  EXCEPTION WHEN sqlstate '42501' THEN NULL; END;
+
+  BEGIN
+    PERFORM public.record_location_ping(40.74, -74.03);
+    ASSERT false, 'T18 record_location_ping stored GPS with no consent';
+  EXCEPTION WHEN sqlstate '42501' THEN NULL; END;
+
+  BEGIN
+    PERFORM public.record_sighting(repeat('3c', 16), 40.74, -74.03, -60);
+    ASSERT false, 'T18 record_sighting stored an observation with no consent';
+  EXCEPTION WHEN sqlstate '42501' THEN NULL; END;
+
+  BEGIN
+    PERFORM public.upsert_my_profile('P', NULL, '1990-01-01'::DATE, 'male', 'women');
+    ASSERT false, 'T18 upsert_my_profile wrote sensitive fields with no consent';
+  EXCEPTION WHEN sqlstate '42501' THEN NULL; END;
+
+  -- Granting consent must unblock the corresponding path, and ONLY that one.
+  PERFORM public.grant_consent('ble_proximity', '2026-07-20', 'test');
+  UPDATE public.token_claims SET last_claimed_at = NOW() - INTERVAL '1 minute'
+   WHERE user_id = v_p;
+  PERFORM public.claim_token(repeat('4d', 16), NOW() + INTERVAL '15 minutes', 40.74, -74.03);
+
+  BEGIN
+    PERFORM public.record_location_ping(40.74, -74.03);
+    ASSERT false, 'T18 BLE consent leaked into the location path';
+  EXCEPTION WHEN sqlstate '42501' THEN NULL; END;
+
+  -- Withdrawing must re-block immediately, not at some later sync.
+  PERFORM public.withdraw_consent('ble_proximity');
+  UPDATE public.token_claims SET last_claimed_at = NOW() - INTERVAL '1 minute'
+   WHERE user_id = v_p;
+  BEGIN
+    PERFORM public.claim_token(repeat('5e', 16), NOW() + INTERVAL '15 minutes', 40.74, -74.03);
+    ASSERT false, 'T18 withdrawn consent still permitted collection';
+  EXCEPTION WHEN sqlstate '42501' THEN NULL; END;
+
+  -- A profile write that does NOT touch sensitive fields must still work:
+  -- clearing your orientation cannot require consent to clear it.
+  PERFORM public.upsert_my_profile('P', NULL, '1990-01-01'::DATE, NULL, NULL);
+
+  UPDATE public.app_settings SET value_num = 0 WHERE key = 'enforce_consent';
+  PERFORM set_config('request.jwt.claims', NULL, true);
+END $$;
+
 SELECT '✅ ALL RECIPROCITY SECURITY INVARIANTS PASSED' AS result;
 ROLLBACK;
