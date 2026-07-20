@@ -526,5 +526,70 @@ DO $$ BEGIN
     'T14 anonymous callers can execute the data export';
 END $$;
 
+-- ============ TEST 15: legal hold beats retention purge (§2258A) ============
+-- A CyberTipline filing creates a 1-year preservation duty. The 15-minute
+-- purge job must not destroy that evidence, and the subject must never be
+-- able to see or lift the hold.
+INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+ ('a1000000-0000-0000-0000-0000000000a1','00000000-0000-0000-0000-000000000000','authenticated','authenticated','hold_l@t.local',now(),now());
+UPDATE public.profiles SET display_name='L',dob='1990-01-01',gender='male',
+  sexual_preference='women',is_active=true WHERE id='a1000000-0000-0000-0000-0000000000a1';
+
+DO $$
+DECLARE
+  v_l UUID := 'a1000000-0000-0000-0000-0000000000a1';
+  v_hold BIGINT;
+BEGIN
+  v_hold := public.place_legal_hold(v_l, 'cybertipline_2258a', 'test-runner', 'NCMEC report #1');
+
+  -- §2258A(h)(1) is one year; the default must not be left to incident-response memory.
+  ASSERT (SELECT expires_at > NOW() + INTERVAL '360 days'
+            FROM public.legal_holds WHERE id = v_hold),
+    'T15 cybertipline hold did not default to a 1-year preservation window';
+  ASSERT public.has_legal_hold(v_l), 'T15 active hold not detected';
+
+  -- The subject asks to be deleted. The request is recorded but NOT executed.
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"a1000000-0000-0000-0000-0000000000a1","role":"authenticated"}', true);
+  PERFORM public.request_account_deletion();
+  PERFORM set_config('request.jwt.claims', NULL, true);
+
+  ASSERT (SELECT deleted_at IS NOT NULL FROM public.profiles WHERE id = v_l),
+    'T15 deletion request was not recorded for a held account';
+  ASSERT (SELECT sexual_preference IS NOT NULL AND dob IS NOT NULL
+            FROM public.profiles WHERE id = v_l),
+    'T15 scrub ran despite an active preservation hold (evidence destroyed)';
+
+  -- Age past the grace window: the purge must still refuse.
+  UPDATE public.profiles SET deleted_at = NOW() - INTERVAL '400 days' WHERE id = v_l;
+  ASSERT public.purge_deleted_accounts(INTERVAL '30 days') = 0,
+    'T15 purge removed an account under an active preservation hold';
+  ASSERT EXISTS (SELECT 1 FROM auth.users WHERE id = v_l),
+    'T15 held account was destroyed by the retention job';
+
+  -- Release the hold: the deferred deletion must then complete on its own.
+  UPDATE public.legal_holds SET released_at = NOW(), released_by = 'test-runner'
+   WHERE id = v_hold;
+  ASSERT NOT public.has_legal_hold(v_l), 'T15 released hold still reads as active';
+  ASSERT public.purge_deleted_accounts(INTERVAL '30 days') = 1,
+    'T15 deferred deletion did not complete after the hold was released';
+  ASSERT NOT EXISTS (SELECT 1 FROM auth.users WHERE id = v_l),
+    'T15 account survived purge after hold release';
+
+  -- An expired hold must not keep blocking.
+  ASSERT NOT public.has_legal_hold('a2000000-0000-0000-0000-0000000000a2'),
+    'T15 unheld user reads as held';
+END $$;
+
+-- The subject must never see, place, or lift a hold on themselves.
+DO $$ BEGIN
+  ASSERT NOT has_table_privilege('authenticated','public.legal_holds','SELECT'),
+    'T15 users can read legal holds placed on them';
+  ASSERT NOT has_function_privilege('authenticated','public.place_legal_hold(uuid,text,text,text,timestamptz)','EXECUTE'),
+    'T15 users can place legal holds';
+  ASSERT NOT has_function_privilege('authenticated','public.has_legal_hold(uuid)','EXECUTE'),
+    'T15 users can probe whether they are under a legal hold';
+END $$;
+
 SELECT '✅ ALL RECIPROCITY SECURITY INVARIANTS PASSED' AS result;
 ROLLBACK;
