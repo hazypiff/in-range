@@ -1,6 +1,6 @@
 # Privacy compliance — audit, fixes shipped, and what's left
 
-**Date:** 2026-07-19. **Author:** Claude (audit + fixes). **Repo:** `3e74dbd` on `main`.
+**Date:** 2026-07-19. **Author:** Claude (audit + fixes). **Repo:** `9bc44c9` on `main`.
 **Prod:** Supabase `riigipzlyqeaadyvbuty`, migration `0039`.
 **Status:** mechanical + platform-policy issues fixed. Legal-document work is
 open and needs counsel. **Not legal advice.**
@@ -48,6 +48,8 @@ All verified against live prod, not just code.
 | 9 | **No TAKE IT DOWN NCII notice-and-removal** (enforceable since 2026-05-19, $53,088/violation) | 🟡 **Backend built** — anon intake, 48h clock, identical-copy fan-out, SLA board, upload hashing. **Still needs the public form, published notice, and a human triage owner** | `0038`, T16 |
 | 10 | **No consent records at all** — and a ToS checkbox would not have counted under NJDPA | 🟡 **Backend built** — one row per purpose so bundling is impossible, append-only audit trail, immediate withdrawal that deletes the data. **Still needs the consent UI and the policy text it points at** | `0039`, T17 |
 | 11 | **Age gate was not neutral** — DOB prefilled to `now.year - 25`, pre-answering with an adult age | ✅ **Fixed** — empty field, picker opens at minimum adult age | `profile_setup_screen.dart` |
+| 12 | **No consent UI** | ✅ **Built** — nothing pre-checked, one toggle per purpose, no accept-all, withdrawal with no save gate. Links point at policy URLs that **do not exist yet** | `consent_screen.dart` |
+| 13 | **No public NCII intake; no Play-required web deletion URL** | ✅ **Built** — `web/report.html`, `web/delete-account.html`. **Need hosting + the 48h triage owner** | `web/` |
 
 **Correction to the research report:** its §8.2 claims retention "exists on
 paper but is not scheduled," inferred from commented-out `pg_cron` blocks in
@@ -108,10 +110,11 @@ Hard requirements from the FTC orders (X-Mode / InMarket):
 - **NJDPA gives 15 days to honor revocation** — tighter than the 45-day norm.
   Build the revoke path alongside the consent path, not after.
 
-### 2.4 🔴 Play: web-based account deletion URL
+### 2.4 🟡 Play: web-based account deletion URL
 
-Play requires **both** in-app deletion (✅ done) **and** a publicly reachable
-web URL. Apple does not require the URL — the asymmetry is easy to miss.
+Page **built** (`web/delete-account.html`). Still needs to be **hosted at a
+stable URL** and pasted into the Play Console data-safety form. Apple does not
+require the URL — the asymmetry is easy to miss.
 
 ### 2.5 🔴 Play: background location declaration — highest single launch risk
 
