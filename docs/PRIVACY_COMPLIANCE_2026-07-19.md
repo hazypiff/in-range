@@ -1,7 +1,7 @@
 # Privacy compliance — audit, fixes shipped, and what's left
 
-**Date:** 2026-07-19. **Author:** Claude (audit + fixes). **Repo:** `94ec6e3` on `main`.
-**Prod:** Supabase `riigipzlyqeaadyvbuty`, migration `0037`.
+**Date:** 2026-07-19. **Author:** Claude (audit + fixes). **Repo:** `32e00cd` on `main`.
+**Prod:** Supabase `riigipzlyqeaadyvbuty`, migration `0038`.
 **Status:** mechanical + platform-policy issues fixed. Legal-document work is
 open and needs counsel. **Not legal advice.**
 
@@ -45,6 +45,7 @@ All verified against live prod, not just code.
 | 6 | Background location requested with **no prominent disclosure** (Play rejection cause) | ✅ **Fixed** — fail-closed gate, tested at channel level | `permission_service.dart` |
 | 7 | **False `neverForLocation` assertion** while WiFi is used as a proximity signal | ✅ **Fixed** — flag dropped, reasoning recorded inline | `AndroidManifest.xml` |
 | 8 | **The 15-min purge would have destroyed §2258A evidence automatically** — preservation duty runs 1 year from a CyberTipline filing, and nothing blocked the purge | ✅ **Fixed** — service-role legal holds; deletion deferred, not refused | `0037`, T15 |
+| 9 | **No TAKE IT DOWN NCII notice-and-removal** (enforceable since 2026-05-19, $53,088/violation) | 🟡 **Backend built** — anon intake, 48h clock, identical-copy fan-out, SLA board, upload hashing. **Still needs the public form, published notice, and a human triage owner** | `0038`, T16 |
 
 **Correction to the research report:** its §8.2 claims retention "exists on
 paper but is not scheduled," inferred from commented-out `pg_cron` blocks in
@@ -150,14 +151,27 @@ including messaging and image sharing**. We qualify. FTC-enforced as a §5
 violation at **$53,088 per violation**; the FTC sent compliance letters to 15
 companies **including Bumble and Match Group**.
 
-Required:
-1. **NCII removal intake** reachable **without an account**, from app and website
-2. **Published plain-language notice** of that process
-3. **Removal within 48 hours** of a valid request
-4. **Remove known identical copies** — in practice a **hash column on the media
-   table** plus a lookup before deletion completes, not just deleting one URL
-5. **Log every request and its resolution timestamp** — the 48h clock is the
-   enforcement hook and we must be able to prove we met it
+**Built** (`0038`, harness T16):
+- `submit_ncii_report()` — **granted to `anon`**, because the statute requires a
+  path usable without an account. The only anon-writable surface we have.
+- **48-hour clock stamped at intake** (`deadline_at`), so later edits cannot
+  move it. `v_ncii_sla` shows `hours_remaining` and `breached`.
+- **Identical-copy removal** — `media_hashes` records a SHA-256 at every upload;
+  `ncii_resolve()` fans out by digest across buckets *and* owners and queues
+  every copy for storage deletion.
+- Reports are **claims, not automatic deletions** — a human reviews first. An
+  anonymous endpoint that auto-deleted content would be a weaponisable takedown
+  service. Rate-limited per email (hashed) and globally.
+
+**Still needed — mostly not code:**
+1. **A public intake form** — web page + in-app link calling the RPC, reachable
+   **without logging in**.
+2. **Published plain-language notice** of the process.
+3. **A named human who triages** and calls `ncii_resolve()` inside 48 hours.
+   The clock starts the moment a report lands.
+4. **Per-IP rate limiting** at an Edge Function or gateway — an RPC cannot see
+   the client IP, so an actor rotating emails can reach the global cap and deny
+   service to genuine reporters.
 
 **18 U.S.C. §2258A — CyberTipline reporting.** **$600,000** first violation /
 **$850,000** subsequent for a provider our size. Company-ending on one miss.
