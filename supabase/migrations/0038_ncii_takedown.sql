@@ -49,6 +49,7 @@ ALTER TABLE public.media_hashes ENABLE ROW LEVEL SECURITY;
 
 -- Uploaders record their own hashes; nobody can read the table. Read access
 -- would turn it into a confirm-whether-this-image-exists oracle.
+DROP POLICY IF EXISTS "Users record own media hashes" ON public.media_hashes;
 CREATE POLICY "Users record own media hashes"
   ON public.media_hashes FOR INSERT TO authenticated
   WITH CHECK (user_id = auth.uid());
