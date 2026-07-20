@@ -131,24 +131,33 @@ class BeaconController extends StateNotifier<BeaconState> {
   final BeaconService _service;
   bool _busy = false;
 
-  Future<void> toggle() async {
+  /// [onBackgroundDisclosure] must present Google Play's prominent disclosure
+  /// and resolve true only on an affirmative tap; callers with a BuildContext
+  /// pass `() => showBackgroundLocationDisclosure(context)`. Omitting it keeps
+  /// the beacon foreground-only rather than prompting without a disclosure.
+  Future<void> toggle({
+    Future<bool> Function()? onBackgroundDisclosure,
+  }) async {
     // Re-entrancy guard: rapid double-taps interleaved on/off mid-flight and
     // null-crashed turnOnBeacon in the 2026-07-13 field test.
     if (_busy) return;
     _busy = true;
     try {
-      await _toggleInner();
+      await _toggleInner(onBackgroundDisclosure);
     } finally {
       _busy = false;
     }
   }
 
-  Future<void> _toggleInner() async {
+  Future<void> _toggleInner(
+      Future<bool> Function()? onBackgroundDisclosure) async {
     if (state.isOn) {
       await _service.turnOffBeacon();
       state = const BeaconState();
     } else {
-      final perm = await PermissionService.requestAllForBeacon();
+      final perm = await PermissionService.requestAllForBeacon(
+        onBackgroundDisclosure: onBackgroundDisclosure,
+      );
       if (!perm.canUseBeacon) {
         state = const BeaconState();
         return;

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:in_range/core/permissions/permission_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:in_range/core/backend/backend_status.dart';
 import 'package:in_range/core/config/app_config.dart';
@@ -68,7 +69,10 @@ class SettingsScreen extends ConsumerWidget {
             onChanged: (v) async {
               try {
                 if (v && ref.read(beaconControllerProvider).isOn) {
-                  await ref.read(beaconControllerProvider.notifier).toggle();
+                  await ref.read(beaconControllerProvider.notifier).toggle(
+          onBackgroundDisclosure: () =>
+              showBackgroundLocationDisclosure(context),
+        );
                 }
                 if (v) await ref.read(localsControllerProvider.notifier).stop();
                 await ref.read(sessionControllerProvider.notifier).setPaused(v);
@@ -98,7 +102,10 @@ class SettingsScreen extends ConsumerWidget {
                     .setIncognito(v);
                 await ref.read(safetyStoreProvider.notifier).setIncognito(v);
                 if (v && ref.read(beaconControllerProvider).isOn) {
-                  await ref.read(beaconControllerProvider.notifier).toggle();
+                  await ref.read(beaconControllerProvider.notifier).toggle(
+          onBackgroundDisclosure: () =>
+              showBackgroundLocationDisclosure(context),
+        );
                   await ref.read(localsControllerProvider.notifier).stop();
                 }
               } catch (e) {
@@ -296,7 +303,10 @@ class SettingsScreen extends ConsumerWidget {
             title: const Text('Sign out'),
             onTap: () async {
               if (ref.read(beaconControllerProvider).isOn) {
-                await ref.read(beaconControllerProvider.notifier).toggle();
+                await ref.read(beaconControllerProvider.notifier).toggle(
+          onBackgroundDisclosure: () =>
+              showBackgroundLocationDisclosure(context),
+        );
               }
               await ref.read(localsControllerProvider.notifier).stop();
               await ref.read(matchStoreProvider.notifier).clearAll();
@@ -339,7 +349,10 @@ class SettingsScreen extends ConsumerWidget {
               if (ok == true) {
                 try {
                   if (ref.read(beaconControllerProvider).isOn) {
-                    await ref.read(beaconControllerProvider.notifier).toggle();
+                    await ref.read(beaconControllerProvider.notifier).toggle(
+          onBackgroundDisclosure: () =>
+              showBackgroundLocationDisclosure(context),
+        );
                   }
                   await ref.read(localsControllerProvider.notifier).stop();
                   await ref

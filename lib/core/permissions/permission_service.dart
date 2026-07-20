@@ -72,7 +72,31 @@ class PermissionService {
 
   /// Returns true if background location is also granted.
   /// Must be called after requestForegroundBle() succeeds.
-  static Future<bool> requestBackgroundLocation() async {
+  ///
+  /// [onDisclosure] MUST present Google Play's prominent disclosure and
+  /// resolve true only on an affirmative tap. Play policy requires an in-app
+  /// disclosure — shown *before* the OS prompt, not buried in the privacy
+  /// policy or ToS — naming the data, saying it is collected in the
+  /// background, and explaining why. Requesting ACCESS_BACKGROUND_LOCATION
+  /// without it is a documented rejection cause.
+  ///
+  /// When [onDisclosure] is null or returns false we simply never ask, and the
+  /// beacon stays foreground-only. Fail-closed: no disclosure, no request.
+  static Future<bool> requestBackgroundLocation({
+    Future<bool> Function()? onDisclosure,
+  }) async {
+    // Already granted (e.g. returning user) — nothing to disclose or ask.
+    if (await Permission.locationAlways.isGranted) {
+      return true;
+    }
+    if (onDisclosure == null) {
+      debugPrint('PERM background location skipped: no disclosure provided');
+      return false;
+    }
+    if (!await onDisclosure()) {
+      debugPrint('PERM background location declined at disclosure');
+      return false;
+    }
     final bg = await Permission.locationAlways.request();
     return bg.isGranted;
   }
@@ -102,7 +126,13 @@ class PermissionService {
   }
 
   /// Full flow: foreground → background. Returns a PermissionResult.
-  static Future<PermissionResult> requestAllForBeacon() async {
+  ///
+  /// [onBackgroundDisclosure] is forwarded to [requestBackgroundLocation];
+  /// without it the background step is skipped entirely (foreground-only
+  /// beacon), which is the safe default rather than a silent policy breach.
+  static Future<PermissionResult> requestAllForBeacon({
+    Future<bool> Function()? onBackgroundDisclosure,
+  }) async {
     final fg = await requestForegroundBle();
     if (!fg) {
       // Distinguish which grant is missing so the rationale is accurate.
@@ -118,7 +148,9 @@ class PermissionService {
                 'Please grant location access in Settings to use In Range.',
       );
     }
-    final bg = await requestBackgroundLocation();
+    final bg = await requestBackgroundLocation(
+      onDisclosure: onBackgroundDisclosure,
+    );
     return PermissionResult(
       foregroundLocation: true,
       backgroundLocation: bg,
@@ -145,6 +177,51 @@ class PermissionResult {
   final bool backgroundLocation;
   final bool canUseBeacon;
   final String? denialReason;
+}
+
+/// Google Play prominent disclosure for background location.
+///
+/// Must run BEFORE the OS permission prompt. Play requires the disclosure to
+/// name the data type, state that collection continues when the app is closed
+/// or not in use, explain what it enables, and be dismissible only by an
+/// affirmative user action. Declining is a first-class outcome — the beacon
+/// still works in the foreground — so neither button is styled as a dead end.
+///
+/// Returns true only on an explicit "Allow" tap; a back-gesture dismissal
+/// resolves false.
+Future<bool> showBackgroundLocationDisclosure(BuildContext context) async {
+  final accepted = await showDialog<bool>(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Background location'),
+      content: const SingleChildScrollView(
+        child: Text(
+          'In Range collects location data to detect when you and another '
+          'member are physically near each other, so an encounter can be '
+          'recorded.\n\n'
+          'To keep detecting encounters while the app is closed or not in '
+          'use, In Range needs "Allow all the time" location access.\n\n'
+          'Your precise location is used only to match encounters and is '
+          'deleted from our servers after 24 hours. It is never sold or '
+          'shared with advertisers.\n\n'
+          'You can decline and In Range will only detect encounters while '
+          'the app is open. You can change this at any time in Settings.',
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(false),
+          child: const Text('Not now'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(ctx).pop(true),
+          child: const Text('Allow'),
+        ),
+      ],
+    ),
+  );
+  return accepted ?? false;
 }
 
 /// Shows a rationale dialog before opening app settings, if the user denied.

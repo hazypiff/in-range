@@ -58,7 +58,9 @@ class _OnboardingFlowState extends ConsumerState<OnboardingFlow> {
       return;
     }
     // Final step: permissions
-    final res = await PermissionService.requestAllForBeacon();
+    final res = await PermissionService.requestAllForBeacon(
+      onBackgroundDisclosure: () => showBackgroundLocationDisclosure(context),
+    );
     setState(() {
       _permNote = res.denialReason ??
           (res.canUseBeacon
