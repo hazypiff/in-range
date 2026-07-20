@@ -47,9 +47,11 @@ CREATE INDEX IF NOT EXISTS idx_profiles_deleted_at
 -- Storage objects belonging to deleted accounts. SQL cannot delete these
 -- directly (Supabase blocks DELETE on storage.objects), so deletion requests
 -- are recorded here and drained by a service-role worker via the Storage API.
--- OPEN ITEM: that worker still has to be written -- until it runs, photos of
--- deleted accounts remain in the buckets. Rows are kept after deletion as the
--- audit trail proving the erasure happened.
+-- That worker is drainStorageDeletionQueue() in the `maintenance` Edge
+-- Function, on the same 15-minute cadence; until it runs, photos of deleted
+-- accounts remain in the buckets, so it is the step that actually completes an
+-- erasure request. Rows are kept after deletion, with deleted_at stamped, as
+-- the audit trail proving the erasure happened.
 CREATE TABLE IF NOT EXISTS public.storage_deletion_queue (
   id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   user_id      UUID NOT NULL,
