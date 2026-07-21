@@ -1,7 +1,7 @@
 # Privacy compliance — audit, fixes shipped, and what's left
 
-**Date:** 2026-07-19. **Author:** Claude (audit + fixes). **Repo:** `1dc37d4` on `main`.
-**Prod:** Supabase `riigipzlyqeaadyvbuty`, migration `0040`.
+**Date:** 2026-07-19. **Author:** Claude (audit + fixes). **Repo:** `9f6063f` on `main`.
+**Prod:** Supabase `riigipzlyqeaadyvbuty`, migration `0041`.
 **Status:** mechanical + platform-policy issues fixed. Legal-document work is
 open and needs counsel. **Not legal advice.**
 
@@ -51,6 +51,7 @@ All verified against live prod, not just code.
 | 12 | **No consent UI** | ✅ **Built** — nothing pre-checked, one toggle per purpose, no accept-all, withdrawal with no save gate. Links point at policy URLs that **do not exist yet** | `consent_screen.dart` |
 | 13 | **No public NCII intake; no Play-required web deletion URL** | ✅ **Built** — `web/report.html`, `web/delete-account.html`. **Need hosting + the 48h triage owner** | `web/` |
 | 14 | **`require_consent()` had no callers** — flipping `enforce_consent` would have been a silent no-op that still read as enforced | ✅ **Fixed** — gated `claim_token`, `record_sighting`, `record_location_ping`, `upsert_my_profile` | `0040`, T18 |
+| 15 | **No path from a confirmed minor-safety report to §2258A preservation + filing** | ✅ **Built** — `escalate_report()` preserves then queues the filing obligation; runbook documents the human steps | `0041`, T19, `docs/SAFETY_RUNBOOK.md` |
 
 **Correction to the research report:** its §8.2 claims retention "exists on
 paper but is not scheduled," inferred from commented-out `pg_cron` blocks in
@@ -189,12 +190,18 @@ the pattern a proximity dating app will actually surface.
 **§2258A(f) expressly bars any duty to affirmatively search, screen, or scan.**
 Report what you know; do not over-build monitoring.
 
-Required:
-1. **Register with NCMEC** before launch — registration is not instant
-2. **Named reporter + backup** (with two people, both)
-3. **Escalation runbook** from the report queue to the reporter, with a time budget
-4. **Preservation-hold procedure** — 1 year from filing ✅ **shipped**
-5. **Train triage on §2422(b) enticement**, not just imagery
+**Built** (`0041`, T19) + documented (`docs/SAFETY_RUNBOOK.md`):
+- `escalate_report()` — one reviewer action that places the 1-year preservation
+  hold **then** opens the filing obligation, before the subject can race a
+  deletion. `v_report_triage` surfaces minor-safety reports first;
+  `v_cybertipline_pending` is the queue that can't be forgotten.
+
+**Still needs a human:**
+1. **Register with NCMEC** before launch — not instant. Runbook §0.
+2. **Named reporter + backup** — fill in the blanks in the runbook.
+3. **Watch `v_cybertipline_pending` daily** and file. SQL cannot file for you.
+4. The escalation and preservation are automated; **the NCMEC submission is
+   not, and must not be.**
 
 ✅ **The preservation hold is built** (`0037`, harness T15). This closed a real
 conflict we had created: `purge_deleted_accounts()` runs every 15 minutes, so
