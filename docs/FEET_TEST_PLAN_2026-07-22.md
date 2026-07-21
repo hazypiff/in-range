@@ -35,8 +35,14 @@ the noisy tail — past ~110 ft expect ±6–8 dB).
 - Beacon ON **only while at a station** — walk between stations with both
   beacons OFF (prevents close-range contamination of far-station data).
 - Arrive at station → 10 s settle → dwell → beacons OFF → note the times.
-- Default posture: phone in hand, chest height, facing the other phone.
-- One phone (14) stays at the origin; the 15 Plus does the walking.
+- **Split dwell at EVERY station (owner decision 2026-07-21): ~45 s phone in
+  hand (chest height, facing the origin), then ~45 s phone in pocket, still
+  facing the origin. Note the hand→pocket switch time at each station.**
+  In-hand gives the physics curve (comparable to 07-17); pocket gives the
+  real-carry curve — final RSSI thresholds get picked from the POCKET curve,
+  with the in-hand curve as the sanity reference.
+- One phone (14) stays at the origin, propped in the open (controlled
+  anchor — do NOT pocket the origin phone except where Session D says so).
 - Log everything in the station log; when in doubt, write it down.
 
 ## Sessions ("all over" = 3 environments + a carry overlay)
@@ -57,12 +63,14 @@ Purpose: soft obstruction + one deliberate non-line-of-sight point.
 Stations, 60 s each: **25 · 50 · 75 · 100 · 125 · 150**, plus ONE station at
 ~75 ft with a tree/corner directly between phones (mark it "NLOS" in the log).
 
-### Session D — Real-carry overlay (~20 min, can fold into Session A)
-Purpose: nobody holds their phone facing a stranger. At **50, 100, 150 ft**:
-- 45 s walker's phone in pocket, facing peer
-- 45 s phone in hand but back turned (body block)
-Log each sub-condition separately. Expect 5–10 dB loss; this tells us how much
-margin the boundaries need.
+### Session D — Worst-case overlay (~15 min, can fold into Session A)
+Pocket-carry is now baked into every station via the split dwell, so this
+session covers the two remaining worst cases:
+- At **50, 100, 150 ft**: 45 s in hand but back turned (body block).
+- At **75 and 150 ft** (the two boundary distances): 45 s with BOTH phones
+  pocketed — origin 14 in a pocket too. This is the true worst case and the
+  margin check on the tier boundaries.
+Log each sub-condition separately. Expect 5–10 dB extra loss.
 
 Total field time ≈ 2–2.5 h including walking and resets.
 
@@ -70,8 +78,9 @@ Total field time ≈ 2–2.5 h including walking and resets.
 
 1. Pull both phones' DBs, run `scripts/extract_walk.py` per session against
    the station log (same flow as 07-17; filter rssi < 0, 127 = invalid).
-2. Per station, per direction: median + IQR. Both directions should agree
-   within ~2 dB like last time — if not, flag it.
+2. Per station, per direction, per carry condition (hand vs pocket): median +
+   IQR — the split-dwell times in the station log separate the two. Both
+   directions should agree within ~2 dB like last time — if not, flag it.
 3. **Boundary rule (unchanged from the spec):** each boundary goes at the
    largest distance where adjacent stations' RSSI distributions still separate
    cleanly — but now judged across ALL sessions, with Session D's loss as the
