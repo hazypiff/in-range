@@ -860,5 +860,81 @@ BEGIN
   PERFORM set_config('request.jwt.claims', NULL, true);
 END $$;
 
+-- ============ TEST 19: §2258A escalation preserves before it can be raced ===
+-- Confirming an underage/enticement report must place a preservation hold that
+-- survives the subject deleting their account, and must record a filing
+-- obligation that cannot be silently dropped.
+INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+ ('e1000000-0000-0000-0000-0000000000e1','00000000-0000-0000-0000-000000000000','authenticated','authenticated','esc_reporter@t.local',now(),now()),
+ ('e2000000-0000-0000-0000-0000000000e2','00000000-0000-0000-0000-000000000000','authenticated','authenticated','esc_subject@t.local',now(),now());
+UPDATE public.profiles SET display_name='Reporter',dob='1990-01-01',is_active=true
+  WHERE id='e1000000-0000-0000-0000-0000000000e1';
+UPDATE public.profiles SET display_name='Subject',dob='1990-01-01',sexual_preference='women',
+  is_active=true WHERE id='e2000000-0000-0000-0000-0000000000e2';
+
+DO $$
+DECLARE
+  v_reporter UUID := 'e1000000-0000-0000-0000-0000000000e1';
+  v_subject  UUID := 'e2000000-0000-0000-0000-0000000000e2';
+  v_report BIGINT;
+  v_queue  BIGINT;
+  v_match  BIGINT;
+BEGIN
+  -- A report requires a relationship; give them a match, then file.
+  INSERT INTO public.matches (user_a,user_b,status,matched_at)
+    VALUES (LEAST(v_reporter,v_subject),GREATEST(v_reporter,v_subject),'active',now())
+    RETURNING id INTO v_match;
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"e1000000-0000-0000-0000-0000000000e1","role":"authenticated"}', true);
+  v_report := public.report_user(v_subject, 'underage', 'Appears to be a minor', v_match);
+  PERFORM set_config('request.jwt.claims', NULL, true);
+
+  -- The report must surface for triage, minor-safety flagged.
+  ASSERT EXISTS (SELECT 1 FROM public.v_report_triage
+                  WHERE id = v_report AND review_for_2258a),
+    'T19 underage report is not flagged for §2258A review';
+
+  -- A reviewer confirms and escalates.
+  v_queue := public.escalate_report(v_report, 'enticement_2422b', 'reviewer-1', 'confirmed minor');
+
+  -- Preservation must be in place BEFORE any deletion can race it.
+  ASSERT public.has_legal_hold(v_subject),
+    'T19 escalation did not place a preservation hold on the subject';
+  ASSERT EXISTS (SELECT 1 FROM public.v_cybertipline_pending WHERE id = v_queue),
+    'T19 escalation did not open a CyberTipline filing obligation';
+  ASSERT (SELECT status = 'actioned' FROM public.reports WHERE id = v_report),
+    'T19 escalated report was left open';
+
+  -- Now the subject tries to delete their account and age past the grace
+  -- window. The purge must refuse -- evidence is under a §2258A hold.
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"e2000000-0000-0000-0000-0000000000e2","role":"authenticated"}', true);
+  PERFORM public.request_account_deletion();
+  PERFORM set_config('request.jwt.claims', NULL, true);
+  UPDATE public.profiles SET deleted_at = NOW() - INTERVAL '400 days' WHERE id = v_subject;
+  ASSERT public.purge_deleted_accounts(INTERVAL '30 days') = 0,
+    'T19 purge destroyed evidence under an active §2258A hold';
+  ASSERT (SELECT sexual_preference IS NOT NULL FROM public.profiles WHERE id = v_subject),
+    'T19 the subject profile was scrubbed despite the hold';
+
+  -- Filing records the NCMEC number and starts the 1-year preservation clock.
+  PERFORM public.record_cybertipline_filing(v_queue, 'NCMEC-TEST-123', 'reporter-1');
+  ASSERT (SELECT filed_at IS NOT NULL AND preserve_until > NOW() + INTERVAL '360 days'
+            FROM public.cybertipline_queue WHERE id = v_queue),
+    'T19 filing did not stamp the 1-year preservation window';
+  ASSERT NOT EXISTS (SELECT 1 FROM public.v_cybertipline_pending WHERE id = v_queue),
+    'T19 filed obligation still shows as pending';
+END $$;
+
+-- The whole surface is service-role only: a subject must never see it.
+DO $$ BEGIN
+  ASSERT NOT has_table_privilege('authenticated','public.cybertipline_queue','SELECT'),
+    'T19 users can read the CyberTipline queue';
+  ASSERT NOT has_function_privilege('authenticated','public.escalate_report(bigint,text,text,text)','EXECUTE'),
+    'T19 users can escalate reports';
+  ASSERT NOT has_table_privilege('authenticated','public.v_report_triage','SELECT'),
+    'T19 users can read the report triage view';
+END $$;
+
 SELECT '✅ ALL RECIPROCITY SECURITY INVARIANTS PASSED' AS result;
 ROLLBACK;
