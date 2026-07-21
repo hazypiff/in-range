@@ -35,12 +35,15 @@ the noisy tail — past ~110 ft expect ±6–8 dB).
 - Beacon ON **only while at a station** — walk between stations with both
   beacons OFF (prevents close-range contamination of far-station data).
 - Arrive at station → 10 s settle → dwell → beacons OFF → note the times.
-- **Split dwell at EVERY station (owner decision 2026-07-21): ~45 s phone in
-  hand (chest height, facing the origin), then ~45 s phone in pocket, still
-  facing the origin. Note the hand→pocket switch time at each station.**
-  In-hand gives the physics curve (comparable to 07-17); pocket gives the
-  real-carry curve — final RSSI thresholds get picked from the POCKET curve,
-  with the in-hand curve as the sanity reference.
+- **Split dwell at EVERY station (owner decision 2026-07-21): beacon ON
+  starts the 90 s clock — first ~45 s phone in POCKET, then switch to HAND
+  (chest height, facing the origin) for the rest, beacon OFF, move on.**
+  No manual timestamps needed: each station is a contiguous burst in
+  rssi_log (beacon-off gaps separate stations), bursts map to distances by
+  visiting stations IN THE LISTED ORDER, and each burst splits at its 45 s
+  mark into pocket/hand halves. Pocket gives the real-carry curve — final
+  RSSI thresholds get picked from the POCKET curve; in-hand is the physics
+  reference (comparable to 07-17).
 - One phone (14) stays at the origin, propped in the open (controlled
   anchor — do NOT pocket the origin phone except where Session D says so).
 - Log everything in the station log; when in doubt, write it down.
@@ -78,9 +81,11 @@ Total field time ≈ 2–2.5 h including walking and resets.
 
 1. Pull both phones' DBs, run `scripts/extract_walk.py` per session against
    the station log (same flow as 07-17; filter rssi < 0, 127 = invalid).
-2. Per station, per direction, per carry condition (hand vs pocket): median +
-   IQR — the split-dwell times in the station log separate the two. Both
-   directions should agree within ~2 dB like last time — if not, flag it.
+2. Slice rssi_log into per-station bursts by the beacon-off gaps, map bursts
+   to distances by station order, split each burst at its 45 s mark
+   (pocket → hand). Per station, per direction, per carry condition: median +
+   IQR. Both directions should agree within ~2 dB like last time — if not,
+   flag it.
 3. **Boundary rule (unchanged from the spec):** each boundary goes at the
    largest distance where adjacent stations' RSSI distributions still separate
    cleanly — but now judged across ALL sessions, with Session D's loss as the
