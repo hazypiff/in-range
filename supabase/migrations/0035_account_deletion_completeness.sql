@@ -288,6 +288,22 @@ DECLARE
 BEGIN
   FOR v_uid IN SELECT id FROM public.profiles WHERE deleted_at IS NOT NULL
   LOOP
+    -- Replay safety: on a re-apply after 0037 exists, this migration briefly
+    -- reinstalls the hold-BLIND scrub above, so an unguarded backfill here
+    -- would erase the PII of a legally-held account (§2258A spoliation) before
+    -- 0037 re-applies the hold-aware version. Skip held accounts. On the first
+    -- forward apply legal_holds does not exist yet, so to_regclass short-
+    -- circuits and every deleted profile is scrubbed as intended (no hold can
+    -- exist before 0037).
+    IF to_regclass('public.legal_holds') IS NOT NULL
+       AND EXISTS (
+         SELECT 1 FROM public.legal_holds h
+          WHERE h.user_id = v_uid
+            AND h.released_at IS NULL
+            AND (h.expires_at IS NULL OR h.expires_at > NOW())
+       ) THEN
+      CONTINUE;
+    END IF;
     PERFORM public.scrub_account_pii(v_uid);
     v_n := v_n + 1;
   END LOOP;

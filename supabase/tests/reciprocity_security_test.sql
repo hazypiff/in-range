@@ -936,5 +936,55 @@ DO $$ BEGIN
     'T19 users can read the report triage view';
 END $$;
 
+-- ============ TEST 20: privilege hardening (0042) ============
+-- has_consent/require_consent must not be a cross-user oracle for app users,
+-- the self-service RPCs must not be anon-callable, and the consent GATE (which
+-- calls require_consent from inside a SECURITY DEFINER RPC) must still work.
+DO $$ BEGIN
+  ASSERT NOT has_function_privilege('authenticated','public.has_consent(uuid,text)','EXECUTE'),
+    'T20 authenticated can still probe another user''s consent via has_consent';
+  ASSERT NOT has_function_privilege('authenticated','public.require_consent(uuid,text)','EXECUTE'),
+    'T20 authenticated can still call require_consent directly';
+  ASSERT has_function_privilege('service_role','public.has_consent(uuid,text)','EXECUTE'),
+    'T20 service_role lost has_consent';
+
+  ASSERT NOT has_function_privilege('anon','public.request_account_deletion()','EXECUTE'),
+    'T20 anon can call request_account_deletion';
+  ASSERT NOT has_function_privilege('anon','public.grant_consent(text,text,text,text)','EXECUTE'),
+    'T20 anon can call grant_consent';
+  ASSERT NOT has_function_privilege('anon','public.withdraw_consent(text)','EXECUTE'),
+    'T20 anon can call withdraw_consent';
+  ASSERT NOT has_function_privilege('anon','public.my_consents()','EXECUTE'),
+    'T20 anon can call my_consents';
+
+  -- Legitimate callers keep access.
+  ASSERT has_function_privilege('authenticated','public.request_account_deletion()','EXECUTE'),
+    'T20 authenticated lost request_account_deletion';
+  ASSERT has_function_privilege('authenticated','public.grant_consent(text,text,text,text)','EXECUTE'),
+    'T20 authenticated lost grant_consent';
+END $$;
+
+-- The consent gate still fires end-to-end even though require_consent is no
+-- longer granted to authenticated: claim_token is SECURITY DEFINER and calls
+-- it as the owner. This is the load-bearing check that 0042 did not break 0040.
+INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+ ('f1000000-0000-0000-0000-0000000000f1','00000000-0000-0000-0000-000000000000','authenticated','authenticated','hard_q@t.local',now(),now());
+UPDATE public.profiles SET display_name='Q',dob='1990-01-01',is_active=true,
+  age_verified=true,is_photo_verified=true,photo_urls=ARRAY['q.jpg'],
+  is_paused=false,is_incognito=false WHERE id='f1000000-0000-0000-0000-0000000000f1';
+DO $$ BEGIN
+  UPDATE public.app_settings SET value_num=0 WHERE key='enforce_batch_tokens';
+  UPDATE public.app_settings SET value_num=0 WHERE key='require_attestation';
+  UPDATE public.app_settings SET value_num=1 WHERE key='enforce_consent';
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"f1000000-0000-0000-0000-0000000000f1","role":"authenticated"}', true);
+  BEGIN
+    PERFORM public.claim_token(repeat('7a',16), NOW() + INTERVAL '15 minutes', 40.74, -74.03);
+    ASSERT false, 'T20 consent gate stopped firing after the require_consent revoke';
+  EXCEPTION WHEN sqlstate '42501' THEN NULL; END;
+  UPDATE public.app_settings SET value_num=0 WHERE key='enforce_consent';
+  PERFORM set_config('request.jwt.claims', NULL, true);
+END $$;
+
 SELECT '✅ ALL RECIPROCITY SECURITY INVARIANTS PASSED' AS result;
 ROLLBACK;

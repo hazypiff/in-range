@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -125,11 +126,14 @@ class ChatSyncService {
           ),
         );
     // TAKE IT DOWN: record the digest so a removal reaches identical copies.
-    await MediaHashService.record(
+    // Fire-and-forget: hashing must never sit on the message-send path.
+    // record() already swallows its own errors; unawaited keeps a slow
+    // hash-insert round-trip from delaying the send.
+    unawaited(MediaHashService.record(
       bucketId: 'chat_media',
       objectName: storagePath,
       file: File(localPath),
-    );
+    ));
     try {
       final id = await _api.sendMessage(
         matchId: matchId,
