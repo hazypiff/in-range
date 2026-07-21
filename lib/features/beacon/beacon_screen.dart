@@ -4,6 +4,7 @@ import 'package:in_range/core/navigation/home_tab.dart';
 import 'package:in_range/core/permissions/permission_service.dart';
 import 'package:in_range/core/privacy/safety_store.dart';
 import 'package:in_range/features/beacon/beacon_provider.dart';
+import 'package:in_range/features/beacon/lighthouse_beacon.dart';
 import 'package:in_range/features/encounters/local_encounter_store.dart';
 import 'package:in_range/features/locals/locals_service.dart';
 import 'package:in_range/features/widgets/ad_banner.dart';
@@ -220,12 +221,7 @@ class _StatusCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                Icon(
-                  state.isOn && !incognito
-                      ? Icons.radio_button_checked
-                      : Icons.radio_button_off,
-                  color: state.isOn && !incognito ? Colors.green : Colors.grey,
-                ),
+                LighthouseBeacon(on: state.isOn && !incognito, size: 76),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(

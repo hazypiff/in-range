@@ -79,7 +79,13 @@ class _HomeShellState extends ConsumerState<HomeShell>
           Expanded(
             child: IndexedStack(
               index: index,
-              children: _pages,
+              children: [
+                // IndexedStack keeps hidden tabs alive, which keeps their
+                // animation tickers firing offstage — mute them so only the
+                // visible tab animates (battery matters while beacon is ON).
+                for (var i = 0; i < _pages.length; i++)
+                  TickerMode(enabled: i == index, child: _pages[i]),
+              ],
             ),
           ),
         ],
@@ -139,7 +145,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
               label: Text('$matchCount'),
               child: const Icon(Icons.chat_bubble),
             ),
-            label: 'Msgs',
+            label: 'Matches',
           ),
         ],
       ),
