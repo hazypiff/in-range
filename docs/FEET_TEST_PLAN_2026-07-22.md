@@ -50,11 +50,14 @@ the noisy tail — past ~110 ft expect ±6–8 dB).
 
 ## Sessions ("all over" = 3 environments + a carry overlay)
 
-### Session A — Open field, line of sight (~45 min)
-Purpose: re-verify the baseline + densify around the candidate boundaries.
-Stations (ft), 90 s each: **10 · 25 · 50 · 65 · 75 · 90 · 110 · 130 · 150 · 175 · 200**
-(dense around 65–90 and 130–175 because that's where the two boundaries live;
-200 probes the true edge — 175 was still strong on 07-17).
+### Session A — Open field, line of sight (~25 min)
+Purpose: re-verify the baseline + decide the two boundaries. Cut to 6
+stations (owner decision 2026-07-21); add interior distances later only if a
+boundary looks fuzzy.
+Stations (ft), 90 s each, IN THIS ORDER: **25 · 65 · 90 · 130 · 175 · 200**
+(65/90 straddle the 75 ft boundary, 130/175 straddle the 150 ft boundary,
+25 anchors Close By, 200 probes the detection edge — 175 was still strong
+on 07-17).
 
 ### Session B — Sidewalk / street clutter (~30 min)
 Purpose: parked cars, poles, people — does the middle band survive clutter?
