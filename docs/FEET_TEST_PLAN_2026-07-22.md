@@ -6,9 +6,9 @@ baseline curve (open field, line of sight, phone in hand); tomorrow answers
 the question that curve can't: **do the boundaries survive real streets and
 real carry?**
 
-> Naming note: owner referred to the middle tier as "around the way"
-> (2026-07-21). UI copy currently says "Near by" — confirm whether that's a
-> rename before touching UI strings.
+> Naming confirmed by owner 2026-07-21: **Close By (1–75 ft) · Near By
+> (76–150 ft) · In Range (151+)** — three user-pickable tiers, never shown
+> as feet in the UI. No rename.
 
 ## Baseline being tested (from 2026-07-17, docs/PROXIMITY_TIERS.md)
 
