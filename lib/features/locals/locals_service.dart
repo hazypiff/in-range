@@ -110,6 +110,13 @@ class LocalsController extends StateNotifier<LocalsState> {
   /// Called on tab open / pull-to-refresh — this is the ONLY place the
   /// Locals feature ever touches location. No timer, no stream.
   Future<void> start() async {
+    // A cached denial must not outlive a re-grant: when we're already in the
+    // denied state the user may have just granted in the consent screen, so
+    // drop the cache and ask the server again.
+    if (state.consentRequired) {
+      _consentOk = null;
+      _consentCheckedAt = null;
+    }
     // Consent BEFORE collection: server-side require_consent only protects
     // the upload; the GPS fix and the platform reverse-geocode happen here
     // on-device, so the client must check first. Fail closed.

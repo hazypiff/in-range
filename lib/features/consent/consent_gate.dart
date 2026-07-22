@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:in_range/core/network/supabase_client.dart';
+import 'package:in_range/core/session/app_session.dart';
 import 'package:in_range/features/consent/consent_screen.dart';
 import 'package:in_range/shared/services/consent_service.dart';
 
@@ -22,6 +23,9 @@ String _capturedKey(String uid) => 'consent_captured_v1_$uid';
 /// record for, we ask rather than assume. Returning users are never blocked
 /// offline — a successful capture is remembered per-uid in prefs.
 final consentRequiredProvider = FutureProvider<bool>((ref) async {
+  // Recompute whenever the signed-in account changes: a cached "satisfied"
+  // for user A must never let user B through within the same process.
+  ref.watch(sessionControllerProvider.select((s) => s.userId));
   const service = ConsentService();
   if (!service.ready) return false; // dev mode / signed out: nothing to record
   final uid = InRangeSupabase.clientOrNull?.auth.currentUser?.id;
@@ -39,9 +43,9 @@ final consentRequiredProvider = FutureProvider<bool>((ref) async {
 });
 
 /// Shows the first-run [ConsentScreen] before [child] until the required
-/// consents are on record. Sits between profile setup and the home shell —
-/// nothing behind it can collect location/BLE/sensitive data before the user
-/// has answered.
+/// consents are on record. Sits directly after auth — in front of BOTH
+/// profile setup and the home shell — so nothing behind it can collect
+/// photos/location/BLE/sensitive data before the user has answered.
 class ConsentGate extends ConsumerWidget {
   const ConsentGate({super.key, required this.child});
 

@@ -57,7 +57,10 @@ class AppRoot extends ConsumerWidget {
       return const AuthScreen();
     }
     if (session.needsProfile) {
-      return const ProfileSetupScreen();
+      // Consent BEFORE profile setup: the profile flow collects photos and
+      // sensitive fields (orientation, DOB), so the answers must be on record
+      // before any of that is uploaded — not after.
+      return const ConsentGate(child: ProfileSetupScreen());
     }
     if (session.paused) {
       return Scaffold(
@@ -91,10 +94,9 @@ class AppRoot extends ConsumerWidget {
         ),
       );
     }
-    // First-run consent sits between profile setup and the app proper, so no
-    // feature behind it can collect location/BLE/sensitive data before the
-    // user has answered (the server-side require_consent gates are the
-    // backstop once enforce_consent flips on).
+    // Gate the home shell too: covers accounts that predate the consent
+    // screen and users whose profile already exists (the server-side
+    // require_consent gates are the backstop once enforce_consent flips on).
     return const ConsentGate(child: HomeShell());
   }
 }
