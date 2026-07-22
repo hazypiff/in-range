@@ -13,6 +13,7 @@ const _requiredPurposes = <ConsentPurpose>[
   ConsentPurpose.sensitiveProfile,
   ConsentPurpose.bleProximity,
   ConsentPurpose.preciseLocation,
+  ConsentPurpose.photoProcessing,
 ];
 
 String _capturedKey(String uid) => 'consent_captured_v1_$uid';

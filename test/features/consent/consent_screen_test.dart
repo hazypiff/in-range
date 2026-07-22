@@ -63,8 +63,10 @@ INRANGE_HMAC_SECRET=
       (tester) async {
     await pump(tester);
 
-    // Five purposes in ConsentPurpose -> five independent toggles.
-    expect(find.byType(SwitchListTile), findsNWidgets(5));
+    // Four OFFERED purposes -> four independent toggles. background_location
+    // is deliberately not offered: no shipped feature collects it, and asking
+    // consent for non-existent processing is over-collection by another name.
+    expect(find.byType(SwitchListTile), findsNWidgets(4));
 
     for (final label in const ['accept all', 'agree to all', 'allow all']) {
       expect(
@@ -87,12 +89,19 @@ INRANGE_HMAC_SECRET=
       reason: 'Continue was enabled before any consent was given',
     );
 
-    // Turn on only the required ones; the optional ones stay off.
+    // Turn on the required ones, one by one — Continue must stay disabled
+    // until the LAST of them is on.
     for (final title in const [
       'Who you are and who you want to meet',
       'Bluetooth proximity',
       'Precise location',
+      'Profile photos',
     ]) {
+      expect(
+        tester.widget<FilledButton>(continueButton).onPressed,
+        isNull,
+        reason: 'Continue enabled before every required purpose was on',
+      );
       await tester.tap(find.widgetWithText(SwitchListTile, title));
       await tester.pumpAndSettle();
     }
@@ -100,15 +109,15 @@ INRANGE_HMAC_SECRET=
     expect(
       tester.widget<FilledButton>(continueButton).onPressed,
       isNotNull,
-      reason: 'declining the OPTIONAL purposes must not block continuing',
+      reason: 'Continue stayed disabled with every required purpose on',
     );
 
-    // And the optional ones genuinely stayed off.
-    final off = tester
+    // Nothing was switched on implicitly along the way.
+    final on = tester
         .widgetList<SwitchListTile>(find.byType(SwitchListTile))
-        .where((s) => !s.value)
+        .where((s) => s.value)
         .length;
-    expect(off, 2, reason: 'optional purposes were switched on implicitly');
+    expect(on, 4, reason: 'a purpose was switched on implicitly');
   });
 
   testWidgets('all three policy documents are surfaced', (tester) async {
@@ -126,7 +135,7 @@ INRANGE_HMAC_SECRET=
       'granting', (tester) async {
     await pump(tester, manage: true);
 
-    expect(find.byType(SwitchListTile), findsNWidgets(5));
+    expect(find.byType(SwitchListTile), findsNWidgets(4));
     expect(
       find.widgetWithText(FilledButton, 'Continue'),
       findsNothing,

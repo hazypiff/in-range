@@ -21,6 +21,21 @@ INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VAL
 UPDATE public.profiles SET display_name='A', dob='1990-01-01', age_verified=true, is_photo_verified=true, photo_urls=ARRAY['a.jpg'], is_paused=false, is_incognito=false WHERE id='a0000000-0000-0000-0000-00000000000a';
 UPDATE public.profiles SET display_name='B', dob='1990-01-01', age_verified=true, is_photo_verified=true, photo_urls=ARRAY['b.jpg'], is_paused=false, is_incognito=false WHERE id='b0000000-0000-0000-0000-00000000000b';
 UPDATE public.profiles SET display_name='C', dob='1990-01-01', age_verified=true, is_photo_verified=true, photo_urls=ARRAY['c.jpg'], is_paused=false, is_incognito=false WHERE id='c0000000-0000-0000-0000-00000000000c';
+-- 0045: discoverability now requires an approved photo_verifications row that
+-- matches a CURRENT photo (the denormalized boolean is no longer trusted).
+-- Give every verified fixture profile one; re-run after later fixture blocks.
+CREATE OR REPLACE FUNCTION pg_temp.approve_photos() RETURNS VOID LANGUAGE sql AS $fn$
+  INSERT INTO public.photo_verifications (user_id, photo_path, slot_index, state, decided_at)
+  SELECT p.id, p.photo_urls[1], 0, 'approved', NOW()
+    FROM public.profiles p
+   WHERE COALESCE(array_length(p.photo_urls, 1), 0) > 0
+     AND NOT EXISTS (
+       SELECT 1 FROM public.photo_verifications pv
+        WHERE pv.user_id = p.id AND pv.state = 'approved'
+          AND pv.photo_path = ANY(p.photo_urls));
+$fn$;
+SELECT pg_temp.approve_photos();
+
 
 -- live token claims (in history, which is what the server resolves against)
 INSERT INTO public.token_claim_history (token,user_id,valid_from,valid_until,approx_lat,approx_lon,range_type) VALUES
@@ -157,6 +172,8 @@ INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VAL
  ('e0000000-0000-0000-0000-00000000000e','00000000-0000-0000-0000-000000000000','authenticated','authenticated','sec_e@t.local',now(),now());
 UPDATE public.profiles SET display_name='D', dob='1990-01-01', age_verified=true, is_photo_verified=true, photo_urls=ARRAY['d.jpg'], is_paused=false, is_incognito=false WHERE id='d0000000-0000-0000-0000-00000000000d';
 UPDATE public.profiles SET display_name='E', dob='1990-01-01', age_verified=true, is_photo_verified=true, photo_urls=ARRAY['e.jpg'], is_paused=false, is_incognito=false WHERE id='e0000000-0000-0000-0000-00000000000e';
+SELECT pg_temp.approve_photos();
+
 -- both tokens in grace: valid_from 16 min ago, valid_until 1 min ago
 INSERT INTO public.token_claim_history (token,user_id,valid_from,valid_until,approx_lat,approx_lon,range_type) VALUES
  ('d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1','d0000000-0000-0000-0000-00000000000d', now()-interval '16 min', now()-interval '1 min', 38.9,-76.9,'feet_10'),
@@ -352,6 +369,8 @@ END $$;
 INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
  ('71000000-0000-0000-0000-000000000071','00000000-0000-0000-0000-000000000000','authenticated','authenticated','att_g@t.local',now(),now());
 UPDATE public.profiles SET display_name='G',dob='1990-01-01',is_active=true,age_verified=true,is_photo_verified=true,photo_urls=ARRAY['g.jpg'],is_paused=false,is_incognito=false WHERE id='71000000-0000-0000-0000-000000000071';
+SELECT pg_temp.approve_photos();
+
 UPDATE public.app_settings SET value_num=1 WHERE key='require_attestation';
 INSERT INTO public.app_settings (key,value_num) SELECT 'require_attestation',1
   WHERE NOT EXISTS (SELECT 1 FROM public.app_settings WHERE key='require_attestation');
@@ -782,6 +801,8 @@ INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VAL
 UPDATE public.profiles SET display_name='P',dob='1990-01-01',is_active=true,
   age_verified=true,is_photo_verified=true,photo_urls=ARRAY['p.jpg'],
   is_paused=false,is_incognito=false WHERE id='d1000000-0000-0000-0000-0000000000d1';
+SELECT pg_temp.approve_photos();
+
 
 DO $$
 DECLARE
@@ -972,6 +993,8 @@ INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VAL
 UPDATE public.profiles SET display_name='Q',dob='1990-01-01',is_active=true,
   age_verified=true,is_photo_verified=true,photo_urls=ARRAY['q.jpg'],
   is_paused=false,is_incognito=false WHERE id='f1000000-0000-0000-0000-0000000000f1';
+SELECT pg_temp.approve_photos();
+
 DO $$ BEGIN
   UPDATE public.app_settings SET value_num=0 WHERE key='enforce_batch_tokens';
   UPDATE public.app_settings SET value_num=0 WHERE key='require_attestation';
@@ -1203,6 +1226,213 @@ BEGIN
     'T25 withdrawal was not recorded';
   ASSERT EXISTS (SELECT 1 FROM public.location_pings WHERE user_id = v_e),
     'T25 a held subject erased their location evidence via consent withdrawal';
+END $$;
+
+-- ============ TEST 26: explicit withdrawal denies even with enforce_consent=0 =
+-- 0045: enforce_consent is a rollout flag for never-asked clients. It must not
+-- neutralize a recorded "no" — a withdrawn purpose rejects writes immediately.
+DO $$
+DECLARE
+  v_u UUID := '26a00000-0000-0000-0000-00000000026a';
+BEGIN
+  ASSERT COALESCE((SELECT value_num FROM public.app_settings WHERE key='enforce_consent'),0) = 0,
+    'T26 precondition: enforce_consent must be 0';
+  INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+    (v_u,'00000000-0000-0000-0000-000000000000','authenticated','authenticated','w26a@t.local',now(),now());
+  UPDATE public.profiles SET display_name='W26',dob='1990-01-01',is_active=true,
+    age_verified=true,photo_urls=ARRAY['26a.jpg'],is_paused=false,is_incognito=false
+   WHERE id=v_u;
+  INSERT INTO public.photo_verifications (user_id,photo_path,slot_index,state,decided_at)
+    VALUES (v_u,'26a.jpg',0,'approved',NOW());
+  -- record_sighting only accepts tokens that resolve in token_claim_history;
+  -- observe fixture-B's live claimed token.
+  INSERT INTO public.token_claim_history (token,user_id,valid_from,valid_until,approx_lat,approx_lon,range_type)
+    VALUES (repeat('26',16),'b0000000-0000-0000-0000-00000000000b',now()-interval '1 min',now()+interval '10 min',38.9,-76.9,'feet_10');
+
+  PERFORM set_config('request.jwt.claims',
+    json_build_object('sub',v_u,'role','authenticated')::text, true);
+  PERFORM public.grant_consent('ble_proximity','2026-07-20','test');
+  -- consented: the BLE write goes through with the flag off
+  PERFORM public.record_sighting(repeat('26',16), 38.9, -76.9, -60, now(), 'feet_10', 10.0);
+  PERFORM public.withdraw_consent('ble_proximity');
+  BEGIN
+    PERFORM public.record_sighting(repeat('26',16), 38.9, -76.9, -60, now(), 'feet_10', 10.0);
+    ASSERT false, 'T26 a withdrawn purpose accepted a BLE write while enforce_consent=0';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  PERFORM set_config('request.jwt.claims', NULL, true);
+END $$;
+
+-- ============ TEST 27: photo_processing withdrawal is effective ============
+-- Discoverability + verification drop immediately; pending checks cancel;
+-- user-facing assets queue for physical erasure (deferred under a hold);
+-- re-granting alone does NOT restore discovery — a new upload + verification
+-- pass is required.
+DO $$
+DECLARE
+  v_u UUID := '27a00000-0000-0000-0000-00000000027a';
+  v_h UUID := '27b00000-0000-0000-0000-00000000027b';
+BEGIN
+  INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+    (v_u,'00000000-0000-0000-0000-000000000000','authenticated','authenticated','w27a@t.local',now(),now()),
+    (v_h,'00000000-0000-0000-0000-000000000000','authenticated','authenticated','w27b@t.local',now(),now());
+  UPDATE public.profiles SET display_name='W27',dob='1990-01-01',is_active=true,
+    age_verified=true,photo_urls=ARRAY['27a.jpg'],is_paused=false,is_incognito=false
+   WHERE id=v_u;
+  UPDATE public.profiles SET display_name='W27H',dob='1990-01-01',is_active=true,
+    age_verified=true,photo_urls=ARRAY['27b.jpg'],is_paused=false,is_incognito=false
+   WHERE id=v_h;
+  INSERT INTO public.photo_verifications (user_id,photo_path,slot_index,state,decided_at) VALUES
+    (v_u,'27a.jpg',0,'approved',NOW()),
+    (v_h,'27b.jpg',0,'approved',NOW());
+  INSERT INTO public.photo_verifications (user_id,photo_path,slot_index,state)
+    VALUES (v_u,'27a-new.jpg',1,'ai_review');
+  INSERT INTO storage.objects (bucket_id,name) VALUES
+    ('profile_photos', v_u::text || '/photo0.jpg'),
+    ('profile_photos', v_h::text || '/photo0.jpg');
+
+  PERFORM set_config('request.jwt.claims',
+    json_build_object('sub',v_u,'role','authenticated')::text, true);
+  PERFORM public.grant_consent('photo_processing','2026-07-20','test');
+  ASSERT public.is_discoverable_user(v_u), 'T27 fixture should start discoverable';
+
+  PERFORM public.withdraw_consent('photo_processing');
+
+  ASSERT (SELECT COALESCE(array_length(photo_urls,1),0) FROM public.profiles WHERE id=v_u) = 0,
+    'T27 withdrawal left user-facing photo references';
+  ASSERT (SELECT is_photo_verified FROM public.profiles WHERE id=v_u) = FALSE,
+    'T27 withdrawal left the verified flag on';
+  ASSERT (SELECT state FROM public.photo_verifications WHERE user_id=v_u AND photo_path='27a-new.jpg')
+         = 'rejected',
+    'T27 withdrawal did not cancel the pending verification';
+  ASSERT (SELECT state FROM public.photo_verifications WHERE user_id=v_u AND photo_path='27a.jpg')
+         = 'approved',
+    'T27 withdrawal must keep terminal rows as audit trail';
+  ASSERT EXISTS (SELECT 1 FROM public.storage_deletion_queue
+                  WHERE user_id=v_u AND bucket_id='profile_photos'
+                    AND object_name = v_u::text || '/photo0.jpg'),
+    'T27 withdrawal did not queue the photo objects for erasure';
+  ASSERT NOT public.is_discoverable_user(v_u),
+    'T27 user remained discoverable after photo consent withdrawal';
+
+  PERFORM public.grant_consent('photo_processing','2026-07-20','test');
+  ASSERT NOT public.is_discoverable_user(v_u),
+    'T27 re-granting restored discovery without a new upload + verification';
+  PERFORM set_config('request.jwt.claims', NULL, true);
+
+  -- Held variant: withdrawal records + strips visibility, but physical
+  -- erasure is deferred (evidence preservation, T25 doctrine).
+  PERFORM public.place_legal_hold(v_h, 'law_enforcement', 'test', 'agency ref', NULL);
+  PERFORM set_config('request.jwt.claims',
+    json_build_object('sub',v_h,'role','authenticated')::text, true);
+  PERFORM public.grant_consent('photo_processing','2026-07-20','test');
+  PERFORM public.withdraw_consent('photo_processing');
+  PERFORM set_config('request.jwt.claims', NULL, true);
+
+  ASSERT (SELECT COALESCE(array_length(photo_urls,1),0) FROM public.profiles WHERE id=v_h) = 0,
+    'T27 held withdrawal must still strip user-facing references';
+  ASSERT NOT EXISTS (SELECT 1 FROM public.storage_deletion_queue WHERE user_id=v_h),
+    'T27 a held subject''s photo objects were queued for destruction';
+END $$;
+
+-- ============ TEST 28: ble_proximity withdrawal revokes tokens + sightings =
+DO $$
+DECLARE
+  v_u UUID := '28a00000-0000-0000-0000-00000000028a';  -- withdraws
+  v_o UUID := '28b00000-0000-0000-0000-00000000028b';  -- observed them
+  v_h UUID := '28c00000-0000-0000-0000-00000000028c';  -- held
+BEGIN
+  INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+    (v_u,'00000000-0000-0000-0000-000000000000','authenticated','authenticated','w28a@t.local',now(),now()),
+    (v_o,'00000000-0000-0000-0000-000000000000','authenticated','authenticated','w28b@t.local',now(),now()),
+    (v_h,'00000000-0000-0000-0000-000000000000','authenticated','authenticated','w28c@t.local',now(),now());
+  INSERT INTO public.token_claims (user_id,token,valid_from,valid_until) VALUES
+    (v_u, repeat('a8',16), NOW()-INTERVAL '5 min', NOW()+INTERVAL '10 min'),
+    (v_h, repeat('c8',16), NOW()-INTERVAL '5 min', NOW()+INTERVAL '10 min');
+  INSERT INTO public.sightings (observer_user_id,observed_token,rssi,observed_at,observer_lat,observer_lon,range_type) VALUES
+    (v_u, repeat('77',16), -60, NOW(), 38.9, -76.9, 'feet_10'),   -- BY withdrawer
+    (v_o, repeat('a8',16), -60, NOW(), 38.9, -76.9, 'feet_10'),   -- OF withdrawer's token
+    (v_o, repeat('66',16), -60, NOW(), 38.9, -76.9, 'feet_10');   -- unrelated
+
+  PERFORM set_config('request.jwt.claims',
+    json_build_object('sub',v_u,'role','authenticated')::text, true);
+  PERFORM public.grant_consent('ble_proximity','2026-07-20','test');
+  PERFORM public.withdraw_consent('ble_proximity');
+  PERFORM set_config('request.jwt.claims', NULL, true);
+
+  ASSERT NOT EXISTS (SELECT 1 FROM public.token_claims WHERE user_id=v_u),
+    'T28 withdrawal left active token claims';
+  ASSERT NOT EXISTS (SELECT 1 FROM public.sightings WHERE observer_user_id=v_u),
+    'T28 withdrawal left sightings recorded BY the user';
+  ASSERT NOT EXISTS (SELECT 1 FROM public.sightings WHERE observed_token=repeat('a8',16)),
+    'T28 withdrawal left sightings OF the user''s tokens';
+  ASSERT EXISTS (SELECT 1 FROM public.sightings
+                  WHERE observer_user_id=v_o AND observed_token=repeat('66',16)),
+    'T28 withdrawal deleted an unrelated user''s sighting';
+
+  -- Held variant: recorded, destruction deferred.
+  PERFORM public.place_legal_hold(v_h, 'law_enforcement', 'test', 'agency ref', NULL);
+  PERFORM set_config('request.jwt.claims',
+    json_build_object('sub',v_h,'role','authenticated')::text, true);
+  PERFORM public.grant_consent('ble_proximity','2026-07-20','test');
+  PERFORM public.withdraw_consent('ble_proximity');
+  PERFORM set_config('request.jwt.claims', NULL, true);
+  ASSERT EXISTS (SELECT 1 FROM public.token_claims WHERE user_id=v_h),
+    'T28 a held subject erased BLE evidence via consent withdrawal';
+END $$;
+
+-- ============ TEST 29: sensitive_profile withdrawal removes discovery ======
+DO $$
+DECLARE
+  v_u UUID := '29a00000-0000-0000-0000-00000000029a';
+BEGIN
+  INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+    (v_u,'00000000-0000-0000-0000-000000000000','authenticated','authenticated','w29a@t.local',now(),now());
+  UPDATE public.profiles SET display_name='W29',dob='1990-01-01',is_active=true,
+    age_verified=true,photo_urls=ARRAY['29a.jpg'],is_paused=false,is_incognito=false
+   WHERE id=v_u;
+  INSERT INTO public.photo_verifications (user_id,photo_path,slot_index,state,decided_at)
+    VALUES (v_u,'29a.jpg',0,'approved',NOW());
+  ASSERT public.is_discoverable_user(v_u), 'T29 fixture should start discoverable';
+
+  PERFORM set_config('request.jwt.claims',
+    json_build_object('sub',v_u,'role','authenticated')::text, true);
+  PERFORM public.grant_consent('sensitive_profile','2026-07-20','test');
+  PERFORM public.withdraw_consent('sensitive_profile');
+  ASSERT NOT public.is_discoverable_user(v_u),
+    'T29 user remained in discovery after sensitive_profile withdrawal';
+  PERFORM public.grant_consent('sensitive_profile','2026-07-20','test');
+  ASSERT public.is_discoverable_user(v_u),
+    'T29 re-granting sensitive_profile did not restore discovery';
+  PERFORM set_config('request.jwt.claims', NULL, true);
+END $$;
+
+-- ============ TEST 30: approved verification row is the source of truth ====
+-- The denormalized is_photo_verified boolean alone (prod had 7 such profiles)
+-- must NOT make a profile discoverable; an approved row for a photo the
+-- profile currently references must.
+DO $$
+DECLARE
+  v_u UUID := '30a00000-0000-0000-0000-00000000030a';
+BEGIN
+  INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+    (v_u,'00000000-0000-0000-0000-000000000000','authenticated','authenticated','w30a@t.local',now(),now());
+  UPDATE public.profiles SET display_name='W30',dob='1990-01-01',is_active=true,
+    age_verified=true,is_photo_verified=TRUE,photo_urls=ARRAY['30a.jpg'],
+    is_paused=false,is_incognito=false
+   WHERE id=v_u;
+  ASSERT NOT public.is_discoverable_user(v_u),
+    'T30 the denormalized boolean alone made a profile discoverable';
+
+  INSERT INTO public.photo_verifications (user_id,photo_path,slot_index,state,decided_at)
+    VALUES (v_u,'someone-elses.jpg',0,'approved',NOW());
+  ASSERT NOT public.is_discoverable_user(v_u),
+    'T30 an approved row for a NON-current photo made a profile discoverable';
+
+  INSERT INTO public.photo_verifications (user_id,photo_path,slot_index,state,decided_at)
+    VALUES (v_u,'30a.jpg',1,'approved',NOW());
+  ASSERT public.is_discoverable_user(v_u),
+    'T30 an approved row for the current photo did not restore discovery';
 END $$;
 
 SELECT '✅ ALL RECIPROCITY SECURITY INVARIANTS PASSED' AS result;

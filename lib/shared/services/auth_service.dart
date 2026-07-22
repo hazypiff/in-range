@@ -20,6 +20,14 @@ class AuthService {
       _client?.auth.onAuthStateChange ?? const Stream.empty();
 
   /// Email + password sign-up (sends confirmation if enabled in Dashboard).
+  ///
+  /// DOB and display name are stored at signup, BEFORE the consent screen.
+  /// That is deliberate and must stay reflected in the privacy policy: the
+  /// lawful basis for DOB here is the 18+ age gate (legal obligation /
+  /// contractual necessity — see AgeGate and *Doe v. Grindr* on neutral
+  /// self-attested DOB), not consent, so it cannot wait for the consent step.
+  /// Neither field is sensitive-category data; everything sensitive (gender,
+  /// orientation, photos) is collected only behind the ConsentGate.
   Future<AuthResponse> signUpEmail({
     required String email,
     required String password,

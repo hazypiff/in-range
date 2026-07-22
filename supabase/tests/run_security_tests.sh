@@ -70,6 +70,10 @@ INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VAL
  ('$Y','00000000-0000-0000-0000-000000000000','authenticated','authenticated','conc_y@t.local',now(),now());
 UPDATE public.profiles SET display_name='X',dob='1990-01-01',is_active=true,age_verified=true,is_photo_verified=true,photo_urls=ARRAY['x.jpg'],is_paused=false,is_incognito=false WHERE id='$X';
 UPDATE public.profiles SET display_name='Y',dob='1990-01-01',is_active=true,age_verified=true,is_photo_verified=true,photo_urls=ARRAY['y.jpg'],is_paused=false,is_incognito=false WHERE id='$Y';
+-- 0045: discoverability requires an approved verification row for the current photo
+INSERT INTO public.photo_verifications (user_id,photo_path,slot_index,state,decided_at) VALUES
+ ('$X','x.jpg',0,'approved',now()),
+ ('$Y','y.jpg',0,'approved',now());
 INSERT INTO public.token_claim_history (token,user_id,valid_from,valid_until,approx_lat,approx_lon,range_type) VALUES
  ('$XT','$X', now()-interval '10 s', now()+interval '10 min', 38.9,-76.9,'feet_10'),
  ('$YT','$Y', now()-interval '10 s', now()+interval '10 min', 38.9,-76.9,'feet_10');

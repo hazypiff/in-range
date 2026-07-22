@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:in_range/features/beacon/beacon_provider.dart';
 import 'package:in_range/shared/services/consent_service.dart';
+import 'package:in_range/shared/services/photo_url_service.dart';
 
 /// Where the policy documents live.
 ///
@@ -73,23 +75,21 @@ const _items = <_Item>[
         'to improve distance accuracy. Deleted from our servers after 24 hours.',
     required_: true,
   ),
-  _Item(
-    purpose: ConsentPurpose.backgroundLocation,
-    title: 'Detect encounters when the app is closed',
-    body:
-        'Lets In Range notice someone you walked past while your phone was in '
-        'your pocket. Without this, encounters are only detected while the app '
-        'is open.',
-    required_: false,
-  ),
+  // A profile photo is mandatory (you cannot be shown to others without one),
+  // so asking for photo consent as "optional" was contradictory — an optional
+  // "no" plus a required photo is not a real choice. Required, honestly.
   _Item(
     purpose: ConsentPurpose.photoProcessing,
     title: 'Profile photos',
     body: 'Storing your photos and checking them against our safety rules. '
-        'Location data is stripped from every photo before it leaves your '
-        'phone.',
-    required_: false,
+        'A photo is required to be shown to others. Location data is stripped '
+        'from every photo before it leaves your phone.',
+    required_: true,
   ),
+  // background_location is deliberately NOT offered: no shipped feature
+  // collects location in the background yet, and asking consent for
+  // processing that does not exist is over-collection by another name.
+  // Re-add the card when (if) the feature ships.
 ];
 
 /// Unbundled, purpose-scoped consent.
@@ -175,6 +175,17 @@ class _ConsentScreenState extends ConsumerState<ConsentScreen> {
         await _service.grant(item.purpose, uiSurface: _surface);
       } else {
         await _service.withdraw(item.purpose);
+        // Withdrawal must stop the processing on this device too, not just
+        // record a preference on the server.
+        if (item.purpose == ConsentPurpose.bleProximity &&
+            ref.read(beaconControllerProvider).isOn) {
+          await ref.read(beaconControllerProvider.notifier).toggle();
+        }
+        if (item.purpose == ConsentPurpose.photoProcessing) {
+          // The server wiped the photo references; drop cached URLs so the
+          // UI stops showing them.
+          PhotoUrlService.clearCache();
+        }
       }
     } catch (e) {
       if (!mounted) return;
@@ -242,9 +253,11 @@ class _ConsentScreenState extends ConsumerState<ConsentScreen> {
           Text('Needed to use In Range',
               style: Theme.of(context).textTheme.titleSmall),
           for (final item in required) _tile(item),
-          const SizedBox(height: 16),
-          Text('Optional', style: Theme.of(context).textTheme.titleSmall),
-          for (final item in optional) _tile(item),
+          if (optional.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Text('Optional', style: Theme.of(context).textTheme.titleSmall),
+            for (final item in optional) _tile(item),
+          ],
           const Divider(height: 32),
           Wrap(
             spacing: 16,
