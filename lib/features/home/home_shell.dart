@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:in_range/core/navigation/home_tab.dart';
 import 'package:in_range/features/beacon/beacon_screen.dart';
-import 'package:in_range/features/beacon/beacon_provider.dart';
 import 'package:in_range/features/chat/messages_screen.dart';
 import 'package:in_range/features/encounters/encounters_screen.dart';
 import 'package:in_range/features/encounters/local_encounter_store.dart';
@@ -108,14 +107,13 @@ class _HomeShellState extends ConsumerState<HomeShell>
         onDestinationSelected: (i) async {
           final previous = ref.read(homeTabIndexProvider);
           ref.read(homeTabIndexProvider.notifier).state = i;
+          // Locals is ambient: opening the tab takes its ONE foreground
+          // location fix; leaving the tab always releases it (the beacon is
+          // BLE-only and never keeps location alive — issue #2).
           if (i == 2) {
             await ref.read(localsControllerProvider.notifier).start();
           } else if (previous == 2) {
-            final beaconOn = ref.read(beaconControllerProvider).isOn;
-            final miles = ref.read(selectedRangeProvider).startsWith('miles');
-            if (!beaconOn || !miles) {
-              await ref.read(localsControllerProvider.notifier).stop();
-            }
+            await ref.read(localsControllerProvider.notifier).stop();
           }
         },
         destinations: [

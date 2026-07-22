@@ -7,6 +7,11 @@ import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/shared/services/encounters_api.dart';
 
 /// Own GPS ping for Locals (miles). Server upload when Supabase is real.
+///
+/// Locals is AMBIENT (owner decision 2026-07-21, issue #2): ONE coarse
+/// foreground fix when the Locals tab is opened defines "your area" — no
+/// periodic timer, no position stream, never sampled in the background.
+/// Real-time proximity is BLE-only (the beacon).
 class LocalsState {
   const LocalsState({
     this.lat,
@@ -66,8 +71,6 @@ class LocalsController extends StateNotifier<LocalsState> {
   LocalsController() : super(const LocalsState());
 
   final _api = EncountersApi();
-  Timer? _timer;
-  StreamSubscription<Position>? _sub;
   String _range = 'miles_10';
   bool _refreshing = false;
   bool _applyingPosition = false;
@@ -81,40 +84,15 @@ class LocalsController extends StateNotifier<LocalsState> {
     }
   }
 
-  /// Start periodic GPS for Locals tab (no BLE required).
+  /// One coarse foreground fix for the Locals tab (no BLE required).
+  /// Called on tab open / pull-to-refresh — this is the ONLY place the
+  /// Locals feature ever touches location. No timer, no stream.
   Future<void> start() async {
-    if (state.broadcasting) {
-      await _refreshOnce();
-      return;
-    }
     state = state.copyWith(broadcasting: true, clearError: true);
     await _refreshOnce();
-    _timer?.cancel();
-    _timer = Timer.periodic(const Duration(seconds: 45), (_) {
-      _refreshOnce();
-    });
-    try {
-      _sub?.cancel();
-      _sub = Geolocator.getPositionStream(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.medium,
-          distanceFilter: 50,
-        ),
-      ).listen((pos) {
-        unawaited(_applyPosition(pos));
-      }, onError: (e) {
-        debugPrint('Locals stream error: $e');
-      });
-    } catch (e) {
-      debugPrint('Locals stream start failed: $e');
-    }
   }
 
   Future<void> stop() async {
-    _timer?.cancel();
-    _timer = null;
-    await _sub?.cancel();
-    _sub = null;
     state = state.copyWith(broadcasting: false);
   }
 
@@ -124,9 +102,10 @@ class LocalsController extends StateNotifier<LocalsState> {
     try {
       Position? pos = await Geolocator.getLastKnownPosition();
       if (pos == null || !_isFresh(pos)) {
+        // Coarse is enough — "your area," not your street corner.
         pos = await Geolocator.getCurrentPosition(
           locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.medium,
+            accuracy: LocationAccuracy.low,
             timeLimit: Duration(seconds: 8),
           ),
         );
@@ -207,12 +186,6 @@ class LocalsController extends StateNotifier<LocalsState> {
       DateTime.now().difference(position.timestamp).abs() <=
       const Duration(minutes: 2);
 
-  @override
-  void dispose() {
-    _timer?.cancel();
-    _sub?.cancel();
-    super.dispose();
-  }
 }
 
 final localsControllerProvider =

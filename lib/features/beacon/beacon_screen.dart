@@ -6,7 +6,6 @@ import 'package:in_range/core/privacy/safety_store.dart';
 import 'package:in_range/features/beacon/beacon_provider.dart';
 import 'package:in_range/features/beacon/lighthouse_beacon.dart';
 import 'package:in_range/features/encounters/local_encounter_store.dart';
-import 'package:in_range/features/locals/locals_service.dart';
 import 'package:in_range/features/widgets/ad_banner.dart';
 
 class BeaconScreen extends ConsumerStatefulWidget {
@@ -22,17 +21,16 @@ class _BeaconScreenState extends ConsumerState<BeaconScreen> {
   Future<void> _doToggle() async {
     setState(() => _lastError = null);
     final safety = ref.read(safetyStoreProvider);
-    final range = ref.read(selectedRangeProvider);
-    final isMiles = range.startsWith('miles');
 
     try {
+      // The beacon is a pure BLE switch (owner decision 2026-07-21, issue
+      // #2): Locals/miles is ambient and never couples to this toggle.
       final beacon = ref.read(beaconControllerProvider);
       if (beacon.isOn) {
         await ref.read(beaconControllerProvider.notifier).toggle(
               onBackgroundDisclosure: () =>
                   showBackgroundLocationDisclosure(context),
             );
-        if (isMiles) await ref.read(localsControllerProvider.notifier).stop();
         return;
       }
 
@@ -44,25 +42,10 @@ class _BeaconScreenState extends ConsumerState<BeaconScreen> {
         return;
       }
 
-      if (isMiles) {
-        // Miles mode: GPS logging while beacon ON (product outline).
-        await ref.read(localsControllerProvider.notifier).start();
-        try {
-          await ref.read(beaconControllerProvider.notifier).toggle(
-                onBackgroundDisclosure: () =>
-                    showBackgroundLocationDisclosure(context),
-              );
-        } catch (_) {
-          await ref.read(localsControllerProvider.notifier).stop();
-          rethrow;
-        }
-        // BLE still runs for hybrid discovery; miles is continuous GPS.
-      } else {
-        await ref.read(beaconControllerProvider.notifier).toggle(
-              onBackgroundDisclosure: () =>
-                  showBackgroundLocationDisclosure(context),
-            );
-      }
+      await ref.read(beaconControllerProvider.notifier).toggle(
+            onBackgroundDisclosure: () =>
+                showBackgroundLocationDisclosure(context),
+          );
 
       final s = ref.read(beaconControllerProvider);
       if (!s.isOn && mounted) {
@@ -94,11 +77,9 @@ class _BeaconScreenState extends ConsumerState<BeaconScreen> {
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(beaconControllerProvider);
-    final range = ref.watch(selectedRangeProvider);
     final newCount = ref.watch(newEncounterCountProvider);
     final pending = ref.watch(pendingRevealCountProvider);
     final safety = ref.watch(safetyStoreProvider);
-    final isMiles = range.startsWith('miles');
 
     return Scaffold(
       appBar: AppBar(title: const Text('Beacon')),
@@ -160,9 +141,7 @@ class _BeaconScreenState extends ConsumerState<BeaconScreen> {
           ),
           const SizedBox(height: 8),
           Text(
-            isMiles
-                ? 'Miles: continuous GPS while Beacon ON · indefinite until swiped'
-                : 'Feet: continuous BLE while both beacons ON · 24h to swipe',
+            'Continuous BLE while both beacons ON · 24h to swipe',
             style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
           ),
           const SizedBox(height: 20),
@@ -182,8 +161,9 @@ class _BeaconScreenState extends ConsumerState<BeaconScreen> {
             child: const Padding(
               padding: EdgeInsets.all(16),
               child: Text(
-                'Beacon ON = findable. Incognito (Settings) stops advertising. '
-                'Feet uses Bluetooth; Miles keeps location logging on. '
+                'Beacon ON = findable, using Bluetooth only. Incognito '
+                '(Settings) stops advertising. Locals uses one location '
+                'check when you open that tab — never in the background. '
                 'Background mode is best-effort on Android 10.',
                 style: TextStyle(fontSize: 13, height: 1.35),
               ),
