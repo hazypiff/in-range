@@ -80,11 +80,15 @@ class _LocalsScreenState extends ConsumerState<LocalsScreen> {
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _GpsCard(gps: gps),
+          _GpsCard(
+            gps: gps,
+            onRefresh: () =>
+                ref.read(localsControllerProvider.notifier).start(),
+          ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
             child: Text(
-              'Near you · miles (GPS) · indefinite until swiped',
+              'People in your area · from your last location check',
               style: Theme.of(context).textTheme.titleSmall?.copyWith(
                     color: Colors.grey.shade700,
                   ),
@@ -150,8 +154,18 @@ class _LocalsScreenState extends ConsumerState<LocalsScreen> {
 }
 
 class _GpsCard extends StatelessWidget {
-  const _GpsCard({required this.gps});
+  const _GpsCard({required this.gps, required this.onRefresh});
   final LocalsState gps;
+  final VoidCallback onRefresh;
+
+  static String _ago(DateTime? t) {
+    if (t == null) return '—';
+    final d = DateTime.now().difference(t.toLocal());
+    if (d.inMinutes < 1) return 'just now';
+    if (d.inMinutes < 60) return '${d.inMinutes}m ago';
+    if (d.inHours < 24) return '${d.inHours}h ago';
+    return '${d.inDays}d ago';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -177,12 +191,18 @@ class _GpsCard extends StatelessWidget {
                     style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
                 ),
+                IconButton(
+                  tooltip: 'Update my area',
+                  onPressed: onRefresh,
+                  icon: const Icon(Icons.refresh),
+                ),
               ],
             ),
             if (gps.hasFix) ...[
               const SizedBox(height: 6),
               Text(
-                'Updated ${gps.updatedAt?.toLocal().toString().substring(0, 19) ?? "—"}',
+                'Location checked ${_ago(gps.updatedAt)} — tap refresh to '
+                'update your area',
                 style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
               ),
             ],
