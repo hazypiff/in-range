@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:geocoding/geocoding.dart' as geo;
 import 'package:geolocator/geolocator.dart';
 import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/shared/services/encounters_api.dart';
@@ -20,6 +21,7 @@ class LocalsState {
     this.error,
     this.broadcasting = false,
     this.neighborhood = 'Your area',
+    this.placeLabel,
     this.serverPeers = const [],
     this.usingServer = false,
     this.lastSyncError,
@@ -31,6 +33,11 @@ class LocalsState {
   final String? error;
   final bool broadcasting;
   final String neighborhood;
+
+  /// Reverse-geocoded place name for the OWN-device card only ("Norwalk,
+  /// CT"), so a refresh visibly stamps the new area. NEVER synced — the
+  /// server/other users only ever see the coarse [neighborhood].
+  final String? placeLabel;
 
   /// Rows from get_locals_feed when cloud is live.
   final List<Map<String, dynamic>> serverPeers;
@@ -46,6 +53,7 @@ class LocalsState {
     String? error,
     bool? broadcasting,
     String? neighborhood,
+    String? placeLabel,
     List<Map<String, dynamic>>? serverPeers,
     bool? usingServer,
     String? lastSyncError,
@@ -59,6 +67,7 @@ class LocalsState {
       error: clearError ? null : (error ?? this.error),
       broadcasting: broadcasting ?? this.broadcasting,
       neighborhood: neighborhood ?? this.neighborhood,
+      placeLabel: placeLabel ?? this.placeLabel,
       serverPeers: serverPeers ?? this.serverPeers,
       usingServer: usingServer ?? this.usingServer,
       lastSyncError:
@@ -129,9 +138,11 @@ class LocalsController extends StateNotifier<LocalsState> {
         lon: pos.longitude,
         updatedAt: pos.timestamp,
         neighborhood: hood,
+        placeLabel: await _reverseGeocode(pos),
         clearError: true,
         broadcasting: true,
       );
+      // Server gets the coarse label only — placeLabel stays on-device.
       await _syncServer(pos.latitude, pos.longitude, hood);
     } finally {
       _applyingPosition = false;
@@ -181,6 +192,26 @@ class LocalsController extends StateNotifier<LocalsState> {
 
   /// Avoid encoding coordinates into a human-readable field or notification.
   static String _coarseNeighborhood() => 'Nearby';
+
+  /// Own-device display only (see [LocalsState.placeLabel]). Best-effort:
+  /// falls back to rounded coordinates so a refresh always visibly stamps
+  /// SOMETHING new, even offline.
+  static Future<String> _reverseGeocode(Position pos) async {
+    try {
+      final marks =
+          await geo.placemarkFromCoordinates(pos.latitude, pos.longitude);
+      final m = marks.isEmpty ? null : marks.first;
+      final parts = [m?.locality, m?.administrativeArea]
+          .whereType<String>()
+          .where((s) => s.isNotEmpty)
+          .toList();
+      if (parts.isNotEmpty) return parts.join(', ');
+    } catch (e) {
+      debugPrint('Locals reverse-geocode failed: $e');
+    }
+    return '${pos.latitude.toStringAsFixed(2)}, '
+        '${pos.longitude.toStringAsFixed(2)}';
+  }
 
   static bool _isFresh(Position position) =>
       DateTime.now().difference(position.timestamp).abs() <=

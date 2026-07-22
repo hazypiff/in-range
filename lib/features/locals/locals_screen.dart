@@ -185,9 +185,7 @@ class _GpsCard extends StatelessWidget {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    gps.hasFix
-                        ? 'Sharing coarse location · ${gps.neighborhood}'
-                        : 'Acquiring GPS…',
+                    gps.hasFix ? 'Sharing coarse location' : 'Acquiring GPS…',
                     style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
                 ),
@@ -199,7 +197,13 @@ class _GpsCard extends StatelessWidget {
               ],
             ),
             if (gps.hasFix) ...[
-              const SizedBox(height: 6),
+              const SizedBox(height: 4),
+              // Own-device stamp only — other users still just see "Nearby".
+              Text(
+                gps.placeLabel ?? gps.neighborhood,
+                style: const TextStyle(fontSize: 14),
+              ),
+              const SizedBox(height: 4),
               Text(
                 'Location checked ${_ago(gps.updatedAt)} — tap refresh to '
                 'update your area',
