@@ -47,6 +47,11 @@ class ConsentService {
   /// and its versioning scheme.
   static const String policyVersion = '2026-07-20';
 
+  /// Whether consent can be recorded at all (real backend + signed in).
+  /// Callers that gate features on consent skip the gate when this is false —
+  /// there is no server to record against, and nothing leaves the device.
+  bool get ready => _ready;
+
   /// Never throws: AppConfig reads dotenv, which is not initialised in every
   /// context (tests, early boot). A consent screen must still render.
   bool get _ready {

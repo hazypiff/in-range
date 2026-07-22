@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geocoding/geocoding.dart' as geo;
 import 'package:geolocator/geolocator.dart';
 import 'package:in_range/core/config/app_config.dart';
+import 'package:in_range/shared/services/consent_service.dart';
 import 'package:in_range/shared/services/encounters_api.dart';
 
 /// Own GPS ping for Locals (miles). Server upload when Supabase is real.
@@ -25,6 +26,7 @@ class LocalsState {
     this.serverPeers = const [],
     this.usingServer = false,
     this.lastSyncError,
+    this.consentRequired = false,
   });
 
   final double? lat;
@@ -44,6 +46,10 @@ class LocalsState {
   final bool usingServer;
   final String? lastSyncError;
 
+  /// True when the user has not granted (or has withdrawn) precise-location
+  /// consent: no GPS is touched and the screen offers the consent screen.
+  final bool consentRequired;
+
   bool get hasFix => lat != null && lon != null;
 
   LocalsState copyWith({
@@ -57,6 +63,7 @@ class LocalsState {
     List<Map<String, dynamic>>? serverPeers,
     bool? usingServer,
     String? lastSyncError,
+    bool? consentRequired,
     bool clearError = false,
     bool clearSyncError = false,
   }) {
@@ -72,6 +79,7 @@ class LocalsState {
       usingServer: usingServer ?? this.usingServer,
       lastSyncError:
           clearSyncError ? null : (lastSyncError ?? this.lastSyncError),
+      consentRequired: consentRequired ?? this.consentRequired,
     );
   }
 }
@@ -83,6 +91,11 @@ class LocalsController extends StateNotifier<LocalsState> {
   String _range = 'miles_10';
   bool _refreshing = false;
   bool _applyingPosition = false;
+
+  /// Cached consent check so tab-hopping doesn't re-hit my_consents; short
+  /// enough that a withdrawal in Settings takes effect on the next open.
+  bool? _consentOk;
+  DateTime? _consentCheckedAt;
 
   void setRange(String range) {
     _range = const {'miles_1', 'miles_5', 'miles_10'}.contains(range)
@@ -97,7 +110,18 @@ class LocalsController extends StateNotifier<LocalsState> {
   /// Called on tab open / pull-to-refresh — this is the ONLY place the
   /// Locals feature ever touches location. No timer, no stream.
   Future<void> start() async {
-    state = state.copyWith(broadcasting: true, clearError: true);
+    // Consent BEFORE collection: server-side require_consent only protects
+    // the upload; the GPS fix and the platform reverse-geocode happen here
+    // on-device, so the client must check first. Fail closed.
+    if (!await _locationConsentOk()) {
+      state = state.copyWith(broadcasting: false, consentRequired: true);
+      return;
+    }
+    state = state.copyWith(
+      broadcasting: true,
+      consentRequired: false,
+      clearError: true,
+    );
     await _refreshOnce();
   }
 
@@ -105,8 +129,41 @@ class LocalsController extends StateNotifier<LocalsState> {
     state = state.copyWith(broadcasting: false);
   }
 
+  /// Sign-out: forget the previous user's coordinates and place label.
+  void reset() {
+    _consentOk = null;
+    _consentCheckedAt = null;
+    state = const LocalsState();
+  }
+
+  Future<bool> _locationConsentOk() async {
+    const service = ConsentService();
+    // Dev mode / signed out: nothing is uploaded and there is no server to
+    // check against — behave as before.
+    if (!service.ready) return true;
+    final checkedAt = _consentCheckedAt;
+    if (_consentOk != null &&
+        checkedAt != null &&
+        DateTime.now().difference(checkedAt) < const Duration(minutes: 2)) {
+      return _consentOk!;
+    }
+    final current = await service.current(); // {} on failure → fail closed
+    _consentOk = current[ConsentPurpose.preciseLocation] == true;
+    _consentCheckedAt = DateTime.now();
+    return _consentOk!;
+  }
+
   Future<void> _refreshOnce() async {
     if (_refreshing) return;
+    // Cooldown: a tap that arrives seconds after a successful pipeline run
+    // would re-send the same coordinates and re-hit the platform geocoder
+    // for nothing. GPS itself is already reuse-cached via _isFresh.
+    final last = state.updatedAt;
+    if (state.hasFix &&
+        last != null &&
+        DateTime.now().difference(last).abs() < const Duration(seconds: 30)) {
+      return;
+    }
     _refreshing = true;
     try {
       Position? pos = await Geolocator.getLastKnownPosition();
@@ -183,9 +240,18 @@ class LocalsController extends StateNotifier<LocalsState> {
       );
     } catch (e) {
       debugPrint('Locals server sync: $e');
+      // require_consent raises 'Consent required for <purpose>' (42501) once
+      // enforce_consent flips on — surface that specifically so the screen
+      // can route to the consent screen instead of a generic sync message.
+      final consentDenied = e.toString().contains('Consent required');
+      if (consentDenied) {
+        _consentOk = false;
+        _consentCheckedAt = DateTime.now();
+      }
       state = state.copyWith(
         usingServer: false,
-        lastSyncError: 'sync_failed',
+        lastSyncError: consentDenied ? 'consent_required' : 'sync_failed',
+        consentRequired: consentDenied ? true : null,
       );
     }
   }
@@ -198,8 +264,12 @@ class LocalsController extends StateNotifier<LocalsState> {
   /// SOMETHING new, even offline.
   static Future<String> _reverseGeocode(Position pos) async {
     try {
-      final marks =
-          await geo.placemarkFromCoordinates(pos.latitude, pos.longitude);
+      // Round to ~2 decimals (~1 km) before the platform geocoder call — the
+      // coordinates leave the device (Google/Apple resolve them), and city-
+      // level display never needs street-level input.
+      final lat = (pos.latitude * 100).roundToDouble() / 100;
+      final lon = (pos.longitude * 100).roundToDouble() / 100;
+      final marks = await geo.placemarkFromCoordinates(lat, lon);
       final m = marks.isEmpty ? null : marks.first;
       final parts = [m?.locality, m?.administrativeArea]
           .whereType<String>()

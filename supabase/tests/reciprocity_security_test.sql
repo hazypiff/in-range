@@ -986,5 +986,224 @@ DO $$ BEGIN
   PERFORM set_config('request.jwt.claims', NULL, true);
 END $$;
 
+-- ============ TEST 21: media_hashes cannot be forged (0043) ============
+-- The NCII fan-out trusts media_hashes; an attacker must not be able to map a
+-- victim's object path to an arbitrary hash (weaponized takedown) or pre-claim
+-- a victim's path (PK DoS).
+INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+ ('21a00000-0000-0000-0000-00000000021a','00000000-0000-0000-0000-000000000000','authenticated','authenticated','hash_a@t.local',now(),now()),
+ ('21b00000-0000-0000-0000-00000000021b','00000000-0000-0000-0000-000000000000','authenticated','authenticated','hash_b@t.local',now(),now());
+DO $$
+BEGIN
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"21a00000-0000-0000-0000-00000000021a","role":"authenticated"}', true);
+  SET LOCAL ROLE authenticated;
+
+  -- Own chat_media path (<match>/<uid>/...) records fine.
+  INSERT INTO public.media_hashes (bucket_id, object_name, sha256, user_id)
+  VALUES ('chat_media', '77/21a00000-0000-0000-0000-00000000021a/own.jpg',
+          repeat('a', 64), '21a00000-0000-0000-0000-00000000021a');
+
+  -- The victim's path must be rejected even with user_id = the caller.
+  BEGIN
+    INSERT INTO public.media_hashes (bucket_id, object_name, sha256, user_id)
+    VALUES ('chat_media', '77/21b00000-0000-0000-0000-00000000021b/victim.jpg',
+            repeat('b', 64), '21a00000-0000-0000-0000-00000000021a');
+    ASSERT false, 'T21 a user forged a media_hashes row for someone else''s object';
+  EXCEPTION WHEN sqlstate '42501' THEN NULL; END;
+
+  -- Profile bucket: only the caller's own folder.
+  BEGIN
+    INSERT INTO public.media_hashes (bucket_id, object_name, sha256, user_id)
+    VALUES ('profile_photos', '21b00000-0000-0000-0000-00000000021b/p.jpg',
+            repeat('c', 64), '21a00000-0000-0000-0000-00000000021a');
+    ASSERT false, 'T21 a user forged a profile-photo hash for someone else';
+  EXCEPTION WHEN sqlstate '42501' THEN NULL; END;
+
+  -- Unknown buckets are rejected outright.
+  BEGIN
+    INSERT INTO public.media_hashes (bucket_id, object_name, sha256, user_id)
+    VALUES ('some_bucket', '21a00000-0000-0000-0000-00000000021a/x.jpg',
+            repeat('d', 64), '21a00000-0000-0000-0000-00000000021a');
+    ASSERT false, 'T21 media_hashes accepted an unknown bucket';
+  EXCEPTION WHEN sqlstate '42501' THEN NULL; END;
+
+  RESET ROLE;
+  PERFORM set_config('request.jwt.claims', NULL, true);
+END $$;
+
+-- ============ TEST 22: deletion cannot outrun review (0044, H1) ============
+-- An OPEN report's conversation must be snapshotted before the subject's
+-- self-deletion redacts it. Also checks the widened 'other' triage prompt.
+INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+ ('22a00000-0000-0000-0000-00000000022a','00000000-0000-0000-0000-000000000000','authenticated','authenticated','ev_reporter@t.local',now(),now()),
+ ('22b00000-0000-0000-0000-00000000022b','00000000-0000-0000-0000-000000000000','authenticated','authenticated','ev_subject@t.local',now(),now());
+UPDATE public.profiles SET display_name='EvReporter',dob='1990-01-01',is_active=true
+  WHERE id='22a00000-0000-0000-0000-00000000022a';
+UPDATE public.profiles SET display_name='EvSubject',dob='1990-01-01',is_active=true
+  WHERE id='22b00000-0000-0000-0000-00000000022b';
+DO $$
+DECLARE
+  v_reporter UUID := '22a00000-0000-0000-0000-00000000022a';
+  v_subject  UUID := '22b00000-0000-0000-0000-00000000022b';
+  v_match  BIGINT;
+  v_report BIGINT;
+BEGIN
+  INSERT INTO public.matches (user_a,user_b,status,matched_at)
+    VALUES (LEAST(v_reporter,v_subject),GREATEST(v_reporter,v_subject),'active',now())
+    RETURNING id INTO v_match;
+  INSERT INTO public.messages (match_id,sender_id,content,message_type)
+    VALUES (v_match, v_subject, 'meet me offline kid', 'text');
+
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"22a00000-0000-0000-0000-00000000022a","role":"authenticated"}', true);
+  v_report := public.report_user(v_subject, 'other', 'Adult soliciting a minor in chat', v_match);
+  PERFORM set_config('request.jwt.claims', NULL, true);
+
+  -- L2: 'other' — the realistic enticement channel — must be triage-flagged.
+  ASSERT EXISTS (SELECT 1 FROM public.v_report_triage
+                  WHERE id = v_report AND review_for_2258a),
+    'T22 an ''other'' report is not flagged for §2258A review';
+
+  -- The subject deletes before any reviewer touches the report.
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"22b00000-0000-0000-0000-00000000022b","role":"authenticated"}', true);
+  PERFORM public.request_account_deletion();
+  PERFORM set_config('request.jwt.claims', NULL, true);
+
+  -- The live message is redacted...
+  ASSERT (SELECT content = '[deleted]' FROM public.messages
+           WHERE match_id = v_match AND sender_id = v_subject),
+    'T22 scrub did not redact the subject''s message';
+  -- ...but the evidence snapshot holds the original content.
+  ASSERT EXISTS (SELECT 1 FROM public.report_evidence e
+                  WHERE e.report_id = v_report AND e.captured_by = 'scrub'
+                    AND e.subject_user = v_subject
+                    AND e.payload->'messages' @> '[{"content":"meet me offline kid"}]'),
+    'T22 self-deletion destroyed the reported conversation before review';
+
+  -- Deletion also kills every live consent grant (L1).
+  ASSERT NOT EXISTS (SELECT 1 FROM public.consent_records
+                      WHERE user_id = v_subject AND withdrawn_at IS NULL),
+    'T22 a deleted account kept live consent grants';
+END $$;
+
+-- The snapshot surface is service-role only.
+DO $$ BEGIN
+  ASSERT NOT has_table_privilege('authenticated','public.report_evidence','SELECT'),
+    'T22 users can read evidence snapshots';
+  ASSERT NOT has_function_privilege('authenticated','public.snapshot_report_evidence(bigint,text)','EXECUTE'),
+    'T22 users can invoke the snapshot function';
+END $$;
+
+-- ============ TEST 23: purge defers when a counterpart is held (0044, H2) ==
+-- Purging account C must not CASCADE away held user D's side of their shared
+-- conversation. Deferred, not refused: it completes when the hold lifts.
+INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+ ('23a00000-0000-0000-0000-00000000023a','00000000-0000-0000-0000-000000000000','authenticated','authenticated','purge_c@t.local',now(),now()),
+ ('23b00000-0000-0000-0000-00000000023b','00000000-0000-0000-0000-000000000000','authenticated','authenticated','held_d@t.local',now(),now());
+DO $$
+DECLARE
+  v_c UUID := '23a00000-0000-0000-0000-00000000023a';
+  v_d UUID := '23b00000-0000-0000-0000-00000000023b';
+  v_match BIGINT;
+BEGIN
+  INSERT INTO public.matches (user_a,user_b,status,matched_at)
+    VALUES (LEAST(v_c,v_d),GREATEST(v_c,v_d),'active',now())
+    RETURNING id INTO v_match;
+  INSERT INTO public.messages (match_id,sender_id,content,message_type)
+    VALUES (v_match, v_d, 'held evidence message', 'text');
+  PERFORM public.place_legal_hold(v_d, 'law_enforcement', 'test', 'agency ref', NULL);
+
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"23a00000-0000-0000-0000-00000000023a","role":"authenticated"}', true);
+  PERFORM public.request_account_deletion();
+  PERFORM set_config('request.jwt.claims', NULL, true);
+  UPDATE public.profiles SET deleted_at = NOW() - INTERVAL '400 days' WHERE id = v_c;
+
+  PERFORM public.purge_deleted_accounts(INTERVAL '30 days');
+  ASSERT EXISTS (SELECT 1 FROM auth.users WHERE id = v_c),
+    'T23 purge removed an account whose match counterpart is under a hold';
+  ASSERT EXISTS (SELECT 1 FROM public.messages
+                  WHERE match_id = v_match AND sender_id = v_d
+                    AND content = 'held evidence message'),
+    'T23 the held user''s conversation was cascaded away';
+
+  -- Hold lifts → the deferred purge completes.
+  UPDATE public.legal_holds SET released_at = NOW()
+   WHERE user_id = v_d AND released_at IS NULL;
+  PERFORM public.purge_deleted_accounts(INTERVAL '30 days');
+  ASSERT NOT EXISTS (SELECT 1 FROM auth.users WHERE id = v_c),
+    'T23 released hold did not let the deferred purge complete';
+END $$;
+
+-- ============ TEST 24: ephemeral cleanup honors holds (0044, M3) ============
+-- A held subject's location/proximity history must survive the 24-48h sweeps,
+-- including sightings OF them recorded by other users (found via their
+-- preserved token_claims).
+INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+ ('24a00000-0000-0000-0000-00000000024a','00000000-0000-0000-0000-000000000000','authenticated','authenticated','held_e@t.local',now(),now()),
+ ('24b00000-0000-0000-0000-00000000024b','00000000-0000-0000-0000-000000000000','authenticated','authenticated','free_f@t.local',now(),now());
+DO $$
+DECLARE
+  v_e UUID := '24a00000-0000-0000-0000-00000000024a';
+  v_f UUID := '24b00000-0000-0000-0000-00000000024b';
+BEGIN
+  PERFORM public.place_legal_hold(v_e, 'law_enforcement', 'test', 'agency ref', NULL);
+
+  INSERT INTO public.location_pings (user_id, geo, range_type, created_at) VALUES
+    (v_e, ST_SetSRID(ST_MakePoint(-74.03, 40.74), 4326)::geography, 'miles_10', NOW() - INTERVAL '3 days'),
+    (v_f, ST_SetSRID(ST_MakePoint(-74.03, 40.74), 4326)::geography, 'miles_10', NOW() - INTERVAL '3 days');
+  INSERT INTO public.token_claims (user_id, token, valid_from, valid_until) VALUES
+    (v_e, repeat('e1', 16), NOW() - INTERVAL '2 days', NOW() - INTERVAL '2 days'),
+    (v_f, repeat('f1', 16), NOW() - INTERVAL '2 days', NOW() - INTERVAL '2 days');
+  INSERT INTO public.sightings (observer_user_id, observed_token, rssi, observed_at, observer_lat, observer_lon, range_type) VALUES
+    (v_e, repeat('99', 16), -60, NOW() - INTERVAL '3 days', 40.74, -74.03, 'feet_30'),
+    (v_f, repeat('e1', 16), -60, NOW() - INTERVAL '3 days', 40.74, -74.03, 'feet_30'),
+    (v_f, repeat('88', 16), -60, NOW() - INTERVAL '3 days', 40.74, -74.03, 'feet_30');
+
+  PERFORM public.cleanup_ephemeral_data();
+
+  ASSERT EXISTS (SELECT 1 FROM public.location_pings WHERE user_id = v_e),
+    'T24 cleanup deleted a held user''s location history';
+  ASSERT NOT EXISTS (SELECT 1 FROM public.location_pings WHERE user_id = v_f
+                      AND created_at < NOW() - INTERVAL '24 hours'),
+    'T24 cleanup stopped deleting unheld users'' stale pings';
+  ASSERT EXISTS (SELECT 1 FROM public.token_claims WHERE user_id = v_e),
+    'T24 cleanup deleted a held user''s token claims';
+  ASSERT NOT EXISTS (SELECT 1 FROM public.token_claims WHERE user_id = v_f
+                      AND valid_until < NOW() - INTERVAL '30 minutes'),
+    'T24 cleanup stopped deleting unheld users'' stale claims';
+  ASSERT EXISTS (SELECT 1 FROM public.sightings WHERE observer_user_id = v_e),
+    'T24 cleanup deleted a sighting recorded BY the held user';
+  ASSERT EXISTS (SELECT 1 FROM public.sightings
+                  WHERE observer_user_id = v_f AND observed_token = repeat('e1', 16)),
+    'T24 cleanup deleted a sighting OF the held user';
+  ASSERT NOT EXISTS (SELECT 1 FROM public.sightings
+                      WHERE observer_user_id = v_f AND observed_token = repeat('88', 16)),
+    'T24 cleanup stopped deleting unrelated stale sightings';
+END $$;
+
+-- ============ TEST 25: consent withdrawal cannot destroy held evidence (M2) =
+-- Withdrawal is recorded immediately, but the location wipe is deferred while
+-- a hold is active — a subject must not erase evidence with a toggle.
+DO $$
+DECLARE
+  v_e UUID := '24a00000-0000-0000-0000-00000000024a';  -- still held from T24
+BEGIN
+  PERFORM set_config('request.jwt.claims',
+    '{"sub":"24a00000-0000-0000-0000-00000000024a","role":"authenticated"}', true);
+  PERFORM public.grant_consent('precise_location', '2026-07-20', 'test');
+  PERFORM public.withdraw_consent('precise_location');
+  PERFORM set_config('request.jwt.claims', NULL, true);
+
+  ASSERT NOT EXISTS (SELECT 1 FROM public.consent_records
+                      WHERE user_id = v_e AND purpose = 'precise_location'
+                        AND withdrawn_at IS NULL),
+    'T25 withdrawal was not recorded';
+  ASSERT EXISTS (SELECT 1 FROM public.location_pings WHERE user_id = v_e),
+    'T25 a held subject erased their location evidence via consent withdrawal';
+END $$;
+
 SELECT '✅ ALL RECIPROCITY SECURITY INVARIANTS PASSED' AS result;
 ROLLBACK;

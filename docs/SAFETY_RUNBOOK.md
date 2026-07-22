@@ -138,11 +138,21 @@ A released hold lets any pending deletion complete automatically.
 
 ## 5. What the machinery guarantees, and what it doesn't
 
-**Guaranteed by code (harness T13–T19):**
+**Guaranteed by code (harness T13–T25):**
 - A held account survives the retention purge until the hold is released.
 - Escalation preserves before the subject can race a deletion.
 - Deletion under a hold is deferred, not refused — it completes on release.
 - Obligation queues cannot be read or altered by app users.
+- A subject who self-deletes BEFORE you escalate no longer destroys the
+  conversation: every open report's messages are snapshotted into
+  `report_evidence` (service-role only) at scrub time. Query it with
+  `SELECT * FROM public.report_evidence WHERE report_id = <id>;`
+- A reporter's routine account purge can no longer cascade away a held
+  subject's side of a shared conversation (purge defers).
+- A held subject's location/sighting/token history survives the 24-48h
+  ephemeral sweeps, and consent withdrawal cannot wipe it either.
+- Media hashes can't be forged onto someone else's object, so an approved
+  NCII removal can't be weaponized to delete an innocent user's photo.
 
 **Only a human can do:**
 - Register with NCMEC, review a report, decide, file, confirm.

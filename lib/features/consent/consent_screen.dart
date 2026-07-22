@@ -105,10 +105,15 @@ const _items = <_Item>[
 ///   * In [manage] mode every toggle can be switched off again, so withdrawal
 ///     is exactly as easy as granting (GDPR Art. 7(3)).
 class ConsentScreen extends ConsumerStatefulWidget {
-  const ConsentScreen({super.key, this.manage = false});
+  const ConsentScreen({super.key, this.manage = false, this.onDone});
 
   /// Managing existing consent (from Settings) rather than first-run.
   final bool manage;
+
+  /// First-run completion hook. When this screen is a routed root (the
+  /// ConsentGate) there is nothing underneath to pop back to, so the gate
+  /// passes a callback instead.
+  final VoidCallback? onDone;
 
   @override
   ConsumerState<ConsentScreen> createState() => _ConsentScreenState();
@@ -193,7 +198,12 @@ class _ConsentScreenState extends ConsumerState<ConsentScreen> {
           await _service.withdraw(item.purpose);
         }
       }
-      if (mounted) Navigator.of(context).pop(true);
+      if (!mounted) return;
+      if (widget.onDone != null) {
+        widget.onDone!();
+      } else {
+        Navigator.of(context).pop(true);
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {

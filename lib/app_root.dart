@@ -6,6 +6,7 @@ import 'package:in_range/core/privacy/safety_store.dart';
 import 'package:in_range/core/session/app_session.dart';
 import 'package:in_range/features/auth/auth_screen.dart';
 import 'package:in_range/features/beacon/beacon_provider.dart';
+import 'package:in_range/features/consent/consent_gate.dart';
 import 'package:in_range/features/encounters/local_encounter_store.dart';
 import 'package:in_range/features/home/home_shell.dart';
 import 'package:in_range/features/locals/locals_service.dart';
@@ -90,7 +91,11 @@ class AppRoot extends ConsumerWidget {
         ),
       );
     }
-    return const HomeShell();
+    // First-run consent sits between profile setup and the app proper, so no
+    // feature behind it can collect location/BLE/sensitive data before the
+    // user has answered (the server-side require_consent gates are the
+    // backstop once enforce_consent flips on).
+    return const ConsentGate(child: HomeShell());
   }
 }
 
@@ -103,6 +108,8 @@ Future<void> _stopDiscovery(WidgetRef ref) async {
 
 Future<void> _clearUserRuntime(WidgetRef ref) async {
   await _stopDiscovery(ref);
+  // Drop the previous user's coordinates/place label, not just the flag.
+  ref.read(localsControllerProvider.notifier).reset();
   await ref.read(matchStoreProvider.notifier).clearAll();
   await ref.read(localEncounterStoreProvider.notifier).clear();
   await ref.read(safetyStoreProvider.notifier).clearAll();

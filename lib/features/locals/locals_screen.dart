@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:in_range/core/config/app_config.dart';
+import 'package:in_range/features/consent/consent_screen.dart';
 import 'package:in_range/features/encounters/local_encounter_store.dart';
 import 'package:in_range/features/locals/locals_service.dart';
 import 'package:in_range/features/matches/match_store.dart';
@@ -29,6 +30,17 @@ class _LocalsScreenState extends ConsumerState<LocalsScreen> {
       final c = ref.read(localsControllerProvider.notifier);
       c.setRange(_range);
     });
+  }
+
+  Future<void> _openConsent(BuildContext context) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => const ConsentScreen(manage: true),
+      ),
+    );
+    if (!mounted) return;
+    // Re-check on return — start() no-ops (consentRequired) if still denied.
+    await ref.read(localsControllerProvider.notifier).start();
   }
 
   /// Coarse distance band — never precise meters on UI.
@@ -80,11 +92,14 @@ class _LocalsScreenState extends ConsumerState<LocalsScreen> {
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _GpsCard(
-            gps: gps,
-            onRefresh: () =>
-                ref.read(localsControllerProvider.notifier).start(),
-          ),
+          if (gps.consentRequired)
+            _ConsentNeededCard(onReview: () => _openConsent(context))
+          else
+            _GpsCard(
+              gps: gps,
+              onRefresh: () =>
+                  ref.read(localsControllerProvider.notifier).start(),
+            ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
             child: Text(
@@ -130,12 +145,23 @@ class _LocalsScreenState extends ConsumerState<LocalsScreen> {
           else if (AppConfig.hasRealSupabase)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-              child: Text(
-                gps.lastSyncError != null
-                    ? 'Cloud sync paused — showing local peers'
-                    : 'Connecting cloud Locals…',
-                style: TextStyle(fontSize: 12, color: Colors.orange.shade800),
-              ),
+              child: gps.lastSyncError == 'consent_required'
+                  ? InkWell(
+                      onTap: () => _openConsent(context),
+                      child: Text(
+                        'Location consent needed — tap to review your '
+                        'privacy choices',
+                        style: TextStyle(
+                            fontSize: 12, color: Colors.orange.shade800),
+                      ),
+                    )
+                  : Text(
+                      gps.lastSyncError != null
+                          ? 'Cloud sync paused — showing local peers'
+                          : 'Connecting cloud Locals…',
+                      style: TextStyle(
+                          fontSize: 12, color: Colors.orange.shade800),
+                    ),
             ),
           const Divider(height: 1),
           Expanded(
@@ -148,6 +174,53 @@ class _LocalsScreenState extends ConsumerState<LocalsScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _ConsentNeededCard extends StatelessWidget {
+  const _ConsentNeededCard({required this.onReview});
+  final VoidCallback onReview;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.location_off, color: Colors.grey),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Locals needs your location consent',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Your location is not being checked or shared. Grant '
+              '"Precise location" in your privacy choices to see people '
+              'in your area.',
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: onReview,
+                child: const Text('Review privacy choices'),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
