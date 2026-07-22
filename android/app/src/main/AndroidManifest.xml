@@ -25,7 +25,7 @@
 
          NOTE: usesPermissionFlags="neverForLocation" is deliberately NOT set
          here. That flag is a strong assertion that the app never uses the
-         permission to derive physical location -- and it would be false: the
+         permission to derive physical location, and it would be false: the
          venue matcher scores WiFi AP overlap as a proximity signal
          (_wifiAgreeBoost / _wifiConflictPenalty in venue_matcher.dart), which
          is deriving location. Declaring it would be exactly the kind of
@@ -34,7 +34,7 @@
          It would also buy nothing: NEARBY_WIFI_DEVICES does not gate
          getScanResults(), which still requires ACCESS_FINE_LOCATION regardless.
 
-         (By contrast BLUETOOTH_SCAN below correctly omits the flag too --
+         (By contrast BLUETOOTH_SCAN below correctly omits the flag too:
          adding it there would filter beacon-shaped advertisements out of scan
          results and break detection outright.) -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
