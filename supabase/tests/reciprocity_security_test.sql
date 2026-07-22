@@ -1435,5 +1435,202 @@ BEGIN
     'T30 an approved row for the current photo did not restore discovery';
 END $$;
 
+-- ============ TEST 31: BLE withdrawal blocks history-resolved sightings =====
+-- 0046: token_claim_history survived withdrawal, so an observer could still
+-- record a sighting OF the withdrawn user (repro: history=1, new sighting=1).
+-- withdraw_consent now clears history; record_sighting also refuses any
+-- observed token whose owner withdrew BLE (covers the held-preserved case).
+DO $$
+DECLARE
+  v_w UUID := '31a00000-0000-0000-0000-00000000031a';  -- withdrawer / observed
+  v_o UUID := '31b00000-0000-0000-0000-00000000031b';  -- observer
+  v_tok TEXT := repeat('31', 16);
+BEGIN
+  INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+    (v_w,'00000000-0000-0000-0000-000000000000','authenticated','authenticated','w31a@t.local',now(),now()),
+    (v_o,'00000000-0000-0000-0000-000000000000','authenticated','authenticated','w31b@t.local',now(),now());
+  UPDATE public.profiles SET display_name='O31',dob='1990-01-01',is_active=true,
+    age_verified=true,photo_urls=ARRAY['31b.jpg'],is_paused=false,is_incognito=false
+   WHERE id=v_o;
+  INSERT INTO public.photo_verifications (user_id,photo_path,slot_index,state,decided_at)
+    VALUES (v_o,'31b.jpg',0,'approved',NOW());
+  INSERT INTO public.token_claims (user_id,token,valid_from,valid_until) VALUES
+    (v_w, v_tok, NOW()-INTERVAL '1 min', NOW()+INTERVAL '10 min');
+  INSERT INTO public.token_claim_history (token,user_id,valid_from,valid_until) VALUES
+    (v_tok, v_w, NOW()-INTERVAL '1 min', NOW()+INTERVAL '10 min');
+
+  -- Withdrawer withdraws BLE (unheld) → claims AND history gone.
+  PERFORM set_config('request.jwt.claims', json_build_object('sub',v_w,'role','authenticated')::text, true);
+  PERFORM public.grant_consent('ble_proximity','2026-07-20','test');
+  PERFORM public.withdraw_consent('ble_proximity');
+  PERFORM set_config('request.jwt.claims', NULL, true);
+  ASSERT NOT EXISTS (SELECT 1 FROM public.token_claim_history WHERE user_id=v_w),
+    'T31 withdrawal left token_claim_history resolvable';
+
+  -- Even if history is re-preserved (hold), record_sighting must refuse it.
+  INSERT INTO public.token_claim_history (token,user_id,valid_from,valid_until) VALUES
+    (v_tok, v_w, NOW()-INTERVAL '1 min', NOW()+INTERVAL '10 min');
+  PERFORM set_config('request.jwt.claims', json_build_object('sub',v_o,'role','authenticated')::text, true);
+  BEGIN
+    PERFORM public.record_sighting(v_tok, 38.9, -76.9, -60, now(), 'feet_10', 10.0);
+    ASSERT false, 'T31 recorded a sighting OF a BLE-withdrawn user via history';
+  EXCEPTION WHEN data_exception THEN NULL;  -- 22023 Unknown or expired beacon token
+  END;
+  PERFORM set_config('request.jwt.claims', NULL, true);
+  ASSERT NOT EXISTS (SELECT 1 FROM public.sightings WHERE observed_token=v_tok),
+    'T31 a sighting of the withdrawn user was still written';
+END $$;
+
+-- ============ TEST 32: photo withdrawal blocks every photo write path =======
+DO $$
+DECLARE
+  v_u UUID := '32a00000-0000-0000-0000-00000000032a';
+BEGIN
+  INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+    (v_u,'00000000-0000-0000-0000-000000000000','authenticated','authenticated','w32a@t.local',now(),now());
+  UPDATE public.profiles SET display_name='W32',dob='1990-01-01',is_active=true,
+    age_verified=true,photo_urls=ARRAY['32a.jpg'],is_paused=false,is_incognito=false
+   WHERE id=v_u;
+  INSERT INTO public.photo_verifications (user_id,photo_path,slot_index,state,decided_at)
+    VALUES (v_u,'32a.jpg',0,'approved',NOW());
+  INSERT INTO storage.objects (bucket_id,name) VALUES ('profile_photos', v_u::text || '/new.jpg');
+
+  PERFORM set_config('request.jwt.claims', json_build_object('sub',v_u,'role','authenticated')::text, true);
+  PERFORM public.grant_consent('photo_processing','2026-07-20','test');
+  PERFORM public.withdraw_consent('photo_processing');
+
+  -- (a) submission RPC refused
+  BEGIN
+    PERFORM public.submit_photo_for_verification(v_u::text || '/new.jpg', 0::SMALLINT);
+    ASSERT false, 'T32 submit_photo_for_verification accepted a withdrawn user';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  -- (b) profile photo-path write refused
+  BEGIN
+    PERFORM public.upsert_my_profile('W32', NULL, '1990-01-01'::date, NULL, NULL, NULL,
+      ARRAY[v_u::text || '/new.jpg']);
+    ASSERT false, 'T32 upsert_my_profile wrote photo paths for a withdrawn user';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  -- (c) raw Storage insert refused by policy (as the authenticated role)
+  SET LOCAL ROLE authenticated;
+  BEGIN
+    INSERT INTO storage.objects (bucket_id, name) VALUES ('profile_photos', v_u::text || '/sneak.jpg');
+    ASSERT false, 'T32 storage policy allowed an upload for a withdrawn user';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  RESET ROLE;
+  PERFORM set_config('request.jwt.claims', NULL, true);
+END $$;
+
+-- ============ TEST 33: hold-release reconciler finishes deferred erasure ====
+DO $$
+DECLARE
+  v_u UUID := '33a00000-0000-0000-0000-00000000033a';
+BEGIN
+  INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+    (v_u,'00000000-0000-0000-0000-000000000000','authenticated','authenticated','w33a@t.local',now(),now());
+  UPDATE public.profiles SET display_name='W33',dob='1990-01-01',is_active=true,
+    age_verified=true,photo_urls=ARRAY['33a.jpg'],is_paused=false,is_incognito=false
+   WHERE id=v_u;
+  INSERT INTO storage.objects (bucket_id,name) VALUES ('profile_photos', v_u::text || '/held.jpg');
+
+  PERFORM public.place_legal_hold(v_u,'law_enforcement','test','ref',NULL);
+  PERFORM set_config('request.jwt.claims', json_build_object('sub',v_u,'role','authenticated')::text, true);
+  PERFORM public.grant_consent('photo_processing','2026-07-20','test');
+  PERFORM public.withdraw_consent('photo_processing');
+  PERFORM set_config('request.jwt.claims', NULL, true);
+
+  -- Under the hold: nothing queued yet (deferred).
+  ASSERT NOT EXISTS (SELECT 1 FROM public.storage_deletion_queue WHERE user_id=v_u),
+    'T33 held photo objects were queued for destruction';
+
+  -- Reconciler is a no-op while the hold stands.
+  PERFORM public.reconcile_withdrawn_consent();
+  ASSERT NOT EXISTS (SELECT 1 FROM public.storage_deletion_queue WHERE user_id=v_u),
+    'T33 reconciler queued a held subject''s objects';
+
+  -- Release the hold, reconcile → deferred erasure finally happens.
+  UPDATE public.legal_holds SET released_at=NOW(), released_by='test' WHERE user_id=v_u;
+  PERFORM public.reconcile_withdrawn_consent();
+  ASSERT EXISTS (SELECT 1 FROM public.storage_deletion_queue
+                  WHERE user_id=v_u AND object_name=v_u::text || '/held.jpg'),
+    'T33 reconciler did not enqueue objects after hold release';
+END $$;
+
+-- ============ TEST 34: consent_withdrawn is not an authenticated oracle =====
+DO $$
+DECLARE
+  v_a UUID := '34a00000-0000-0000-0000-00000000034a';
+  v_b UUID := '34b00000-0000-0000-0000-00000000034b';
+BEGIN
+  INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+    (v_a,'00000000-0000-0000-0000-000000000000','authenticated','authenticated','w34a@t.local',now(),now()),
+    (v_b,'00000000-0000-0000-0000-000000000000','authenticated','authenticated','w34b@t.local',now(),now());
+
+  SET LOCAL ROLE authenticated;
+  PERFORM set_config('request.jwt.claims', json_build_object('sub',v_a,'role','authenticated')::text, true);
+  -- Arbitrary-uid probe must be denied.
+  BEGIN
+    PERFORM public.consent_withdrawn(v_b, 'sensitive_profile');
+    ASSERT false, 'T34 consent_withdrawn is callable by authenticated (cross-user oracle)';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  -- Self-scoped wrapper is allowed and reveals only the caller's own state.
+  ASSERT public.my_consent_withdrawn('sensitive_profile') = FALSE,
+    'T34 self-scoped wrapper misreported';
+  RESET ROLE;
+  PERFORM set_config('request.jwt.claims', NULL, true);
+END $$;
+
+-- ============ TEST 35: background_location is retired (no active grants) =====
+DO $$
+BEGIN
+  ASSERT NOT EXISTS (
+    SELECT 1 FROM public.consent_records
+     WHERE purpose='background_location' AND withdrawn_at IS NULL),
+    'T35 an active background_location grant survived retirement';
+END $$;
+
+-- ============ TEST 36: preserved location evidence is out of live matching ==
+-- A held user who withdrew precise_location keeps their pings (evidence) but
+-- must not surface in get_locals_feed / correlate for anyone else.
+DO $$
+DECLARE
+  v_h UUID := '36a00000-0000-0000-0000-00000000036a';  -- held + withdrawn
+  v_v UUID := '36b00000-0000-0000-0000-00000000036b';  -- viewer nearby
+  v_cnt INT;
+BEGIN
+  INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+    (v_h,'00000000-0000-0000-0000-000000000000','authenticated','authenticated','w36a@t.local',now(),now()),
+    (v_v,'00000000-0000-0000-0000-000000000000','authenticated','authenticated','w36b@t.local',now(),now());
+  UPDATE public.profiles SET display_name='H36',dob='1990-01-01',is_active=true,
+    age_verified=true,photo_urls=ARRAY['36a.jpg'],is_paused=false,is_incognito=false,
+    gender='male',sexual_preference='women' WHERE id=v_h;
+  UPDATE public.profiles SET display_name='V36',dob='1990-01-01',is_active=true,
+    age_verified=true,photo_urls=ARRAY['36b.jpg'],is_paused=false,is_incognito=false,
+    gender='female',sexual_preference='men' WHERE id=v_v;
+  INSERT INTO public.photo_verifications (user_id,photo_path,slot_index,state,decided_at) VALUES
+    (v_h,'36a.jpg',0,'approved',NOW()), (v_v,'36b.jpg',0,'approved',NOW());
+  INSERT INTO public.location_pings (user_id,geo,range_type,created_at) VALUES
+    (v_h, ST_SetSRID(ST_MakePoint(-76.9,38.9),4326)::geography,'miles_1',NOW()-INTERVAL '2 min'),
+    (v_v, ST_SetSRID(ST_MakePoint(-76.9,38.9),4326)::geography,'miles_1',NOW()-INTERVAL '1 min');
+
+  -- Held user withdraws precise_location: pings preserved, but not matchable.
+  PERFORM public.place_legal_hold(v_h,'law_enforcement','test','ref',NULL);
+  PERFORM set_config('request.jwt.claims', json_build_object('sub',v_h,'role','authenticated')::text, true);
+  PERFORM public.grant_consent('precise_location','2026-07-20','test');
+  PERFORM public.withdraw_consent('precise_location');
+  PERFORM set_config('request.jwt.claims', NULL, true);
+  ASSERT EXISTS (SELECT 1 FROM public.location_pings WHERE user_id=v_h),
+    'T36 precondition: held withdrawer''s pings should be preserved';
+
+  -- Viewer runs the feed → the withdrawn+held user must not appear.
+  PERFORM set_config('request.jwt.claims', json_build_object('sub',v_v,'role','authenticated')::text, true);
+  SELECT count(*) INTO v_cnt FROM public.get_locals_feed(38.9,-76.9,'miles_1',50) WHERE user_id=v_h;
+  ASSERT v_cnt = 0, 'T36 a withdrawn-location (held) user surfaced in get_locals_feed';
+  PERFORM set_config('request.jwt.claims', NULL, true);
+END $$;
+
 SELECT '✅ ALL RECIPROCITY SECURITY INVARIANTS PASSED' AS result;
 ROLLBACK;

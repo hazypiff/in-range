@@ -16,7 +16,12 @@ const _requiredPurposes = <ConsentPurpose>[
   ConsentPurpose.photoProcessing,
 ];
 
-String _capturedKey(String uid) => 'consent_captured_v1_$uid';
+/// Bump the version whenever the REQUIRED set changes: a device that captured
+/// an earlier set (e.g. before photo_processing became required in 0045) must
+/// re-answer rather than skip the new requirement on the strength of a stale
+/// marker. The server-state check below still lets anyone who already granted
+/// the new set straight through, so only users actually missing it are asked.
+String _capturedKey(String uid) => 'consent_captured_v2_$uid';
 
 /// Whether the signed-in user still owes first-run consent.
 ///
