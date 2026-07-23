@@ -198,7 +198,7 @@ apply for the human decision.
 
 ## 5. What the machinery guarantees, and what it doesn't
 
-**Guaranteed by code (harness T13–T47):**
+**Guaranteed by code (harness T13–T48):**
 - A held account survives the retention purge until the hold is released.
 - Escalation preserves before the subject can race a deletion.
 - Deletion under a hold is deferred, not refused — it completes on release.
@@ -226,6 +226,11 @@ apply for the human decision.
   48h), while a held subject's rows are still preserved as evidence.
 - Internal token/pair helpers are no longer callable by anonymous clients, so
   a live BLE token can't be resolved to its owner + approximate GPS by anyone.
+- Late evidence (a locked phone's buffered flush) is accepted only inside a
+  clamped 2–25 min window (`app_settings.late_evidence_window_minutes`,
+  default 15 — migration 0053); reciprocity still keys on server receipt
+  time and the ≤400 m GPS veto, so forged timestamps and far-away token
+  replays confirm nothing.
 
 **Only a human can do:**
 - Register with NCMEC, review a report, decide, file, confirm.

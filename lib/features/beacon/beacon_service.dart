@@ -991,7 +991,7 @@ class BeaconService {
     }
 
     _lastForeignScanAt = DateTime.now();
-    _recordLocalSighting(hexId, rssi);
+    _recordLocalSighting(hexId, rssi, at: at);
   }
 
   double? _cachedLat;
@@ -1003,7 +1003,8 @@ class BeaconService {
   final Map<String, DateTime> _lastSightingAt = {};
   static const _sightingMinInterval = Duration(seconds: 5);
 
-  void _recordLocalSighting(String observedCorrelationIdHex, int rssi) {
+  void _recordLocalSighting(String observedCorrelationIdHex, int rssi,
+      {DateTime? at}) {
     final now = DateTime.now();
     final last = _lastSightingAt[observedCorrelationIdHex];
     if (last != null && now.difference(last) < _sightingMinInterval) {
@@ -1034,7 +1035,10 @@ class BeaconService {
       observerLat: _cachedLat,
       observerLon: _cachedLon,
       observerAccuracyM: _cachedAccuracy,
-      observedAt: now,
+      // A locked iPhone's natively-buffered sighting flushes minutes after
+      // capture; the server (0053) accepts and stores the TRUE capture time,
+      // so pass it through instead of the flush time.
+      observedAt: at ?? now,
       rangeType: uploadRange,
     );
 

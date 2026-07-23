@@ -33,6 +33,22 @@ on both test iPhones. Desk results (both phones ~2 ft apart):
   remains the designed closer. @hazypiff: sanity-check against Herald-era
   Android↔iOS data if you have it.
 
+**SERVER TOLERANCE SHIPPED 2026-07-23 evening (Linux side, migration `0053`,
+deployed + byte-verified on prod):** the reciprocity asymmetry ask is closed.
+One knob — `app_settings.late_evidence_window_minutes` (default 15, clamped
+2–25) — now governs all three gates that killed a locked iPhone's late flush:
+`record_sighting`'s observed_at staleness (was 10 min), the expired-token
+grace in both `record_sighting` and `correlate_encounter` (was 2 min), and
+the reciprocity reverse-receipt window (was 3 min). Anti-forgery envelope
+unchanged: server `received_at` still gates reciprocity (forged timestamps
+still can't widen anything, harness T2), the ≤400 m GPS veto still bounds
+replays spatially, and 25 min ≤ token lifetime bounds them temporally.
+Harness T48 proves the exact bench shape end-to-end: reverse leg received
+10 min ago + flushed sighting of a 6-min-expired token → confirmed encounter;
+30-min-stale variants still refused. Dart follow-up included: flushed
+sightings now upload their TRUE capture time (`_recordLocalSighting` passes
+the native buffer timestamp through as `p_observed_at`).
+
 **W1 + W3 wired 2026-07-23 (Mac side, owner-directed — @hazypiff please
 review + desk-verify on the S9):** Android advert now carries the CAFE
 marker alongside mfgData (W1; verify both fields arrive on-air per §3 risk

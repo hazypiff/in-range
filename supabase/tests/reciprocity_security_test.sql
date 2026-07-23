@@ -42,10 +42,11 @@ INSERT INTO public.token_claim_history (token,user_id,valid_from,valid_until,app
  ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','a0000000-0000-0000-0000-00000000000a', now()-interval '10 s', now()+interval '10 min', 38.9,-76.9,'feet_10'),
  ('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','b0000000-0000-0000-0000-00000000000b', now()-interval '10 s', now()+interval '10 min', 38.9,-76.9,'feet_10'),
  ('cccccccccccccccccccccccccccccccc','c0000000-0000-0000-0000-00000000000c', now()-interval '10 s', now()+interval '10 min', 38.9,-76.9,'feet_10'),
- -- grace: valid_until 1 min ago (inside the 2-min grace) -> still usable
+ -- grace: valid_until 1 min ago (inside the late-evidence window) -> usable
  ('dddddddddddddddddddddddddddddddd','b0000000-0000-0000-0000-00000000000b', now()-interval '16 min', now()-interval '1 min', 38.9,-76.9,'feet_10'),
- -- expired: valid_until 5 min ago (past grace) -> must be rejected
- ('eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee','b0000000-0000-0000-0000-00000000000b', now()-interval '20 min', now()-interval '5 min', 38.9,-76.9,'feet_10');
+ -- expired: valid_until 30 min ago — beyond even the max (25 min) clamp of
+ -- app_settings.late_evidence_window_minutes (0053) -> must be rejected
+ ('eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee','b0000000-0000-0000-0000-00000000000b', now()-interval '50 min', now()-interval '30 min', 38.9,-76.9,'feet_10');
 
 -- helper: act as `actor`, report observing `token`. Optionally backdate the
 -- server received_at (to simulate a stale reverse / prove observed_at can't help).
@@ -80,9 +81,10 @@ DO $$ BEGIN
 END $$;
 
 -- ============ TEST 2: stale reverse (server received_at) creates nothing ============
--- B's report has observed_at=now() (fresh-looking) but received_at backdated 5 min:
--- proves the window uses server received_at, and a forged observed_at cannot widen it.
-SELECT pg_temp.sight(:B, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', -85, 'feet_60', INTERVAL '-5 min');
+-- B's report has observed_at=now() (fresh-looking) but received_at backdated 30 min
+-- (beyond the 0053 late-evidence window, max clamp 25): proves the reciprocity
+-- window uses server received_at, and a forged observed_at cannot widen it.
+SELECT pg_temp.sight(:B, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', -85, 'feet_60', INTERVAL '-30 min');
 SELECT pg_temp.sight(:A, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', -60, 'feet_10'); -- retrigger correlate
 DO $$ BEGIN
   ASSERT pg_temp.enc_count('a0000000-0000-0000-0000-00000000000a','b0000000-0000-0000-0000-00000000000b') = 0, 'T2 stale reverse (forged observed_at) confirmed an encounter';
@@ -124,7 +126,8 @@ END $$;
 
 -- ============ TEST 6: token rotation grace works, expired fails ============
 DO $$ BEGIN
-  -- expired token (valid_until 5 min ago, past 2-min grace) must be rejected
+  -- expired token (valid_until 30 min ago, beyond the late-evidence window's
+  -- 25-min max clamp — 0053) must be rejected
   BEGIN
     PERFORM set_config('request.jwt.claims', json_build_object('sub','a0000000-0000-0000-0000-00000000000a','role','authenticated')::text, true);
     PERFORM public.record_sighting('eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', 38.9,-76.9,-60,now(),'feet_10',10.0);
@@ -2004,6 +2007,56 @@ BEGIN
     'T47 approval did not set is_photo_verified';
   ASSERT (SELECT state='approved' FROM public.photo_verifications WHERE user_id=v_u),
     'T47 review_photo did not move the row to approved';
+END $$;
+
+-- ============ TEST 48: locked-iPhone late flush still confirms (0053) ============
+-- The measured asymmetric-evidence shape (docs/IOS_BACKGROUND_BLE_WIRING.md,
+-- bench 2026-07-23): the Android side uploaded rich sightings of the iPhone
+-- DURING co-presence (reverse receipt now ~10 min old), then the locked iPhone
+-- wakes and flushes its natively-buffered sighting — original capture
+-- timestamp ~10 min old, of a token that expired ~6 min ago. Pre-0053 every
+-- one of those three facts was fatal; all must now confirm. Also proves the
+-- widened windows stay bounded: 30-min-stale variants must still fail (T2/T6).
+DO $$
+DECLARE v_id BIGINT;
+BEGIN
+  -- fixtures: F = the locked iPhone, G = the Android that kept uploading
+  INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+   ('f0000000-0000-0000-0000-00000000000f','00000000-0000-0000-0000-000000000000','authenticated','authenticated','sec_f@t.local',now(),now()),
+   ('a1000000-0000-0000-0000-0000000000a1','00000000-0000-0000-0000-000000000000','authenticated','authenticated','sec_g@t.local',now(),now());
+  UPDATE public.profiles SET display_name='F', dob='1990-01-01', age_verified=true, is_photo_verified=true, photo_urls=ARRAY['f.jpg'], is_paused=false, is_incognito=false WHERE id='f0000000-0000-0000-0000-00000000000f';
+  UPDATE public.profiles SET display_name='G', dob='1990-01-01', age_verified=true, is_photo_verified=true, photo_urls=ARRAY['g.jpg'], is_paused=false, is_incognito=false WHERE id='a1000000-0000-0000-0000-0000000000a1';
+  PERFORM pg_temp.approve_photos();
+
+  -- Both tokens were live during co-presence and expired ~6 min ago —
+  -- inside the 15-min default window, outside the old 2-min grace.
+  INSERT INTO public.token_claim_history (token,user_id,valid_from,valid_until,approx_lat,approx_lon,range_type) VALUES
+   ('f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2','f0000000-0000-0000-0000-00000000000f', now()-interval '21 min', now()-interval '6 min', 38.9,-76.9,'feet_10'),
+   ('a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2','a1000000-0000-0000-0000-0000000000a1', now()-interval '21 min', now()-interval '6 min', 38.9,-76.9,'feet_10');
+
+  -- G's forward evidence: a real upload from during co-presence. Inserted
+  -- directly (record_sighting would stamp received_at = now) with server
+  -- receipt 10 min ago — exactly the "rich but no longer fresh" reverse leg.
+  INSERT INTO public.sightings (observer_user_id,observed_token,observed_user_id,received_at,rssi,observed_at,observer_lat,observer_lon,range_type) VALUES
+   ('a1000000-0000-0000-0000-0000000000a1','f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2','f0000000-0000-0000-0000-00000000000f', now()-interval '10 min', -60, now()-interval '10 min', 38.9,-76.9,'feet_10');
+
+  -- F wakes: the buffered flush goes through the real RPC — late observed_at
+  -- (10 min) + expired-within-window token must BOTH be accepted...
+  PERFORM set_config('request.jwt.claims', json_build_object('sub','f0000000-0000-0000-0000-00000000000f','role','authenticated')::text, true);
+  v_id := public.record_sighting('a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2', 38.9, -76.9, -60, now()-interval '10 min', 'feet_10', 10.0);
+  ASSERT v_id IS NOT NULL, 'T48 late-flushed sighting was rejected';
+
+  -- ...and the 10-min-old reverse receipt must satisfy reciprocity.
+  ASSERT pg_temp.enc_count('f0000000-0000-0000-0000-00000000000f','a1000000-0000-0000-0000-0000000000a1') = 1,
+    'T48 asymmetric (late-flush) reciprocal evidence did not confirm an encounter';
+
+  -- Bound check: a flush claiming to be 30 min old must still be refused
+  -- (beyond the 25-min max clamp regardless of the setting).
+  BEGIN
+    PERFORM public.record_sighting('a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2', 38.9, -76.9, -60, now()-interval '30 min', 'feet_10', 10.0);
+    ASSERT false, 'T48 30-min-stale observed_at was accepted';
+  EXCEPTION WHEN sqlstate '22023' THEN NULL; -- expected 'Invalid sighting time'
+  END;
 END $$;
 
 SELECT '✅ ALL RECIPROCITY SECURITY INVARIANTS PASSED' AS result;
