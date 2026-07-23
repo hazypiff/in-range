@@ -52,6 +52,11 @@ class BatchTokenSource {
 
   final List<BatchSlot> _slots = <BatchSlot>[];
 
+  /// Read-only view of the cached batch — the iOS native carrier needs the
+  /// whole day's slots so GATT reads can serve the right token per read
+  /// without any background timer (IOS_BACKGROUND_BLE_WIRING.md W2).
+  List<BatchSlot> get slots => List.unmodifiable(_slots);
+
   /// Same rotation policy as before: rotate ~1 min before the current token
   /// expires (or immediately when there is none).
   bool shouldRotate(EphemeralToken? current,

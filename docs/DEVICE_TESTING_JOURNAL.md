@@ -161,5 +161,24 @@ not rediscover them:
   resilience layer (auto re-arm + backoff + watchdog) queued as next client
   work alongside W2.
 
+### 2026-07-23 (evening) — locked-phone carrier bench (W2/W4 verified)
+- Desk test, iPhone 14 + 15 Plus ~2 ft apart, three rounds against rssi_log:
+  1. Round 1 (discovery-chained scan restarts): both phones went silent ~5 s
+     after beacon-on — restart-only-on-discovery deadlocks once duplicates
+     are suppressed. Fixed with an 8 s scan-restart heartbeat + restarting
+     the scan whenever a peer READS our token (that read = background
+     execution time on the locked side).
+  2. Round 2 (one phone locked): **continuous both directions** — foreground
+     14 logged the locked 15 Plus in every 30 s bucket (2–5 samples/bucket,
+     GATT connect-read path); the locked 15 Plus logged the 14 back within
+     seconds of each read-wake.
+  3. Round 3 (BOTH locked): zero samples on either side for 3 min — Apple's
+     app-level ceiling, expected (wiring doc §5). Mitigations queued: W1/W3
+     Android bridges, silent-push wake off Locals-area overlap, natural
+     screen-wakes.
+- Product takeaway: locked↔awake iPhone encounters now work end-to-end;
+  locked↔locked needs an external wake source. GATT connect range vs advert
+  range at walk distances still unmeasured (field regression pending).
+
 ### (add Android baseline summary here — hazypiff: link walks #1–4 data and
 the S9 RSSI curve so the iOS sweep has a comparison target)

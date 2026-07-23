@@ -7,6 +7,7 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/core/network/supabase_client.dart';
+import 'package:in_range/features/beacon/background_beacon_channel.dart';
 import 'package:in_range/features/beacon/batch_token_source.dart';
 import 'package:in_range/features/beacon/claim_manager.dart';
 import 'package:in_range/features/beacon/ephemeral_token_generator.dart';
@@ -48,6 +49,18 @@ class BeaconService {
     fetchBatch: _fetchTokenBatch,
     rotationWindow: _rotationWindow,
   );
+
+  /// iOS locked-phone carrier (W2/W4). Native sightings join the exact same
+  /// ingest path as scan results; the native advertising callback keeps
+  /// `_discoverable` honest across background transitions.
+  late final BackgroundBeaconChannel _bgBeacon = BackgroundBeaconChannel()
+    ..onSighting = ((token, rssi) {
+      if (!_isOn) return;
+      _ingestForeignSample(token, rssi, AdvertPower.high);
+    })
+    ..onAdvertisingState = ((advertising) {
+      _discoverable = advertising;
+    });
   final Duration _rotationWindow;
   final String _userId;
   final String _correlationSalt;
@@ -398,16 +411,20 @@ class BeaconService {
     } catch (e) {
       debugPrint('BLE advertising stop failed: $e');
     }
+    // iOS: the native carrier owns advertising + the filtered background
+    // scan — stopping it also clears the persisted enabled flag so a BT
+    // relaunch doesn't resurrect a beacon the user turned off.
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      await _bgBeacon.stop();
+    }
   }
 
   // --- BLE Implementation ---
 
   static const String _inRangeServiceUuid =
       '0000cafe-0000-1000-8000-00805f9b34fb';
-  // Short (16-bit) form of the discovery marker — advertised on iOS so it
-  // costs 2 bytes on air, leaving room for the 128-bit token UUID in the same
-  // 31-byte legacy advertisement. Equal by value to _inRangeServiceUuid.
-  static const String _inRangeDiscoveryShort = 'cafe';
+  // (The 16-bit "cafe" short form of the marker now lives in the native
+  // BackgroundBeacon module, which owns all iOS advertising.)
   static const int _inRangeManufacturerId = 0xFFFF;
 
   /// The advertised/claimed correlation id is now the raw 16 bytes of the
@@ -459,35 +476,29 @@ class BeaconService {
       throw StateError('No beacon token is available');
     }
 
-    // iOS FOREGROUND service-UUID carrier (path b, hazypiff-approved prototype
-    // — docs/IOS_CARRIER_DECISION_2026-07-16). iOS CBPeripheralManager can't
-    // send manufacturerData, but it forwards service UUIDs. So advertise a
-    // FIXED discovery marker (short 16-bit UUID, filterable/known) plus the
-    // rotating 16-byte token AS a 128-bit service UUID. Both fit in the 31-byte
-    // legacy AD (2-byte marker + 16-byte token + overhead ≈ 25B). Peers match
-    // the marker, then read the token UUID. FOREGROUND ONLY — iOS moves these
-    // UUIDs to the overflow area in background (visible only to a device
-    // explicitly scanning them). No CBPeripheralManager TX-power control, so
-    // high-power only (no medium feet_30 slot on iOS). Falls back to scan-only
-    // if advertising fails, so the beacon still comes up scanning.
+    // iOS: the native BackgroundBeacon module owns advertising in BOTH
+    // lifecycles now (W2/W4, docs/IOS_BACKGROUND_BLE_WIRING.md) — one
+    // advertiser, no contention. Foreground it advertises the marker + the
+    // rotating token as a second service UUID (today's path-b fast path,
+    // kept); locked/backgrounded the advert degrades to the overflow area
+    // and peers connect + read the token from the CA7E characteristic
+    // instead, served per-read from the batch slots we pass here. Rotation
+    // re-enters this method, so the module always holds the fresh batch.
+    // Falls back to scan-only (fail-closed _discoverable) if the native
+    // start reports no radio; the definitive advertising verdict arrives
+    // via onAdvertisingState.
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
-      final tokenUuid = Guid.fromBytes(_currentCorrelationId!).str128;
-      final iosData = AdvertiseData(
-        serviceUuids: [_inRangeDiscoveryShort, tokenUuid],
-        includeDeviceName: false,
+      final payload = BackgroundBeaconChannel.slotsPayload(
+        _tokenSource.slots,
+        currentToken: _currentToken!.token,
+        currentFrom: _currentToken!.issuedAt,
+        currentUntil: _currentToken!.expiresAt,
       );
-      try {
-        final peripheral = FlutterBlePeripheral();
-        try {
-          await peripheral.stop();
-        } catch (_) {}
-        await peripheral.start(advertiseData: iosData);
-        _discoverable = true;
-        debugPrint('iOS foreground advertising: marker + token $tokenUuid');
-      } catch (e) {
-        _discoverable = false;
-        debugPrint('iOS advertising failed → scan-only fallback: $e');
-      }
+      final ok = await _bgBeacon.start(payload);
+      _discoverable = ok;
+      debugPrint(ok
+          ? 'iOS native advertising armed (marker + GATT token carrier)'
+          : 'iOS native advertising not ready → scan-only fallback');
       return;
     }
     _discoverable = true;
@@ -779,35 +790,43 @@ class BeaconService {
           .map((b) => b.toRadixString(16).padLeft(2, '0'))
           .join();
 
-      // Filter ALL of our own tokens, not just the current one — a leaked
-      // advertiser from a prior beacon session kept broadcasting the OLD
-      // token after off→on, and we self-sighted it at a rock-constant RSSI
-      // for an entire field test (2026-07-13 walk).
-      if (_ownCorrHexes.contains(hexId)) continue;
-
       // Which power slot sent this advert: flag byte in our payload
       // (Samsung's TX Power Level AD proved unreliable). Missing flag =
       // legacy advert = high — the safe direction: feet_30 can only
       // under-fire, never claim mid-range falsely.
       final power = mediumFlag ? AdvertPower.medium : AdvertPower.high;
-      rangeEstimator.addSample(hexId, r.rssi, power);
-      // Raw per-advert persistence + verbose peer logging is CALIBRATION only.
-      // In production it would retain a place/peer fingerprint and print peer
-      // ids to release logs / bug reports (reviewer #18).
-      if (AppConfig.calibScanMode) {
-        try {
-          onAdvertSample?.call(hexId, r.rssi, power, DateTime.now());
-        } catch (e) {
-          debugPrint('onAdvertSample callback error: $e');
-        }
-        // One line per fresh foreign advert — the calibration ground truth.
-        debugPrint(
-            'Advert corr=${hexId.substring(0, 8)} rssi=${r.rssi} pw=${power == AdvertPower.medium ? "M" : "H"}');
-      }
-
-      _lastForeignScanAt = DateTime.now();
-      _recordLocalSighting(hexId, r.rssi);
+      _ingestForeignSample(hexId, r.rssi, power);
     }
+  }
+
+  /// Single ingest point for a foreign token sample — scan results and the
+  /// iOS native carrier's sightings (W4) both land here, so the self-sight
+  /// guard, estimator, calibration log and sighting bookkeeping stay one
+  /// code path.
+  void _ingestForeignSample(String hexId, int rssi, AdvertPower power) {
+    // Filter ALL of our own tokens, not just the current one — a leaked
+    // advertiser from a prior beacon session kept broadcasting the OLD
+    // token after off→on, and we self-sighted it at a rock-constant RSSI
+    // for an entire field test (2026-07-13 walk).
+    if (_ownCorrHexes.contains(hexId)) return;
+
+    rangeEstimator.addSample(hexId, rssi, power);
+    // Raw per-advert persistence + verbose peer logging is CALIBRATION only.
+    // In production it would retain a place/peer fingerprint and print peer
+    // ids to release logs / bug reports (reviewer #18).
+    if (AppConfig.calibScanMode) {
+      try {
+        onAdvertSample?.call(hexId, rssi, power, DateTime.now());
+      } catch (e) {
+        debugPrint('onAdvertSample callback error: $e');
+      }
+      // One line per fresh foreign advert — the calibration ground truth.
+      debugPrint(
+          'Advert corr=${hexId.substring(0, 8)} rssi=$rssi pw=${power == AdvertPower.medium ? "M" : "H"}');
+    }
+
+    _lastForeignScanAt = DateTime.now();
+    _recordLocalSighting(hexId, rssi);
   }
 
   double? _cachedLat;

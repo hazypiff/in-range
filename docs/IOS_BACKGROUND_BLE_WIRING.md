@@ -1,7 +1,18 @@
 # iOS background (locked-phone) BLE — wiring plan
 
-**Date:** 2026-07-23. **Status:** ready to wire — design settled, code touch
-points enumerated, nothing here is deployed yet.
+**Date:** 2026-07-23. **Status: W2 + W4 WIRED AND BENCH-VERIFIED (2026-07-23
+evening, Mac side).** `ios/Runner/BackgroundBeacon.swift` + Dart glue are live
+on both test iPhones. Desk results (both phones ~2 ft apart):
+- Locked iPhone ↔ foreground iPhone: **works, both directions** — steady 2–5
+  sightings/30 s via overflow-scan → GATT connect-read; the locked side keeps
+  scanning by piggybacking a scan restart on each incoming token read.
+- Both iPhones locked, no assists: **silent**, as §5 anticipated — no
+  execution time on either side. Closing it = W1/W3 Android bridging + the
+  silent-push wake (server-coordinated via Locals-area overlap) + natural
+  screen-wakes. Lesson from bench round 1: discovery-chained scan restarts
+  deadlock (no discovery → no restart); an 8 s heartbeat timer + read-wake
+  piggyback is the working shape.
+W1 + W3 (Android side) remain to wire — @hazypiff.
 **Prereq reading:** `IOS_CARRIER_DECISION_2026-07-16.md` (the peer-reviewed
 carrier analysis this plan executes — its §3b "(a) GATT exchange" is the
 production path chosen here).
