@@ -822,13 +822,29 @@ class BeaconService {
           if (apple != null && apple.isNotEmpty && apple[0] == 0x01) {
             final cachedHex = _gattTokenByDevice[deviceId];
             final cachedAt = _gattTokenAt[deviceId];
-            if (cachedHex != null &&
+            final cacheFresh = cachedHex != null &&
                 cachedAt != null &&
                 DateTime.now().difference(cachedAt) <
-                    const Duration(minutes: 15)) {
+                    const Duration(minutes: 15);
+            if (cacheFresh) {
               _ingestForeignSample(cachedHex, r.rssi, AdvertPower.high);
-            } else {
-              unawaited(_recoverTokenViaGatt(r.device, deviceId, r.rssi));
+            }
+            // KEEPALIVE, not just token recovery: our GATT read is the only
+            // thing that wakes a sleeping iPhone into scanning back (its
+            // scan restarts piggyback on incoming reads — BackgroundBeacon
+            // .swift). First dark bench (2026-07-23): a 15 min cache meant
+            // no reads for 15 min, and the locked iPhone's return direction
+            // died ~30 s after lock. So while a peer advertises in overflow
+            // form (= it is asleep), re-read every ~75 s; reciprocity needs
+            // BOTH witnesses.
+            final lastRead = _gattTokenAt[deviceId];
+            final needKeepalive = !cacheFresh ||
+                lastRead == null ||
+                DateTime.now().difference(lastRead) >
+                    const Duration(seconds: 75);
+            if (needKeepalive) {
+              unawaited(_recoverTokenViaGatt(r.device, deviceId, r.rssi,
+                  isKeepalive: cacheFresh));
             }
           }
         }
@@ -857,11 +873,16 @@ class BeaconService {
   final Set<String> _gattInflight = {};
 
   Future<void> _recoverTokenViaGatt(
-      BluetoothDevice device, String deviceId, int rssi) async {
+      BluetoothDevice device, String deviceId, int rssi,
+      {bool isKeepalive = false}) async {
     if (_gattInflight.contains(deviceId)) return;
     final last = _gattLastAttempt[deviceId];
-    if (last != null &&
-        DateTime.now().difference(last) < const Duration(minutes: 5)) {
+    // The 5 min backoff protects against strangers' iPhones (one failed
+    // service-discovery, then silence). Keepalive reads target devices that
+    // already served our token — they get the short cadence instead.
+    final floor =
+        isKeepalive ? const Duration(seconds: 75) : const Duration(minutes: 5);
+    if (last != null && DateTime.now().difference(last) < floor) {
       return;
     }
     _gattLastAttempt[deviceId] = DateTime.now();
