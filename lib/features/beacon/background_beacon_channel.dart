@@ -16,8 +16,10 @@ class BackgroundBeaconChannel {
 
   static const _channel = MethodChannel('io.inrange/background_beacon');
 
-  /// Fresh foreign sighting from the native module (token hex, RSSI).
-  void Function(String tokenHex, int rssi)? onSighting;
+  /// Foreign sighting from the native module (token hex, RSSI, capture
+  /// time). Buffered background sightings flush on foregrounding with
+  /// their ORIGINAL timestamps — honor them.
+  void Function(String tokenHex, int rssi, DateTime at)? onSighting;
 
   /// Native advertising state — feeds the fail-closed `_discoverable` rule.
   void Function(bool advertising)? onAdvertisingState;
@@ -27,9 +29,12 @@ class BackgroundBeaconChannel {
       case 'onSighting':
         final args = call.arguments;
         if (args is Map) {
-          final token = args['token'], rssi = args['rssi'];
+          final token = args['token'], rssi = args['rssi'], ts = args['ts'];
           if (token is String && token.length == 32 && rssi is int) {
-            onSighting?.call(token, rssi);
+            final at = ts is int
+                ? DateTime.fromMillisecondsSinceEpoch(ts)
+                : DateTime.now();
+            onSighting?.call(token, rssi, at);
           }
         }
       case 'onAdvertisingState':

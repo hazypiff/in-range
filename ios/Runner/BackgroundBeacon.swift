@@ -57,6 +57,14 @@ final class BackgroundBeacon: NSObject {
   /// persisted enabled flag brings both managers straight back up — no
   /// Flutter engine required to serve GATT reads or buffer sightings.
   func bootFromPersistence() {
+    // Flush the background buffer whenever the app returns to foreground —
+    // the engine is only trustworthy while active.
+    NotificationCenter.default.addObserver(
+      forName: UIApplication.didBecomeActiveNotification, object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      self?.flushBuffered()
+    }
     if defaults.bool(forKey: Self.keyEnabled) {
       ensureManagers()
     }
@@ -247,7 +255,11 @@ final class BackgroundBeacon: NSObject {
 
   private func emitSighting(tokenHex: String, rssi: Int) {
     let ts = Int(Date().timeIntervalSince1970 * 1000)
-    if let ch = channel {
+    // NEVER hand a background sighting to the Flutter engine: a suspended
+    // engine's channel accepts the call and silently drops it (dark-bench
+    // 2026-07-23 — native discoveries happened, Dart never saw them).
+    // Background → persist natively, flush on foreground.
+    if UIApplication.shared.applicationState == .active, let ch = channel {
       ch.invokeMethod(
         "onSighting", arguments: ["token": tokenHex, "rssi": rssi, "ts": ts])
     } else {
@@ -310,9 +322,28 @@ extension BackgroundBeacon: CBPeripheralManagerDelegate {
     request.value = data.subdata(in: request.offset..<data.count)
     peripheral.respond(to: request, withResult: .success)
     // A peer reading our token = a peer in range + a moment of background
-    // execution time. Spend it re-arming our own scan so discovery flows
-    // both ways even when we're locked.
-    scheduleScanRestart()
+    // execution time. Background scan deliveries are coalesced for SECONDS,
+    // so sessions must be long: a 2 s restart burst produced ZERO return
+    // samples (2026-07-23 bench — every session died before its delivery
+    // arrived), while one long session nets ~1 per wake. Best measured
+    // shape: extend the wake (~30 s background task) and run two ~10 s
+    // sessions inside it.
+    var bgTask: UIBackgroundTaskIdentifier = .invalid
+    bgTask = UIApplication.shared.beginBackgroundTask {
+      UIApplication.shared.endBackgroundTask(bgTask)
+      bgTask = .invalid
+    }
+    restartScanNow()
+    DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+      guard let self = self, self.enabled, self.inflight.isEmpty else { return }
+      self.restartScanNow()
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 25) {
+      if bgTask != .invalid {
+        UIApplication.shared.endBackgroundTask(bgTask)
+        bgTask = .invalid
+      }
+    }
   }
 }
 

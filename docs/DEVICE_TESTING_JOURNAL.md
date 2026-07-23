@@ -180,5 +180,22 @@ not rediscover them:
   locked↔locked needs an external wake source. GATT connect range vs advert
   range at walk distances still unmeasured (field regression pending).
 
+### 2026-07-23 (late) — FIRST Android↔iPhone contact + locked-bridge bench (S22)
+- New device: Galaxy S22 (SM-S901U, modern Android) — immediately earned its
+  keep: found the FGS-type crash (fad3a46) that would have killed beacon-on
+  for every Android 14+ user (S9's Android 10 never enforced it).
+- Desk handshake PASSED both directions (first time ever): S22→iPhone via
+  the widened CAFE scan filter; iPhone→S22 with W1's dual-field advert
+  verified clean.
+- Locked-iPhone bridge: S22 tracks a locked iPhone CONTINUOUSLY (overflow
+  filter + GATT keepalive every 75 s — keepalive doubles as the iPhone's
+  wake source; ee14bf5). Return direction is transition-bursts only — iOS
+  won't re-deliver a known peripheral to a backgrounded scanner (full
+  experiment ladder + consequences in IOS_BACKGROUND_BLE_WIRING.md).
+- Background sightings now buffer natively and flush on foregrounding with
+  original timestamps (suspended-engine channel drops are real).
+- NOT yet done: S22↔iPhone feet calibration (needs its own threshold-table
+  row); S9 desk-verify of W1's mixed advert; silent-push wake design.
+
 ### (add Android baseline summary here — hazypiff: link walks #1–4 data and
 the S9 RSSI curve so the iOS sweep has a comparison target)

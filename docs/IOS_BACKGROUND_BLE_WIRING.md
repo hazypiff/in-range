@@ -12,7 +12,28 @@ on both test iPhones. Desk results (both phones ~2 ft apart):
   screen-wakes. Lesson from bench round 1: discovery-chained scan restarts
   deadlock (no discovery → no restart); an 8 s heartbeat timer + read-wake
   piggyback is the working shape.
-**W1 + W3 wired 2026-07-24 (Mac side, owner-directed — @hazypiff please
+**CROSS-PLATFORM BENCH RESULTS (2026-07-23, S22 + iPhone 15 Plus, ~5 rounds):**
+- Both awake: full flow both directions — first Android↔iPhone contact ever
+  (S22 3,091 samples/5 min of the iPhone; iPhone 634 of the S22). W1's mixed
+  AD payload verified clean on the S22.
+- S22 (screen off) ↔ LOCKED iPhone: S22 tracks it continuously (~100
+  samples/30 s: overflow filter + cached token + GATT keepalive reads every
+  75 s, all 16-byte reads clean). THE BRIDGE WORKS one way.
+- Locked iPhone's RETURN direction: bursts at lock/unlock transitions and
+  occasional wake catches only. Measured root cause: iOS will not re-deliver
+  an already-seen peripheral to a BACKGROUNDED scanner, even across fresh
+  scan sessions inside read-wake windows (tried: single restart ≈ 1
+  sample/wake; 2 s restart burst = 0 — sessions died before coalesced
+  delivery; 2×10 s sessions in a 30 s background task = 0 after the first
+  minute; native-buffer-and-flush proved the samples were never delivered,
+  not lost in the channel). This is an OS-level ceiling below the documented
+  duplicate suppression. Consequences: reciprocity needs server-side window
+  tolerance for asymmetric evidence (Android-side rich, iPhone-side sparse
+  wake bursts), and the silent-push wake (Locals-overlap coordinated)
+  remains the designed closer. @hazypiff: sanity-check against Herald-era
+  Android↔iOS data if you have it.
+
+**W1 + W3 wired 2026-07-23 (Mac side, owner-directed — @hazypiff please
 review + desk-verify on the S9):** Android advert now carries the CAFE
 marker alongside mfgData (W1; verify both fields arrive on-air per §3 risk
 note), the Android scan adds the CAFE service filter (issue #1 — Android

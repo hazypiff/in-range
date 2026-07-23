@@ -54,9 +54,9 @@ class BeaconService {
   /// ingest path as scan results; the native advertising callback keeps
   /// `_discoverable` honest across background transitions.
   late final BackgroundBeaconChannel _bgBeacon = BackgroundBeaconChannel()
-    ..onSighting = ((token, rssi) {
+    ..onSighting = ((token, rssi, at) {
       if (!_isOn) return;
-      _ingestForeignSample(token, rssi, AdvertPower.high);
+      _ingestForeignSample(token, rssi, AdvertPower.high, at: at);
     })
     ..onAdvertisingState = ((advertising) {
       _discoverable = advertising;
@@ -827,7 +827,14 @@ class BeaconService {
                 DateTime.now().difference(cachedAt) <
                     const Duration(minutes: 15);
             if (cacheFresh) {
+              if (AppConfig.calibScanMode) {
+                debugPrint(
+                    'W3 overflow dev=$deviceId rssi=${r.rssi} → cached '
+                    '${cachedHex.substring(0, 8)} (age ${DateTime.now().difference(cachedAt).inSeconds}s)');
+              }
               _ingestForeignSample(cachedHex, r.rssi, AdvertPower.high);
+            } else if (AppConfig.calibScanMode) {
+              debugPrint('W3 overflow dev=$deviceId rssi=${r.rssi} → no cache');
             }
             // KEEPALIVE, not just token recovery: our GATT read is the only
             // thing that wakes a sleeping iPhone into scanning back (its
@@ -885,6 +892,8 @@ class BeaconService {
     if (last != null && DateTime.now().difference(last) < floor) {
       return;
     }
+    debugPrint(
+        'W3 GATT ${isKeepalive ? "keepalive" : "recover"} → connecting $deviceId');
     _gattLastAttempt[deviceId] = DateTime.now();
     if (_gattLastAttempt.length > 200) {
       final cutoff = DateTime.now().subtract(const Duration(minutes: 30));
@@ -905,11 +914,15 @@ class BeaconService {
       final services = await device.discoverServices();
       final markerGuid = Guid(_inRangeServiceUuid);
       final tokenGuid = Guid(_inRangeTokenCharUuid);
+      final hasCafe = services.any((s) => s.uuid == markerGuid);
+      debugPrint(
+          'W3 GATT $deviceId: ${services.length} services, CAFE=${hasCafe ? "yes" : "NO (stranger)"}');
       for (final s in services) {
         if (s.uuid != markerGuid) continue;
         for (final c in s.characteristics) {
           if (c.uuid != tokenGuid) continue;
           final bytes = await c.read();
+          debugPrint('W3 GATT $deviceId: read ${bytes.length} bytes');
           if (bytes.length == 16 && _isOn) {
             final hex = bytes
                 .map((b) => b.toRadixString(16).padLeft(2, '0'))
@@ -944,7 +957,8 @@ class BeaconService {
   /// iOS native carrier's sightings (W4) both land here, so the self-sight
   /// guard, estimator, calibration log and sighting bookkeeping stay one
   /// code path.
-  void _ingestForeignSample(String hexId, int rssi, AdvertPower power) {
+  void _ingestForeignSample(String hexId, int rssi, AdvertPower power,
+      {DateTime? at}) {
     // Filter ALL of our own tokens, not just the current one — a leaked
     // advertiser from a prior beacon session kept broadcasting the OLD
     // token after off→on, and we self-sighted it at a rock-constant RSSI
@@ -957,7 +971,7 @@ class BeaconService {
     // ids to release logs / bug reports (reviewer #18).
     if (AppConfig.calibScanMode) {
       try {
-        onAdvertSample?.call(hexId, rssi, power, DateTime.now());
+        onAdvertSample?.call(hexId, rssi, power, at ?? DateTime.now());
       } catch (e) {
         debugPrint('onAdvertSample callback error: $e');
       }
