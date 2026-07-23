@@ -208,5 +208,23 @@ not rediscover them:
   S22↔iPhone pair needs its own 6-station calibration walk before
   cross-platform tiers go live.
 
+### 2026-07-23 (evening) — S22↔iPhone six-station walk COMPLETE (provisional row)
+- Full split-dwell protocol, 25/65/90/130/175/200 ft, both directions; curve
+  + provisional per-direction cutoffs recorded in PROXIMITY_TIERS.md.
+- Direction asymmetry ~9 dB; pocketed S22-observing curve compresses to a
+  7 dB band (bilateral fusion is now load-bearing); cross-platform pocket
+  detection ceiling ≈175–200 ft (iPhone-observing side dies first at 200).
+- Field casualties fixed mid-walk (all pushed): un-timeouted RPCs hanging
+  beacon on/off on a half-dead network (issue_token_batch, claim_token,
+  release_token, record_sighting), and the FGS handshake holding the toggle
+  hostage with the radio already live. Every network await in the beacon
+  lifecycle is now bounded. Known cosmetic bug queued: stale red error text
+  persists after a successful delayed start; beacon start needs a visible
+  "starting…" state (resilience layer).
+- Method notes: two stations merged into one burst when the walker moved
+  fast (<60 s beacon-off gap) — re-split on 15 s gaps; one station redone
+  after a mid-dwell walk-back showed up as pocket>hand RSSI (the burst
+  checker catches protocol slips reliably).
+
 ### (add Android baseline summary here — hazypiff: link walks #1–4 data and
 the S9 RSSI curve so the iOS sweep has a comparison target)
