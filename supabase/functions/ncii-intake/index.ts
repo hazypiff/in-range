@@ -60,8 +60,17 @@ Deno.serve(async (req) => {
 
     const email = String(body.p_reporter_email ?? "").trim();
     const description = String(body.p_description ?? "").trim();
-    if (!email.includes("@")) return json({ ok: false, error: "invalid_email" }, 400);
+    const reporterName = body.p_reporter_name == null ? null : String(body.p_reporter_name).trim();
+    const targetHint = body.p_target_hint == null ? null : String(body.p_target_hint).trim();
+    if (!email.includes("@") || email.length > 320) {
+      return json({ ok: false, error: "invalid_email" }, 400);
+    }
     if (description.length < 10) return json({ ok: false, error: "description_too_short" }, 400);
+    // Upper bounds: ncii_reports is a retained-forever compliance table, so cap
+    // each field to keep it from being inflated with multi-MB text.
+    if (description.length > 5000) return json({ ok: false, error: "description_too_long" }, 400);
+    if ((reporterName?.length ?? 0) > 200) return json({ ok: false, error: "name_too_long" }, 400);
+    if ((targetHint?.length ?? 0) > 2000) return json({ ok: false, error: "target_hint_too_long" }, 400);
 
     // Per-IP hourly limit. An empty/unknown IP falls through to the email +
     // global backstops rather than blocking a legitimate reporter.
@@ -83,8 +92,8 @@ Deno.serve(async (req) => {
     const { error: rpcErr } = await supabase.rpc("submit_ncii_report", {
       p_reporter_email: email,
       p_description: description,
-      p_reporter_name: (body.p_reporter_name as string | null) ?? null,
-      p_target_hint: (body.p_target_hint as string | null) ?? null,
+      p_reporter_name: reporterName,
+      p_target_hint: targetHint,
       p_is_authorized: Boolean(body.p_is_authorized),
     });
     if (rpcErr) {

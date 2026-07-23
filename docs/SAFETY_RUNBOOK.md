@@ -42,6 +42,13 @@ These gate the whole chain. None is code.
       **Rotation note:** if the `sb_secret` service key is rotated, update the
       Vault secret: `SELECT vault.update_secret((SELECT id FROM vault.secrets
       WHERE name='edge_service_key'), '<new sb_secret>');`
+      **Optional hardening (pg_net key transit):** with pg_net scheduling, the
+      service key transits `net.http_request_queue` in plaintext until drained.
+      That table is granted to PUBLIC by Supabase (`supabase_admin`) and cannot
+      be revoked as `postgres`, but it is NOT PostgREST-exposed and `anon`/
+      `authenticated` are NOLOGIN, so it is not app-reachable. To remove the
+      transit entirely, replace the `in-range-storage-drain` pg_cron job with a
+      Dashboard → Edge Functions → Scheduled Function (no key in any table).
 
 ---
 
