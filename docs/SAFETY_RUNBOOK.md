@@ -150,7 +150,7 @@ A released hold lets any pending deletion complete automatically.
 
 ## 5. What the machinery guarantees, and what it doesn't
 
-**Guaranteed by code (harness T13–T41):**
+**Guaranteed by code (harness T13–T45):**
 - A held account survives the retention purge until the hold is released.
 - Escalation preserves before the subject can race a deletion.
 - Deletion under a hold is deferred, not refused — it completes on release.
@@ -169,6 +169,13 @@ A released hold lets any pending deletion complete automatically.
   BLE token history, photo uploads/verification, and location correlation all
   refuse a withdrawn user, and the Storage worker skips objects whose owner is
   under a hold (queued-then-held can't be raced into deletion).
+- Withdrawing precise-location stops GPS collection everywhere, including the
+  Beacon path: claim_token/record_sighting refuse a precise_location-withdrawn
+  caller and won't generate location evidence about a withdrawn observed user
+  (they gated only ble_proximity before 0048).
+- Raw GPS honors the "deleted after 24 hours" promise the consent UI makes:
+  sightings and token_claim_history coordinates are swept at 24h (down from
+  48h), while a held subject's rows are still preserved as evidence.
 - Internal token/pair helpers are no longer callable by anonymous clients, so
   a live BLE token can't be resolved to its owner + approximate GPS by anyone.
 

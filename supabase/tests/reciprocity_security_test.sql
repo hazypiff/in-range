@@ -1766,5 +1766,152 @@ BEGIN
     'T41 dequeue dropped an unheld object';
 END $$;
 
+-- ============ TEST 42: precise_location withdrawal stops Beacon GPS =========
+-- The consent UI scopes GPS to precise_location; withdrawing it must stop
+-- coordinate collection through claim_token/record_sighting, not just the
+-- Locals feed. (0048 finding 2.)
+DO $$
+DECLARE
+  v_w UUID := '42a00000-0000-0000-0000-00000000042a';  -- withdrew precise_location
+  v_o UUID := '42b00000-0000-0000-0000-00000000042b';  -- fully consented observer
+  v_raised BOOLEAN;
+BEGIN
+  INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+    (v_w,'00000000-0000-0000-0000-000000000000','authenticated','authenticated','w42a@t.local',now(),now()),
+    (v_o,'00000000-0000-0000-0000-000000000000','authenticated','authenticated','w42b@t.local',now(),now());
+  UPDATE public.profiles SET display_name='W42',dob='1990-01-01',age_verified=true,is_photo_verified=true,
+    photo_urls=ARRAY[v_w::text||'/w.jpg'],is_paused=false,is_incognito=false WHERE id=v_w;
+  UPDATE public.profiles SET display_name='O42',dob='1990-01-01',age_verified=true,is_photo_verified=true,
+    photo_urls=ARRAY[v_o::text||'/o.jpg'],is_paused=false,is_incognito=false WHERE id=v_o;
+  INSERT INTO public.photo_verifications (user_id,photo_path,slot_index,state,decided_at) VALUES
+    (v_w, v_w::text||'/w.jpg',0,'approved',now()),
+    (v_o, v_o::text||'/o.jpg',0,'approved',now());
+  -- both users' live tokens in history so record_sighting can resolve them
+  INSERT INTO public.token_claim_history (token,user_id,valid_from,valid_until,approx_lat,approx_lon,range_type) VALUES
+    ('42a42a42a42a42a42a42a42a42a42a42', v_w, now()-interval '10 s', now()+interval '10 min', 38.9,-76.9,'feet_10'),
+    ('42b42b42b42b42b42b42b42b42b42b42', v_o, now()-interval '10 s', now()+interval '10 min', 38.9,-76.9,'feet_10');
+
+  -- W grants both, then withdraws precise_location (keeps ble_proximity).
+  PERFORM set_config('request.jwt.claims', json_build_object('sub',v_w,'role','authenticated')::text, true);
+  PERFORM public.grant_consent('ble_proximity','2026-07-20','test');
+  PERFORM public.grant_consent('precise_location','2026-07-20','test');
+  PERFORM public.withdraw_consent('precise_location');
+
+  -- (a) W's own claim_token must be refused.
+  v_raised := false;
+  BEGIN
+    PERFORM public.claim_token('42a42a42a42a42a42a42a42a42a42a42', now()+interval '10 min', 38.9,-76.9,'feet_10',10.0);
+  EXCEPTION WHEN insufficient_privilege THEN v_raised := true;
+  END;
+  ASSERT v_raised, 'T42a claim_token succeeded after precise_location withdrawal';
+
+  -- (b) W's own record_sighting (as observer) must be refused.
+  v_raised := false;
+  BEGIN
+    PERFORM public.record_sighting('42b42b42b42b42b42b42b42b42b42b42', 38.9,-76.9,-60,now(),'feet_10',10.0);
+  EXCEPTION WHEN insufficient_privilege THEN v_raised := true;
+  END;
+  ASSERT v_raised, 'T42b record_sighting succeeded for a precise_location-withdrawn observer';
+
+  -- (c) A consented observer must NOT generate a sighting ABOUT W (observed
+  --     user withdrew precise_location) — resolves as unknown token.
+  PERFORM set_config('request.jwt.claims', json_build_object('sub',v_o,'role','authenticated')::text, true);
+  PERFORM public.grant_consent('ble_proximity','2026-07-20','test');
+  PERFORM public.grant_consent('precise_location','2026-07-20','test');
+  v_raised := false;
+  BEGIN
+    PERFORM public.record_sighting('42a42a42a42a42a42a42a42a42a42a42', 38.9,-76.9,-60,now(),'feet_10',10.0);
+  EXCEPTION WHEN sqlstate '22023' THEN v_raised := true;
+  END;
+  ASSERT v_raised, 'T42c consented observer generated a sighting about a precise_location-withdrawn user';
+  ASSERT NOT EXISTS (SELECT 1 FROM public.sightings WHERE observed_user_id = v_w),
+    'T42c a sighting row about the withdrawn user was written';
+  PERFORM set_config('request.jwt.claims', NULL, true);
+END $$;
+
+-- ============ TEST 43: GPS-bearing rows are purged at 24h (24h promise) =====
+-- sightings + token_claim_history carry raw coordinates and are swept at 24h to
+-- honor "deleted from our servers after 24 hours"; a held user's rows survive.
+-- (0048 finding 1.)
+DO $$
+DECLARE
+  v_u UUID := '43a00000-0000-0000-0000-00000000043a';  -- unheld: purged at 24h
+  v_h UUID := '43b00000-0000-0000-0000-00000000043b';  -- held: preserved
+BEGIN
+  INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+    (v_u,'00000000-0000-0000-0000-000000000000','authenticated','authenticated','w43a@t.local',now(),now()),
+    (v_h,'00000000-0000-0000-0000-000000000000','authenticated','authenticated','w43b@t.local',now(),now());
+  -- 30h-old rows (past 24h, under the old 48h) carrying GPS
+  INSERT INTO public.sightings (observer_user_id,observed_token,observed_user_id,received_at,rssi,observed_at,observer_lat,observer_lon,range_type) VALUES
+    (v_u,'43cafe43cafe43cafe43cafe43cafe43',v_u, now()-interval '30 hours', -60, now()-interval '30 hours', 38.9,-76.9,'feet_10'),
+    (v_h,'43beef43beef43beef43beef43beef43',v_h, now()-interval '30 hours', -60, now()-interval '30 hours', 38.9,-76.9,'feet_10');
+  INSERT INTO public.token_claim_history (token,user_id,valid_from,valid_until,approx_lat,approx_lon,range_type) VALUES
+    ('43dead43dead43dead43dead43dead43', v_u, now()-interval '30 hours 20 min', now()-interval '30 hours', 38.9,-76.9,'feet_10'),
+    ('43f00d43f00d43f00d43f00d43f00d43', v_h, now()-interval '30 hours 20 min', now()-interval '30 hours', 38.9,-76.9,'feet_10');
+  PERFORM public.place_legal_hold(v_h,'law_enforcement','test','ref',NULL);
+
+  PERFORM public.cleanup_ephemeral_data();
+
+  -- unheld: gone by 24h
+  ASSERT NOT EXISTS (SELECT 1 FROM public.sightings WHERE observed_token='43cafe43cafe43cafe43cafe43cafe43'),
+    'T43 unheld sighting GPS survived past 24h';
+  ASSERT NOT EXISTS (SELECT 1 FROM public.token_claim_history WHERE token='43dead43dead43dead43dead43dead43'),
+    'T43 unheld token_claim_history GPS survived past 24h';
+  -- held: preserved as evidence
+  ASSERT EXISTS (SELECT 1 FROM public.sightings WHERE observed_token='43beef43beef43beef43beef43beef43'),
+    'T43 held user''s sighting wrongly purged';
+  ASSERT EXISTS (SELECT 1 FROM public.token_claim_history WHERE token='43f00d43f00d43f00d43f00d43f00d43'),
+    'T43 held user''s token_claim_history wrongly purged';
+END $$;
+
+-- ============ TEST 44: is_discoverable_user executable by service_role ======
+-- The miles-correlate Edge worker calls it as service_role; without EXECUTE it
+-- would fail closed on every single-user correlate. (0048 finding 3.)
+DO $$ BEGIN
+  ASSERT has_function_privilege('service_role','public.is_discoverable_user(uuid)','EXECUTE'),
+    'T44 service_role cannot execute is_discoverable_user — Edge patch would fail closed';
+END $$;
+
+-- ============ TEST 45: enforce_consent=1 blocks never-consented caller ======
+-- The caller gate uses my_consent_satisfied(), so turning enforcement on denies
+-- a never-consented caller even if they hold a stale pre-rollout ping. (0048 #4.)
+DO $$
+DECLARE
+  v_u UUID := '45a00000-0000-0000-0000-00000000045a';
+  v_raised BOOLEAN := false;
+BEGIN
+  INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+    (v_u,'00000000-0000-0000-0000-000000000000','authenticated','authenticated','w45a@t.local',now(),now());
+  UPDATE public.profiles SET display_name='V45',dob='1990-01-01',age_verified=true,is_photo_verified=true,
+    photo_urls=ARRAY[v_u::text||'/v.jpg'],is_paused=false,is_incognito=false WHERE id=v_u;
+  INSERT INTO public.photo_verifications (user_id,photo_path,slot_index,state,decided_at) VALUES
+    (v_u, v_u::text||'/v.jpg',0,'approved',now());
+  -- a fresh pre-rollout ping exists (would satisfy the feed's origin lookup)
+  INSERT INTO public.location_pings (user_id,geo,range_type,neighborhood,created_at)
+    VALUES (v_u,'SRID=4326;POINT(-76.9 38.9)','miles_10','Nearby', now()-interval '1 minute');
+
+  UPDATE public.app_settings SET value_num=1 WHERE key='enforce_consent';
+  PERFORM set_config('request.jwt.claims', json_build_object('sub',v_u,'role','authenticated')::text, true);
+
+  -- Never consented: gate must deny before any feed rows are considered.
+  ASSERT public.my_consent_satisfied('precise_location') = false,
+    'T45 never-consented caller satisfied precise_location at enforce_consent=1';
+  BEGIN
+    PERFORM public.get_locals_feed(38.9,-76.9,'miles_10',50);
+  EXCEPTION WHEN insufficient_privilege THEN v_raised := true;
+  END;
+  ASSERT v_raised, 'T45 get_locals_feed served a never-consented caller at enforce_consent=1';
+
+  -- After granting, the gate opens (feed may legitimately return 0 rows).
+  PERFORM public.grant_consent('precise_location','2026-07-20','test');
+  ASSERT public.my_consent_satisfied('precise_location') = true,
+    'T45 gate still closed after granting precise_location';
+
+  PERFORM set_config('request.jwt.claims', NULL, true);
+  UPDATE public.app_settings SET value_num=0 WHERE key='enforce_consent';
+  ASSERT (SELECT value_num FROM public.app_settings WHERE key='enforce_consent')=0,
+    'T45 must restore enforce_consent=0';
+END $$;
+
 SELECT '✅ ALL RECIPROCITY SECURITY INVARIANTS PASSED' AS result;
 ROLLBACK;
