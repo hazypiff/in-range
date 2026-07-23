@@ -94,9 +94,11 @@ connected iPhone, and runs. For a two-phone BLE test where both phones roam, use
   `ios/Podfile` handle this and are already set; if you ever regenerate the
   Podfile, keep the `GCC_PREPROCESSOR_DEFINITIONS` block.
 - **BLE won't scan/advertise with the phone locked** → expected today; the iOS
-  locked-phone stack (GATT carrier + state restoration + silent push) is a
-  separate build-out. **Foreground BLE works now** — keep the screen awake for
-  tomorrow's test, same as the Android calibration walks.
+  locked-phone stack is designed and ready to wire — see
+  `docs/IOS_BACKGROUND_BLE_WIRING.md` (W2 is the Mac/Xcode piece to start
+  with). Until it lands: **foreground BLE works now** — keep the iPhone screen
+  awake with the app open during walks. (The Androids do NOT need this — their
+  foreground service runs locked-in-pocket.)
 
 ---
 
