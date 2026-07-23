@@ -19,6 +19,7 @@ import io.flutter.plugin.common.MethodChannel
 /// costs no radio time, and is exactly what a 60s venue cadence needs.
 class MainActivity : FlutterActivity() {
     private val channel = "io.inrange.app/wifi"
+    private val gattChannel = "io.inrange.app/gatt"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -27,6 +28,16 @@ class MainActivity : FlutterActivity() {
                 when (call.method) {
                     "scanResults" -> result.success(scanResults())
                     "requestScan" -> result.success(requestScan())
+                    else -> result.notImplemented()
+                }
+            }
+        // W3 GATT token recovery (GattTokenReader.kt) — native so the app's
+        // one connect path carries no flutter_blue_plus license obligation.
+        val gattReader = GattTokenReader(applicationContext)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, gattChannel)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "readToken" -> gattReader.readToken(call, result)
                     else -> result.notImplemented()
                 }
             }

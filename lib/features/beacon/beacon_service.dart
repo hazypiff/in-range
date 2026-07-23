@@ -9,6 +9,7 @@ import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/core/network/supabase_client.dart';
 import 'package:in_range/features/beacon/background_beacon_channel.dart';
 import 'package:in_range/features/beacon/batch_token_source.dart';
+import 'package:in_range/features/beacon/gatt_token_reader.dart';
 import 'package:in_range/features/beacon/claim_manager.dart';
 import 'package:in_range/features/beacon/ephemeral_token_generator.dart';
 import 'package:in_range/features/beacon/range_estimator.dart';
@@ -860,7 +861,7 @@ class BeaconService {
                 DateTime.now().difference(lastRead) >
                     const Duration(seconds: 75);
             if (needKeepalive) {
-              unawaited(_recoverTokenViaGatt(r.device, deviceId, r.rssi,
+              unawaited(_recoverTokenViaGatt(deviceId, r.rssi,
                   isKeepalive: cacheFresh));
             }
           }
@@ -889,8 +890,7 @@ class BeaconService {
   final Map<String, DateTime> _gattLastAttempt = {};
   final Set<String> _gattInflight = {};
 
-  Future<void> _recoverTokenViaGatt(
-      BluetoothDevice device, String deviceId, int rssi,
+  Future<void> _recoverTokenViaGatt(String deviceId, int rssi,
       {bool isKeepalive = false}) async {
     if (_gattInflight.contains(deviceId)) return;
     final last = _gattLastAttempt[deviceId];
@@ -911,54 +911,38 @@ class BeaconService {
     }
     _gattInflight.add(deviceId);
     try {
-      // LICENSING (flag for launch): flutter_blue_plus requires a License
-      // declaration on connect(). `nonprofit` covers today's personal
-      // dev/testing; COMMERCIAL LAUNCH requires either purchasing the FBP
-      // commercial license or moving this connect path to native code the
-      // way iOS already does (BackgroundBeacon.swift uses CoreBluetooth
-      // directly, no plugin license involved).
-      await device.connect(
+      // Native BluetoothGatt round-trip (GattTokenReader.kt) — the app's one
+      // connect path, kept plugin-free so it carries no flutter_blue_plus
+      // license obligation (iOS connects natively in BackgroundBeacon.swift
+      // for the same reason). Disconnect/close is the native side's job.
+      final bytes = await NativeGattTokenReader.readToken(
+        deviceId,
+        serviceUuid: _inRangeServiceUuid,
+        charUuid: _inRangeTokenCharUuid,
         timeout: const Duration(seconds: 10),
-        license: License.nonprofit,
+        onStranger: () =>
+            debugPrint('W3 GATT $deviceId: no In Range service (stranger)'),
       );
-      final services = await device.discoverServices();
-      final markerGuid = Guid(_inRangeServiceUuid);
-      final tokenGuid = Guid(_inRangeTokenCharUuid);
-      final hasCafe = services.any((s) => s.uuid == markerGuid);
-      debugPrint(
-          'W3 GATT $deviceId: ${services.length} services, CAFE=${hasCafe ? "yes" : "NO (stranger)"}');
-      for (final s in services) {
-        if (s.uuid != markerGuid) continue;
-        for (final c in s.characteristics) {
-          if (c.uuid != tokenGuid) continue;
-          final bytes = await c.read();
-          debugPrint('W3 GATT $deviceId: read ${bytes.length} bytes');
-          if (bytes.length == 16 && _isOn) {
-            final hex = bytes
-                .map((b) => b.toRadixString(16).padLeft(2, '0'))
-                .join();
-            _gattTokenByDevice[deviceId] = hex;
-            _gattTokenAt[deviceId] = DateTime.now();
-            if (_gattTokenByDevice.length > 64) {
-              final cutoff =
-                  DateTime.now().subtract(const Duration(minutes: 15));
-              _gattTokenAt.removeWhere((id, at) {
-                final stale = at.isBefore(cutoff);
-                if (stale) _gattTokenByDevice.remove(id);
-                return stale;
-              });
-            }
-            _ingestForeignSample(hex, rssi, AdvertPower.high);
+      if (bytes != null) {
+        debugPrint('W3 GATT $deviceId: read ${bytes.length} bytes');
+        if (bytes.length == 16 && _isOn) {
+          final hex =
+              bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+          _gattTokenByDevice[deviceId] = hex;
+          _gattTokenAt[deviceId] = DateTime.now();
+          if (_gattTokenByDevice.length > 64) {
+            final cutoff =
+                DateTime.now().subtract(const Duration(minutes: 15));
+            _gattTokenAt.removeWhere((id, at) {
+              final stale = at.isBefore(cutoff);
+              if (stale) _gattTokenByDevice.remove(id);
+              return stale;
+            });
           }
-          return;
+          _ingestForeignSample(hex, rssi, AdvertPower.high);
         }
       }
-    } catch (e) {
-      debugPrint('W3 GATT token read failed ($deviceId): $e');
     } finally {
-      try {
-        await device.disconnect();
-      } catch (_) {}
       _gattInflight.remove(deviceId);
     }
   }

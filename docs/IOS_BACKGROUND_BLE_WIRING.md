@@ -55,11 +55,14 @@ marker alongside mfgData (W1; verify both fields arrive on-air per §3 risk
 note), the Android scan adds the CAFE service filter (issue #1 — Android
 can finally see foreground iPhones) plus the 0x004C/0x01-masked overflow
 filter, and a GATT connect-read recovers tokens from backgrounded iPhones
-(W3; 15 min cache, 5 min per-device backoff). NOTE: flutter_blue_plus
-`connect()` now requires a License declaration — `nonprofit` is declared
-for dev/testing; commercial launch needs the paid FBP license or a native
-connect path (iOS already connects natively). Not yet verified on real
-Android hardware.
+(W3; 15 min cache, 5 min per-device backoff). LICENSE RESOLVED 2026-07-23
+(owner call): the connect-read moved to a native Android module
+(`GattTokenReader.kt` + `io.inrange.app/gatt` channel) — plain
+BluetoothGatt, no flutter_blue_plus `connect()` anywhere, so no FBP
+commercial license is needed. FBP stays for scanning only (license-free).
+Policy (backoff/cache/keepalive) unchanged in Dart. S9↔locked-iPhone
+desk-verify of the native read still pending (needs an iPhone in the room);
+W1 mixed advert + S9↔S9 scan verified on-device 2026-07-23.
 **Prereq reading:** `IOS_CARRIER_DECISION_2026-07-16.md` (the peer-reviewed
 carrier analysis this plan executes — its §3b "(a) GATT exchange" is the
 production path chosen here).
