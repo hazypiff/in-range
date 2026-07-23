@@ -292,9 +292,14 @@ class BeaconService {
     if (AppConfig.enableForegroundService) {
       try {
         final service = FlutterBackgroundService();
-        final running = await service.isRunning();
+        // Timeouts: startService waits on a handshake with the background
+        // isolate; a wedged handshake held the ENTIRE beacon toggle hostage
+        // with the radio already running (S22 2026-07-23 — UI showed off,
+        // scan was live). The FGS is best-effort; the beacon must not be.
+        final running =
+            await service.isRunning().timeout(const Duration(seconds: 5));
         if (!running) {
-          await service.startService();
+          await service.startService().timeout(const Duration(seconds: 10));
         }
         service.invoke('setAsForeground');
         service.invoke(
@@ -1160,7 +1165,7 @@ class BeaconService {
           // Sizes the server's GPS plausibility veto from real uncertainty
           // instead of a fixed guess (migration 0024).
           'p_accuracy': s.observerAccuracyM,
-        });
+        }).timeout(const Duration(seconds: 10));
         debugPrint('record_sighting OK rssi=${s.rssi}');
         if (identical(_pendingByCorr[s.observedToken], s)) {
           _pendingByCorr.remove(s.observedToken);
@@ -1280,7 +1285,9 @@ class BeaconService {
     _cloudClaimed = false;
     if (!AppConfig.hasRealSupabase) return;
     try {
-      await InRangeSupabase.client.rpc('release_token');
+      await InRangeSupabase.client
+          .rpc('release_token')
+          .timeout(const Duration(seconds: 8));
     } catch (e) {
       debugPrint('release_token failed: $e');
     }
