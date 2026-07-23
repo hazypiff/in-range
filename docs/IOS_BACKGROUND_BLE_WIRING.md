@@ -33,6 +33,27 @@ on both test iPhones. Desk results (both phones ~2 ft apart):
   remains the designed closer. @hazypiff: sanity-check against Herald-era
   Android↔iOS data if you have it.
 
+**HERALD CROSS-CHECK DONE 2026-07-23 (heraldprox.io/bluetooth/os +
+/design/protocol):** the measured ceiling is real — Herald never relies on
+advert re-delivery to a backgrounded scanner either. But their data shows a
+stronger closer than silent push for the warm path: **persistent GATT
+connections.** Herald keeps connections to iOS peers OPEN, samples RSSI via
+`readRSSI()` on the live connection every ~8 s (no re-discovery needed), and
+prevents suspension with a write/notify keepalive loop ("any change to the
+characteristic value will trigger state restoration"); they report iPhones
+"stay connected and awake indefinitely … achieving 100% continuity."
+Mapped to us — **W5 (proposed):** (a) Android FGS holds the GATT connection
+to a locked iPhone open instead of connect-read-disconnect every 75 s, and
+writes an empty keepalive to a characteristic so the iPhone never suspends;
+(b) add a GATT server on the Android side so the iPhone (central) can hold
+a persistent connection back and `readRSSI()` on a timer — that fixes the
+sparse return direction WITHOUT silent push. Silent push then only covers
+the cold case: two locked iPhones that never met while either was awake
+(Herald confirms backgrounded iOS cannot discover backgrounded iOS; their
+mitigation was Android relays — our server + Locals overlap plays that
+role). Also validates 0053's server-side tolerance as the right complement:
+even Herald's continuity is per-connection, and uploads still batch.
+
 **SERVER TOLERANCE SHIPPED 2026-07-23 evening (Linux side, migration `0053`,
 deployed + byte-verified on prod):** the reciprocity asymmetry ask is closed.
 One knob — `app_settings.late_evidence_window_minutes` (default 15, clamped
