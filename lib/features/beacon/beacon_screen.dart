@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:in_range/core/navigation/home_tab.dart';
+import 'package:in_range/core/prefs/app_prefs.dart';
 import 'package:in_range/core/permissions/permission_service.dart';
 import 'package:in_range/core/privacy/safety_store.dart';
 import 'package:in_range/features/beacon/beacon_provider.dart';
@@ -80,6 +81,7 @@ class _BeaconScreenState extends ConsumerState<BeaconScreen> {
     final newCount = ref.watch(newEncounterCountProvider);
     final pending = ref.watch(pendingRevealCountProvider);
     final safety = ref.watch(safetyStoreProvider);
+    final band = ref.watch(swipeBandFilterProvider);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Beacon')),
@@ -128,20 +130,39 @@ class _BeaconScreenState extends ConsumerState<BeaconScreen> {
               ),
             ),
           const SizedBox(height: 12),
-          Text('Range', style: Theme.of(context).textTheme.titleSmall),
+          Text('Alert tier', style: Theme.of(context).textTheme.titleSmall),
           const SizedBox(height: 8),
-          // Fixed range (no user picker for now): beacon runs wide and the
-          // RangeEstimator tags every encounter 10/30/60 ft automatically.
-          InputDecorator(
-            decoration: const InputDecoration(border: OutlineInputBorder()),
-            child: Text(
-              'Up to ~60 ft (BLE · 24h) — encounters tagged Close By / Near By / In Range',
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
+          // Bound to the same persisted preference as the Encounters feed
+          // filter — picking a tier here changes what counts as a "new
+          // encounter" everywhere. Tiers are cumulative: each includes the
+          // closer ones (product spec, docs/PROXIMITY_TIERS.md).
+          Row(
+            children: [
+              for (final (key, label) in const [
+                ('feet_10', 'Close By'),
+                ('feet_30', 'Near By'),
+                ('feet_60', 'In Range'),
+              ]) ...[
+                Expanded(
+                  child: ChoiceChip(
+                    label: SizedBox(
+                      width: double.infinity,
+                      child: Text(label, textAlign: TextAlign.center),
+                    ),
+                    selected: band == key ||
+                        (band == 'any' && key == 'feet_60'),
+                    onSelected: (_) =>
+                        ref.read(swipeBandFilterProvider.notifier).set(key),
+                  ),
+                ),
+                if (key != 'feet_60') const SizedBox(width: 8),
+              ],
+            ],
           ),
           const SizedBox(height: 8),
           Text(
-            'Continuous BLE while both beacons ON · 24h to swipe',
+            'Alerts for the picked tier and anything closer · '
+            'continuous BLE while both beacons ON · 24h to swipe',
             style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
           ),
           const SizedBox(height: 20),
