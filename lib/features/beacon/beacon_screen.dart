@@ -136,23 +136,28 @@ class _BeaconScreenState extends ConsumerState<BeaconScreen> {
           // filter — picking a tier here changes what counts as a "new
           // encounter" everywhere. Tiers are cumulative: each includes the
           // closer ones (product spec, docs/PROXIMITY_TIERS.md).
-          DropdownButtonFormField<String>(
-            initialValue: band == 'any' ? 'feet_60' : band,
-            decoration: const InputDecoration(
-              border: OutlineInputBorder(),
-              contentPadding:
-                  EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            ),
-            items: const [
-              DropdownMenuItem(value: 'feet_10', child: Text('Close By')),
-              DropdownMenuItem(value: 'feet_30', child: Text('Near By')),
-              DropdownMenuItem(value: 'feet_60', child: Text('In Range')),
+          Row(
+            children: [
+              for (final (key, label) in const [
+                ('feet_10', 'Close By'),
+                ('feet_30', 'Near By'),
+                ('feet_60', 'In Range'),
+              ]) ...[
+                Expanded(
+                  child: ChoiceChip(
+                    label: SizedBox(
+                      width: double.infinity,
+                      child: Text(label, textAlign: TextAlign.center),
+                    ),
+                    selected: band == key ||
+                        (band == 'any' && key == 'feet_60'),
+                    onSelected: (_) =>
+                        ref.read(swipeBandFilterProvider.notifier).set(key),
+                  ),
+                ),
+                if (key != 'feet_60') const SizedBox(width: 8),
+              ],
             ],
-            onChanged: (v) {
-              if (v != null) {
-                ref.read(swipeBandFilterProvider.notifier).set(v);
-              }
-            },
           ),
           const SizedBox(height: 8),
           Text(
