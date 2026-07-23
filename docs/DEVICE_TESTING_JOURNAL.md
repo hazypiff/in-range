@@ -197,5 +197,16 @@ not rediscover them:
 - NOT yet done: S22↔iPhone feet calibration (needs its own threshold-table
   row); S9 desk-verify of W1's mixed advert; silent-push wake design.
 
+### 2026-07-23 — S22↔iPhone 15 Plus, first cross-platform station (25 ft)
+- Split dwell (45 s hand / 45 s pocket), both awake, outdoor. Medians:
+  S22 heard iPhone −68 hand / −80 pocket; iPhone heard S22 (HIGH slot only)
+  −76 / −89; medium slot −82 / −96 (mid-gate visible cross-platform ✓).
+- **~9 dB direction asymmetry** (iPhone pair was symmetric ≤1 dB) — first
+  hardware proof the threshold table must be per-pair, per-direction.
+- **iPhone-pair cutoffs do NOT transfer**: pocketed S22 at 25 ft reads −89
+  on the iPhone → misclassifies as Near By under the −82 Close cutoff. The
+  S22↔iPhone pair needs its own 6-station calibration walk before
+  cross-platform tiers go live.
+
 ### (add Android baseline summary here — hazypiff: link walks #1–4 data and
 the S9 RSSI curve so the iOS sweep has a comparison target)
