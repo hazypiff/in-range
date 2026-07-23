@@ -82,8 +82,35 @@ carries past 60 ft); "In Range" is presence out to the ~60–80 ft S9 ceiling.
 |---|---|---|---|---|
 | S9 → S9 | median ≥ **−80 dBm** (≈ ≤10–15 ft) | heard on **medium slot** (≈ ≤25–40 ft) | any packet (≤ ~80 ft) | walk #3, provisional; walk #4 tightens |
 | iPhone 14 ↔ iPhone 15 Plus | median ≥ **−82 dBm** (≤~75 ft) | **−83 to −93 dBm** (~76–150 ft) | **< −93 dBm** (151 ft → ~175–200 pocket ceiling) | **LOCKED (owner) 2026-07-23** real-carry sweep, pocket-calibrated; supersedes 2026-07-17's −84/−96 |
-| iPhone 14 → S9 | TBD | TBD | TBD | needs Android scan-filter widen to 0xCAFE (issue #1) |
-| S9 → iPhone 14 | TBD | TBD | TBD | needs Android scan-filter widen to 0xCAFE (issue #1) |
+| iPhone → S22 (S22 observing) | median ≥ **−81** (PROVISIONAL, marginal — 4 dB gap pocketed) | — | — | 2026-07-23 walk; pocketed, this direction CANNOT separate Near/InRange (−78…−85 spans 25→200 ft) — bilateral fusion required |
+| S22 → iPhone (iPhone observing, HIGH slot) | median ≥ **−90** (PROVISIONAL) | **−91…−95** | **< −95**; pocket detection dies ~200 ft | 2026-07-23 walk; the discriminating direction for this pair |
+| iPhone 14 → S9 | TBD | TBD | TBD | scan-filter widen SHIPPED (d0db087) — needs an S9 session |
+| S9 → iPhone 14 | TBD | TBD | TBD | scan-filter widen SHIPPED (d0db087) — needs an S9 session |
+
+### 2026-07-23 S22 ↔ iPhone 15 Plus walk (six stations, split dwell, both directions)
+
+Hand/pocket medians (iPhone-observing = HIGH slots only; S22 alternates
+high/medium and medium is the feet_30 gate as on the S9):
+
+| ft | S22 heard iPhone | iPhone heard S22 (H) |
+|---|---|---|
+| 25 | −68 / −80 | −76 / −89 |
+| 65 | −69 / −78 | −80 / −85 |
+| 90 | −82 / −82 | −91 / −91 |
+| 130 | −78 / −85 | −84 / −95 |
+| 175 | −73 / −84 | −81 / −93 |
+| 200 | −89 / −85 (sparse) | −98 / **dead** |
+
+Findings: (1) **~9 dB direction asymmetry** — first pair where the two
+directions differ materially; per-direction rows are mandatory, not
+theoretical. (2) Pocketed, the S22-observing curve compresses into a 7 dB
+band across 25→200 ft — **rule 1's bilateral averaging is load-bearing for
+cross-platform**: the iPhone-observing direction carries the Near/InRange
+distinction, the S22-observing direction confirms Close By + presence.
+(3) Cross-platform pocket ceiling ≈ 175–200 ft (iPhone-observing side dies
+first). (4) Cutoffs are PROVISIONAL (single session) — the iPhone-pair row
+required two agreeing sessions before locking; hold this pair to the same
+bar, and let the `learn/` pipeline refine it as walks accumulate.
 
 ### 2026-07-23 re-calibration (authoritative for the iPhone row)
 
