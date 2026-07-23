@@ -85,6 +85,16 @@ Future<void> _configureBackgroundService() async {
       initialNotificationTitle: 'In Range is scanning',
       initialNotificationContent: 'Looking for nearby beacons',
       foregroundServiceNotificationId: 9191,
+      // Android 14+ (and targetSdk 34+) makes a typeless FGS a fatal
+      // MissingForegroundServiceTypeException — the S9 (Android 10) never
+      // enforced it, the S22 does (found 2026-07-23, first S22 install).
+      // Types must match the manifest declaration + FOREGROUND_SERVICE_*
+      // permissions (connectedDevice for BLE, location for GPS-tagged
+      // sightings).
+      foregroundServiceTypes: [
+        AndroidForegroundType.connectedDevice,
+        AndroidForegroundType.location,
+      ],
     ),
     iosConfiguration: IosConfiguration(
       autoStart: false,

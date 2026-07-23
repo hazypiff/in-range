@@ -87,11 +87,17 @@
             </intent-filter>
         </activity>
 
-        <!-- Foreground service declaration for Beacon scanning -->
+        <!-- Foreground service declaration for Beacon scanning. The class
+             name must be the plugin's REAL service
+             (id.flutter.flutter_background_service.BackgroundService) — an
+             earlier override here targeted an obsolete IsolateHolderService
+             class, so the plugin's own typeless declaration won the manifest
+             merge and Android 14+ killed the FGS at start
+             (MissingForegroundServiceTypeException, S22 2026-07-23). -->
         <service
-            android:name="id.flutter.background.IsolateHolderService"
+            android:name="id.flutter.flutter_background_service.BackgroundService"
             android:foregroundServiceType="connectedDevice|location"
-            android:exported="false" />
+            tools:replace="android:foregroundServiceType" />
 
         <meta-data
             android:name="flutterEmbedding"
