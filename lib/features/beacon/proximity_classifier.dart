@@ -19,10 +19,14 @@ abstract class ProximityClassifier {
 /// The current hand-tuned thresholds as a [ProximityClassifier], so the
 /// fitted model can be A/B'd against the exact baseline it must beat.
 class RulesClassifier implements ProximityClassifier {
+  // Locked 2026-07-23 from the two-person, real-carry sweep (both phones
+  // pocketed = deployment condition): pocket medians 65 ft −74 vs 90 ft −90
+  // put the Close cutoff mid-gap at −82; 130 ft −90 vs 175/200 ft −96/−98
+  // put the Near floor at −93. Both directions agreed within 1 dB.
   RulesClassifier.iphone()
       : _s9 = false,
-        closeCutoffDbm = -84,
-        nearFloorDbm = -96;
+        closeCutoffDbm = -82,
+        nearFloorDbm = -93;
 
   RulesClassifier.s9()
       : _s9 = true,

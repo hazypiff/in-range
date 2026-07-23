@@ -81,16 +81,40 @@ carries past 60 ft); "In Range" is presence out to the ~60–80 ft S9 ceiling.
 | Advertiser → Scanner | Close By | Near By | In Range | Source |
 |---|---|---|---|---|
 | S9 → S9 | median ≥ **−80 dBm** (≈ ≤10–15 ft) | heard on **medium slot** (≈ ≤25–40 ft) | any packet (≤ ~80 ft) | walk #3, provisional; walk #4 tightens |
-| iPhone 14 ↔ iPhone 15 Plus | median ≥ **−84 dBm** (≤~75 ft) | **−85 to −96 dBm** (~76–150 ft) | **< −96 dBm** (151 ft → ~175–200 ceiling) | outdoor sweep 2026-07-17 (symmetric both directions) |
+| iPhone 14 ↔ iPhone 15 Plus | median ≥ **−82 dBm** (≤~75 ft) | **−83 to −93 dBm** (~76–150 ft) | **< −93 dBm** (151 ft → ~175–200 pocket ceiling) | **LOCKED (owner) 2026-07-23** real-carry sweep, pocket-calibrated; supersedes 2026-07-17's −84/−96 |
 | iPhone 14 → S9 | TBD | TBD | TBD | needs Android scan-filter widen to 0xCAFE (issue #1) |
 | S9 → iPhone 14 | TBD | TBD | TBD | needs Android scan-filter widen to 0xCAFE (issue #1) |
 
+### 2026-07-23 re-calibration (authoritative for the iPhone row)
+
+Two-person sweep, both people mirroring: 45 s both phones in hand facing each
+other, then 45 s both phones POCKETED (the deployment condition — thresholds
+are picked from the pocket curve). Six stations, both directions agreed
+within **1 dB** everywhere. Pooled medians:
+
+| ft | Hand | Pocket | Notes |
+|---|---|---|---|
+| 25 | −73 | −67 | grip attenuates more than fabric up close |
+| 65 | −79 | −74 | |
+| 90 | −84 | −90 | pocket cost grows with distance |
+| 130 | −88 | −90 | |
+| 175 | −92 | −98 | pocket: 28 packets total — detection edge |
+| 200 | −89 | −96 | edge zone, streaky |
+
+Boundary placement: Close/Near sits in the 16 dB pocket gap between 65 ft
+(−74) and 90 ft (−90) → **−82** (mid-gap). Near/InRange sits between 130 ft
+(−90) and 175/200 ft (−96/−98) → **−93**. Both-pocketed detection gets sparse
+past ~175 ft — that IS the In Range tier's honest reach. Method notes: origin
+phone at waist height or better (ground placement cost ~15 dB and forced a
+25 ft redo); a "failed" station whose burst recorded fine on both sides shows
+the on-screen beacon error can cry wolf — trust the data pull.
+
 > **Not yet wired into runtime**: `RangeEstimator` still runs the S9-row logic
-> (median ≥ −80 + medium-slot gating). The iPhone −84/−96 cutoffs above are
-> calibration results only; wiring them in requires the per-model threshold
-> table (rule 4) so the S9 fleet keeps its own row. Boundary convention:
-> integer-dBm bands, closer tier owns its cutoff (Close ≥ −84, Near −85…−96
-> inclusive, In Range < −96).
+> (median ≥ −80 + medium-slot gating). The iPhone cutoffs (−82/−93, in
+> `RulesClassifier.iphone()`) are calibration results; wiring them in requires
+> the per-model threshold table (rule 4) so the S9 fleet keeps its own row.
+> Boundary convention: integer-dBm bands, closer tier owns its cutoff
+> (Close ≥ −82, Near −83…−93 inclusive, In Range < −93).
 
 ## Close By — confidence roadmap (the flagship feature)
 

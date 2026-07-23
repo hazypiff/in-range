@@ -61,11 +61,12 @@ void main() {
 
   group('RulesClassifier', () {
     test('iphone thresholds — closer tier owns its cutoff', () {
+      // 2026-07-23 locked thresholds: Close ≥ −82, Near −83…−93, InRange < −93.
       final r = RulesClassifier.iphone();
-      expect(r.classify({'high_med': -84.0}), 'close');
-      expect(r.classify({'high_med': -85.0}), 'near');
-      expect(r.classify({'high_med': -96.0}), 'near');
-      expect(r.classify({'high_med': -97.0}), 'inrange');
+      expect(r.classify({'high_med': -82.0}), 'close');
+      expect(r.classify({'high_med': -83.0}), 'near');
+      expect(r.classify({'high_med': -93.0}), 'near');
+      expect(r.classify({'high_med': -94.0}), 'inrange');
       expect(r.classify({'high_med': null}), 'inrange');
     });
 

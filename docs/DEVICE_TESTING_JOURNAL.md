@@ -135,5 +135,31 @@ not rediscover them:
   (can't miss the transition) + 12 s window + one-shot auto-retry on transient
   not-ready, so no repeated pressing.
 
+### 2026-07-23 — two-person real-carry sweep (iPhone↔iPhone) — TIERS LOCKED
+- Platform(s): iOS↔iOS (iPhone 14 + iPhone 15 Plus), TWO people — each holds a
+  phone, both mirror the protocol. Outdoor, origin phone at waist height.
+- Method: 6 stations 25/65/90/130/175/200 ft; per station beacon ON → 45 s
+  both in hand facing each other → 45 s both POCKETED → beacon OFF between
+  stations (bursts self-delimit in rssi_log; no manual timestamps).
+- Both directions agreed within 1 dB at every station. Pooled medians
+  (hand / pocket): 25 ft −73/−67 · 65 −79/−74 · 90 −84/−90 · 130 −88/−90 ·
+  175 −92/−98 (pocket nearly dead: 28 pkts) · 200 −89/−96.
+- **Owner locked tier thresholds from the POCKET curve (deployment
+  condition): Close By ≥ −82 · Near By −83…−93 · In Range < −93.** Set in
+  `RulesClassifier.iphone()`; supersedes 2026-07-17's −84/−96 (single-person,
+  in-hand).
+- Method findings: (1) origin phone on/near the ground costs ~15 dB — waist
+  height minimum, cost us one 25 ft redo; (2) grip beats fabric close-in
+  (pocket read ~5 dB STRONGER than hand at 25/65 ft — antenna death-grip),
+  flips past 90 ft as pocket height + body loss grow with range; (3) past
+  ~130 ft RSSI stops tracking distance (−89…−98 band, multipath) — the
+  qualitative In Range tier design is confirmed; (4) both-pocketed detection
+  is sparse past ~175 ft = the tier's honest BLE ceiling; (5) one station's
+  on-screen beacon error was a false alarm — the burst recorded fine on both
+  phones; trust the DB pull over the red error line; (6) beacon failed once
+  mid-session on the 14 after ~8 toggle cycles (CoreBluetooth wedge class) —
+  resilience layer (auto re-arm + backoff + watchdog) queued as next client
+  work alongside W2.
+
 ### (add Android baseline summary here — hazypiff: link walks #1–4 data and
 the S9 RSSI curve so the iOS sweep has a comparison target)
