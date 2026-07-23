@@ -452,10 +452,15 @@ class BeaconService {
       DateTime dayUtc, int windowMinutes) async {
     if (!AppConfig.hasRealSupabase) return const <BatchSlot>[];
     final dayStr = dayUtc.toIso8601String().split('T').first;
+    // Timeout is load-bearing: with no/half-dead network this RPC HANGS
+    // (S22 field incident 2026-07-23 — beacon button appeared dead, the
+    // whole turnOnBeacon flow stuck here forever). A timeout throws, the
+    // token source catches and falls back to a local random token, and BLE
+    // comes up in local mode as designed.
     final rows = await InRangeSupabase.client.rpc('issue_token_batch', params: {
       'p_day': dayStr,
       'p_window_minutes': windowMinutes,
-    });
+    }).timeout(const Duration(seconds: 8));
     if (rows is! List) return const <BatchSlot>[];
     final out = <BatchSlot>[];
     for (final r in rows) {
@@ -1252,6 +1257,9 @@ class BeaconService {
     // Always send UTC — a local DateTime without offset is misread as UTC by
     // Postgres and expires claims hours early (broke feet correlation once).
     final until = _currentToken!.expiresAt.toUtc().add(const Duration(minutes: 2));
+    // Timeout: a hanging claim (dead network) must fail the attempt so
+    // ClaimManager's bounded retry + the "Local BLE only" fallback engage,
+    // instead of wedging the whole beacon-on flow (S22 2026-07-23).
     await InRangeSupabase.client.rpc('claim_token', params: {
       'p_token': claimToken,
       'p_valid_until': until.toIso8601String(),
@@ -1259,7 +1267,7 @@ class BeaconService {
       'p_lon': _cachedLon,
       'p_range': _mapUiRangeToDb(_claimRangeType ?? 'feet_60'),
       'p_accuracy': _cachedAccuracy,
-    });
+    }).timeout(const Duration(seconds: 10));
     debugPrint('claim_token OK until=${until.toIso8601String()}');
   }
 
