@@ -12,7 +12,17 @@ on both test iPhones. Desk results (both phones ~2 ft apart):
   screen-wakes. Lesson from bench round 1: discovery-chained scan restarts
   deadlock (no discovery → no restart); an 8 s heartbeat timer + read-wake
   piggyback is the working shape.
-W1 + W3 (Android side) remain to wire — @hazypiff.
+**W1 + W3 wired 2026-07-24 (Mac side, owner-directed — @hazypiff please
+review + desk-verify on the S9):** Android advert now carries the CAFE
+marker alongside mfgData (W1; verify both fields arrive on-air per §3 risk
+note), the Android scan adds the CAFE service filter (issue #1 — Android
+can finally see foreground iPhones) plus the 0x004C/0x01-masked overflow
+filter, and a GATT connect-read recovers tokens from backgrounded iPhones
+(W3; 15 min cache, 5 min per-device backoff). NOTE: flutter_blue_plus
+`connect()` now requires a License declaration — `nonprofit` is declared
+for dev/testing; commercial launch needs the paid FBP license or a native
+connect path (iOS already connects natively). Not yet verified on real
+Android hardware.
 **Prereq reading:** `IOS_CARRIER_DECISION_2026-07-16.md` (the peer-reviewed
 carrier analysis this plan executes — its §3b "(a) GATT exchange" is the
 production path chosen here).

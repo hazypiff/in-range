@@ -426,6 +426,12 @@ class BeaconService {
   // (The 16-bit "cafe" short form of the marker now lives in the native
   // BackgroundBeacon module, which owns all iOS advertising.)
   static const int _inRangeManufacturerId = 0xFFFF;
+  // W3: Apple's BLE company id — a backgrounded iPhone's overflow advert is
+  // manufacturerData under this id with first payload byte 0x01.
+  static const int _appleCompanyId = 0x004C;
+  // The GATT characteristic the iOS native module serves the token from.
+  static const String _inRangeTokenCharUuid =
+      '0000ca7e-0000-1000-8000-00805f9b34fb';
 
   /// The advertised/claimed correlation id is now the raw 16 bytes of the
   /// server-issued opaque token (32 hex chars) — no HMAC. Peers hex these bytes
@@ -512,9 +518,16 @@ class BeaconService {
     final payload = Uint8List(17)
       ..setRange(0, 16, _currentCorrelationId!)
       ..[16] = _advPower == AdvertPower.medium ? 0x01 : 0x00;
+    // W1 (IOS_BACKGROUND_BLE_WIRING.md): also advertise the fixed CAFE
+    // discovery marker — a backgrounded iPhone can only scan with an exact
+    // service-UUID filter, and mfgData alone can never match one. Android
+    // encodes base-UUID-aliased UUIDs as 16-bit on air, so this costs 4
+    // bytes: flags 3 + mfg AD 21 + svc AD 4 = 28 ≤ 31. Verify on-device
+    // that BOTH fields still arrive (some stacks mis-handle mixed ADs).
     final advertiseData = AdvertiseData(
       manufacturerId: _inRangeManufacturerId,
       manufacturerData: payload,
+      serviceUuids: const [_inRangeServiceUuid],
       includeDeviceName: false,
     );
 
@@ -699,7 +712,21 @@ class BeaconService {
         timeout: const Duration(hours: 1),
         androidUsesFineLocation: true,
         continuousUpdates: true,
-        withMsd: isIOS ? [] : [MsdFilter(_inRangeManufacturerId)],
+        // Android hardware filters are OR'd. Three matchers (issue #1 + W3):
+        //  1. our mfg id             → Android peers (unchanged)
+        //  2. CAFE service UUID      → foreground iPhones (token in advert)
+        //  3. Apple mfg id, first payload byte 0x01 + mask → the Herald
+        //     trick: matches BACKGROUNDED-iOS overflow adverts specifically;
+        //     token then comes from a GATT read (W3). Keeps the scan
+        //     hardware-filtered — Android ≥8.1 suppresses unfiltered
+        //     screen-off scans (walk #1).
+        withMsd: isIOS
+            ? []
+            : [
+                MsdFilter(_inRangeManufacturerId),
+                MsdFilter(_appleCompanyId, data: [0x01], mask: [0xFF]),
+              ],
+        withServices: isIOS ? [] : [Guid(_inRangeServiceUuid)],
         androidScanMode:
             calib ? AndroidScanMode.lowLatency : AndroidScanMode.balanced,
       );
@@ -784,7 +811,29 @@ class BeaconService {
         }
       }
 
-      if (observedCorrelationId == null) continue;
+      if (observedCorrelationId == null) {
+        // W3: a backgrounded iPhone — Apple overflow advert matched by the
+        // hardware filter, but the token is NOT on the air. Recover it with
+        // a GATT read (cached per device so each rotation costs one
+        // connect); RSSI always comes from this scan result, never the
+        // connection. Android-only: on iOS the native module owns this.
+        if (defaultTargetPlatform == TargetPlatform.android) {
+          final apple = adv.manufacturerData[_appleCompanyId];
+          if (apple != null && apple.isNotEmpty && apple[0] == 0x01) {
+            final cachedHex = _gattTokenByDevice[deviceId];
+            final cachedAt = _gattTokenAt[deviceId];
+            if (cachedHex != null &&
+                cachedAt != null &&
+                DateTime.now().difference(cachedAt) <
+                    const Duration(minutes: 15)) {
+              _ingestForeignSample(cachedHex, r.rssi, AdvertPower.high);
+            } else {
+              unawaited(_recoverTokenViaGatt(r.device, deviceId, r.rssi));
+            }
+          }
+        }
+        continue;
+      }
 
       final hexId = observedCorrelationId
           .map((b) => b.toRadixString(16).padLeft(2, '0'))
@@ -796,6 +845,77 @@ class BeaconService {
       // under-fire, never claim mid-range falsely.
       final power = mediumFlag ? AdvertPower.medium : AdvertPower.high;
       _ingestForeignSample(hexId, r.rssi, power);
+    }
+  }
+
+  // W3 GATT token recovery state: token cache (one connect per rotation),
+  // per-device attempt backoff (strangers' iPhones cost one failed
+  // service-discovery, then silence), and an in-flight guard.
+  final Map<String, String> _gattTokenByDevice = {};
+  final Map<String, DateTime> _gattTokenAt = {};
+  final Map<String, DateTime> _gattLastAttempt = {};
+  final Set<String> _gattInflight = {};
+
+  Future<void> _recoverTokenViaGatt(
+      BluetoothDevice device, String deviceId, int rssi) async {
+    if (_gattInflight.contains(deviceId)) return;
+    final last = _gattLastAttempt[deviceId];
+    if (last != null &&
+        DateTime.now().difference(last) < const Duration(minutes: 5)) {
+      return;
+    }
+    _gattLastAttempt[deviceId] = DateTime.now();
+    if (_gattLastAttempt.length > 200) {
+      final cutoff = DateTime.now().subtract(const Duration(minutes: 30));
+      _gattLastAttempt.removeWhere((_, at) => at.isBefore(cutoff));
+    }
+    _gattInflight.add(deviceId);
+    try {
+      // LICENSING (flag for launch): flutter_blue_plus requires a License
+      // declaration on connect(). `nonprofit` covers today's personal
+      // dev/testing; COMMERCIAL LAUNCH requires either purchasing the FBP
+      // commercial license or moving this connect path to native code the
+      // way iOS already does (BackgroundBeacon.swift uses CoreBluetooth
+      // directly, no plugin license involved).
+      await device.connect(
+        timeout: const Duration(seconds: 10),
+        license: License.nonprofit,
+      );
+      final services = await device.discoverServices();
+      final markerGuid = Guid(_inRangeServiceUuid);
+      final tokenGuid = Guid(_inRangeTokenCharUuid);
+      for (final s in services) {
+        if (s.uuid != markerGuid) continue;
+        for (final c in s.characteristics) {
+          if (c.uuid != tokenGuid) continue;
+          final bytes = await c.read();
+          if (bytes.length == 16 && _isOn) {
+            final hex = bytes
+                .map((b) => b.toRadixString(16).padLeft(2, '0'))
+                .join();
+            _gattTokenByDevice[deviceId] = hex;
+            _gattTokenAt[deviceId] = DateTime.now();
+            if (_gattTokenByDevice.length > 64) {
+              final cutoff =
+                  DateTime.now().subtract(const Duration(minutes: 15));
+              _gattTokenAt.removeWhere((id, at) {
+                final stale = at.isBefore(cutoff);
+                if (stale) _gattTokenByDevice.remove(id);
+                return stale;
+              });
+            }
+            _ingestForeignSample(hex, rssi, AdvertPower.high);
+          }
+          return;
+        }
+      }
+    } catch (e) {
+      debugPrint('W3 GATT token read failed ($deviceId): $e');
+    } finally {
+      try {
+        await device.disconnect();
+      } catch (_) {}
+      _gattInflight.remove(deviceId);
     }
   }
 
