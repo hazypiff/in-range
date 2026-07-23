@@ -1,3 +1,4 @@
+import BackgroundTasks
 import CoreBluetooth
 import Flutter
 import UIKit
@@ -65,8 +66,57 @@ final class BackgroundBeacon: NSObject {
     ) { [weak self] _ in
       self?.flushBuffered()
     }
+    // Scheduled background wakes: the free-account path to both-iPhones-
+    // asleep discovery. iOS grants opportunistic ~30 s windows (min 15 min
+    // apart); each is a full scan burst while the screen stays dark. Two
+    // sleeping iPhones sharing a venue eventually land overlapping windows.
+    // (Silent push — paid account — is the deterministic upgrade.)
+    // Must register BEFORE didFinishLaunching returns.
+    BGTaskScheduler.shared.register(
+      forTaskWithIdentifier: Self.wakeTaskID, using: .main
+    ) { [weak self] task in
+      self?.handleWake(task: task)
+    }
+    NotificationCenter.default.addObserver(
+      forName: UIApplication.didEnterBackgroundNotification, object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      self?.scheduleWake()
+    }
     if defaults.bool(forKey: Self.keyEnabled) {
       ensureManagers()
+      scheduleWake()
+    }
+  }
+
+  private static let wakeTaskID = "io.inrange.beacon.wake"
+
+  private func scheduleWake() {
+    guard enabled else { return }
+    let req = BGAppRefreshTaskRequest(identifier: Self.wakeTaskID)
+    req.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
+    do {
+      try BGTaskScheduler.shared.submit(req)
+    } catch {
+      // Duplicate submissions and simulator denials land here — harmless.
+    }
+  }
+
+  private func handleWake(task: BGTask) {
+    scheduleWake()  // always chain the next window
+    guard enabled else {
+      task.setTaskCompleted(success: true)
+      return
+    }
+    // One long scan session for the window; sessions must be long — short
+    // ones die before iOS's coalesced deliveries arrive (2026-07-23 bench).
+    restartScanNow()
+    reconfigureAdvertising()  // re-assert the advert while we have cycles
+    task.expirationHandler = {
+      task.setTaskCompleted(success: true)
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
+      task.setTaskCompleted(success: true)
     }
   }
 
