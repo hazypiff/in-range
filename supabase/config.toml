@@ -56,6 +56,11 @@ verify_jwt = false
 [functions.photo-review]
 verify_jwt = true
 
+[functions.ncii-intake]
+# Public, unauthenticated NCII/TAKE IT DOWN intake — reporters have no JWT.
+# Abuse control is the per-IP limit inside the function (0050), not the gateway.
+verify_jwt = false
+
 [functions.maintenance]
 # Self-authenticates via requireServiceRole(); see miles-correlate note.
 verify_jwt = false

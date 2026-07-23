@@ -681,10 +681,14 @@ BEGIN
     'T16 resolution was not recorded for the compliance trail';
 END $$;
 
--- Privilege boundaries on the only anon-writable surface in the system.
+-- Privilege boundaries. Anonymous intake is still available to no-account
+-- victims (statutory), but now flows through the rate-limited ncii-intake Edge
+-- function calling as service-role — NOT a direct anon RPC (0050). See T46.
 DO $$ BEGIN
-  ASSERT has_function_privilege('anon','public.submit_ncii_report(text,text,text,text,text,boolean)','EXECUTE'),
-    'T16 victims without an account cannot file a report (statutory requirement)';
+  ASSERT NOT has_function_privilege('anon','public.submit_ncii_report(text,text,text,text,text,boolean)','EXECUTE'),
+    'T16 submit_ncii_report is still anon-callable directly (should be edge-only after 0050)';
+  ASSERT has_function_privilege('service_role','public.submit_ncii_report(text,text,text,text,text,boolean)','EXECUTE'),
+    'T16 service-role edge path to submit_ncii_report was lost';
   ASSERT NOT has_table_privilege('anon','public.ncii_reports','SELECT'),
     'T16 anonymous callers can read NCII reports';
   ASSERT NOT has_table_privilege('authenticated','public.ncii_reports','SELECT'),
@@ -1659,9 +1663,10 @@ BEGIN
     'T37 claim_token executable by anon';
   ASSERT NOT has_function_privilege('anon','public.record_sighting(text,double precision,double precision,integer,timestamptz,range_type,double precision)','execute'),
     'T37 record_sighting executable by anon';
-  -- The intentional public NCII form stays anon-callable.
-  ASSERT has_function_privilege('anon','public.submit_ncii_report(text,text,text,text,text,boolean)','execute'),
-    'T37 submit_ncii_report must remain anon-callable';
+  -- 0050: the public NCII form is no longer a direct anon RPC — it flows
+  -- through the rate-limited ncii-intake Edge function (service-role). See T46.
+  ASSERT NOT has_function_privilege('anon','public.submit_ncii_report(text,text,text,text,text,boolean)','execute'),
+    'T37 submit_ncii_report is anon-callable directly (should be edge-only after 0050)';
 END $$;
 
 -- ============ TEST 38: token_claim_history is actually pruned (hold-aware) ===
@@ -1911,6 +1916,44 @@ BEGIN
   UPDATE public.app_settings SET value_num=0 WHERE key='enforce_consent';
   ASSERT (SELECT value_num FROM public.app_settings WHERE key='enforce_consent')=0,
     'T45 must restore enforce_consent=0';
+END $$;
+
+-- ============ TEST 46: NCII intake — anon lockout + per-IP rate limit =======
+-- submit_ncii_report is now reachable only through the rate-limited Edge
+-- function (anon EXECUTE revoked); check_ncii_ip_rate caps per-IP hourly. (0050.)
+DO $$
+DECLARE
+  v_raised BOOLEAN := false;
+  i INT;
+BEGIN
+  -- anon can no longer call the RPC directly.
+  ASSERT NOT has_function_privilege('anon','public.submit_ncii_report(text,text,text,text,text,boolean)','EXECUTE'),
+    'T46 anon can still call submit_ncii_report directly (edge bypass)';
+  -- but the intake still exists for the service-role edge path.
+  ASSERT has_function_privilege('service_role','public.submit_ncii_report(text,text,text,text,text,boolean)','EXECUTE'),
+    'T46 service_role lost submit_ncii_report';
+  ASSERT has_function_privilege('service_role','public.check_ncii_ip_rate(text,integer)','EXECUTE'),
+    'T46 service_role cannot call check_ncii_ip_rate';
+  ASSERT NOT has_function_privilege('anon','public.check_ncii_ip_rate(text,integer)','EXECUTE'),
+    'T46 anon can call check_ncii_ip_rate';
+
+  -- 5 submissions from one IP hash pass; the 6th trips the limit.
+  FOR i IN 1..5 LOOP
+    PERFORM public.check_ncii_ip_rate('deadbeefdeadbeefdeadbeefdeadbeef', 5);
+  END LOOP;
+  BEGIN
+    PERFORM public.check_ncii_ip_rate('deadbeefdeadbeefdeadbeefdeadbeef', 5);
+  EXCEPTION WHEN sqlstate '53400' THEN v_raised := true;
+  END;
+  ASSERT v_raised, 'T46 per-IP limit did not trip on the 6th submission';
+
+  -- an unknown/empty IP is never blocked (falls through to email + global).
+  v_raised := false;
+  BEGIN
+    FOR i IN 1..20 LOOP PERFORM public.check_ncii_ip_rate('', 5); END LOOP;
+  EXCEPTION WHEN OTHERS THEN v_raised := true;
+  END;
+  ASSERT NOT v_raised, 'T46 empty IP hash was rate-limited (should fall through)';
 END $$;
 
 SELECT '✅ ALL RECIPROCITY SECURITY INVARIANTS PASSED' AS result;
