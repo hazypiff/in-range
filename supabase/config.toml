@@ -49,10 +49,13 @@ enable_confirmations = true
 verify_jwt = true
 
 [functions.miles-correlate]
-verify_jwt = true
+# Self-authenticates via requireServiceRole() (exact Bearer == service-role key).
+# Gateway JWT verification is redundant and rejects the sb_secret key format.
+verify_jwt = false
 
 [functions.photo-review]
 verify_jwt = true
 
 [functions.maintenance]
-verify_jwt = true
+# Self-authenticates via requireServiceRole(); see miles-correlate note.
+verify_jwt = false

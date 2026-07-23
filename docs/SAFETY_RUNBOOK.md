@@ -25,18 +25,23 @@ These gate the whole chain. None is code.
 - [ ] **Deploy the public pages** (`web/report.html`, `web/delete-account.html`)
       and paste their URLs into the store listings and privacy policy.
 - [ ] Agree who watches the two queues daily, and how they get alerted.
-- [ ] **Schedule the `maintenance` Edge function (not just the SQL RPC).**
+- [x] **DONE (0049) — the `maintenance` Edge worker is deployed and scheduled.**
       Physical erasure of Storage objects can only happen through the Storage
       API, which lives in the `maintenance` Edge function — Postgres cannot
-      delete `storage.objects`. Prod cron currently runs `run_maintenance()`
-      (which only *enqueues* objects into `storage_deletion_queue`); until the
-      Edge worker runs on a schedule, queued photos are never physically
-      deleted. Deploy the Edge functions (`supabase functions deploy
-      maintenance miles-correlate`) and schedule the `maintenance` function
-      every 15 min (dashboard scheduled function, or `pg_cron` + `pg_net`
-      `net.http_post` with the service-role key from Vault). The worker now
-      calls `pending_storage_deletions()`, which is hold-aware, so it will
-      never delete an object whose owner is under a legal hold.
+      delete `storage.objects`. Both Edge functions are deployed
+      (`maintenance` v5, `miles-correlate` v6, `verify_jwt=false` — they
+      self-authenticate via `requireServiceRole`). Migration `0049` enables
+      `pg_net` and schedules `in-range-storage-drain` every 15 min, which
+      `net.http_post`s the worker using the service key stored in Vault
+      (`edge_service_key`) — the key is never in the migration or in
+      `cron.job.command`. The SQL `in-range-maintenance` cron is kept as a belt
+      (core maintenance survives an Edge/pg_net outage). Verified end-to-end:
+      the scheduled call returns 200 and drains the queue. The worker calls
+      `pending_storage_deletions()`, which is hold-aware, so it never deletes an
+      object whose owner is under a legal hold.
+      **Rotation note:** if the `sb_secret` service key is rotated, update the
+      Vault secret: `SELECT vault.update_secret((SELECT id FROM vault.secrets
+      WHERE name='edge_service_key'), '<new sb_secret>');`
 
 ---
 
