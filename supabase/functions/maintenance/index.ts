@@ -100,15 +100,14 @@ const STORAGE_DRAIN_BATCH = 200;
 async function drainStorageDeletionQueue(
   supabase: ReturnType<typeof createClient>,
 ): Promise<{ deleted: number; failed: number; pending: number }> {
+  // Hold-aware: pending_storage_deletions() excludes any object whose owner is
+  // now under a legal hold, even if it was queued BEFORE the hold was placed.
+  // Reading the table directly would delete evidence a later hold must retain.
   const { data: rows, error } = await supabase
-    .from("storage_deletion_queue")
-    .select("id, bucket_id, object_name")
-    .is("deleted_at", null)
-    .order("requested_at", { ascending: true })
-    .limit(STORAGE_DRAIN_BATCH);
+    .rpc("pending_storage_deletions", { p_limit: STORAGE_DRAIN_BATCH });
 
   if (error) {
-    console.error("storage_deletion_queue select", error);
+    console.error("pending_storage_deletions", error);
     return { deleted: 0, failed: 0, pending: -1 };
   }
   if (!rows || rows.length === 0) return { deleted: 0, failed: 0, pending: 0 };

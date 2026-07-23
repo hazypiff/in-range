@@ -1594,10 +1594,12 @@ END $$;
 
 -- ============ TEST 36: preserved location evidence is out of live matching ==
 -- A held user who withdrew precise_location keeps their pings (evidence) but
--- must not surface in get_locals_feed / correlate for anyone else.
+-- must not surface in get_locals_feed for a peer. NON-VACUOUS: a revealed
+-- encounter is created first so the feed WOULD list them but for the gate,
+-- and a positive control asserts the feed lists them before withdrawal.
 DO $$
 DECLARE
-  v_h UUID := '36a00000-0000-0000-0000-00000000036a';  -- held + withdrawn
+  v_h UUID := '36a00000-0000-0000-0000-00000000036a';  -- held + withdrawn (peer)
   v_v UUID := '36b00000-0000-0000-0000-00000000036b';  -- viewer nearby
   v_cnt INT;
 BEGIN
@@ -1615,8 +1617,19 @@ BEGIN
   INSERT INTO public.location_pings (user_id,geo,range_type,created_at) VALUES
     (v_h, ST_SetSRID(ST_MakePoint(-76.9,38.9),4326)::geography,'miles_1',NOW()-INTERVAL '2 min'),
     (v_v, ST_SetSRID(ST_MakePoint(-76.9,38.9),4326)::geography,'miles_1',NOW()-INTERVAL '1 min');
+  -- get_locals_feed only surfaces users you already share a REVEALED encounter
+  -- with; without this the feed is empty regardless and the test is vacuous.
+  INSERT INTO public.encounters (user_a,user_b,neighborhood,encounter_time,last_seen_at,range_type,confidence,status)
+    VALUES (LEAST(v_h,v_v),GREATEST(v_h,v_v),'Nearby',
+            NOW()-INTERVAL '10 hours', NOW()-INTERVAL '10 hours','miles_1',1.0,'active');
 
-  -- Held user withdraws precise_location: pings preserved, but not matchable.
+  -- Positive control: the peer IS listed before any withdrawal.
+  PERFORM set_config('request.jwt.claims', json_build_object('sub',v_v,'role','authenticated')::text, true);
+  SELECT count(*) INTO v_cnt FROM public.get_locals_feed(38.9,-76.9,'miles_1',50) WHERE user_id=v_h;
+  ASSERT v_cnt = 1, 'T36 vacuous: peer not listed even before withdrawal';
+  PERFORM set_config('request.jwt.claims', NULL, true);
+
+  -- Held peer withdraws precise_location: ping preserved, but not matchable.
   PERFORM public.place_legal_hold(v_h,'law_enforcement','test','ref',NULL);
   PERFORM set_config('request.jwt.claims', json_build_object('sub',v_h,'role','authenticated')::text, true);
   PERFORM public.grant_consent('precise_location','2026-07-20','test');
@@ -1625,11 +1638,132 @@ BEGIN
   ASSERT EXISTS (SELECT 1 FROM public.location_pings WHERE user_id=v_h),
     'T36 precondition: held withdrawer''s pings should be preserved';
 
-  -- Viewer runs the feed → the withdrawn+held user must not appear.
   PERFORM set_config('request.jwt.claims', json_build_object('sub',v_v,'role','authenticated')::text, true);
   SELECT count(*) INTO v_cnt FROM public.get_locals_feed(38.9,-76.9,'miles_1',50) WHERE user_id=v_h;
-  ASSERT v_cnt = 0, 'T36 a withdrawn-location (held) user surfaced in get_locals_feed';
+  ASSERT v_cnt = 0, 'T36 a withdrawn-location (held) peer surfaced in get_locals_feed';
   PERFORM set_config('request.jwt.claims', NULL, true);
+END $$;
+
+-- ============ TEST 37: internal RPCs are not anon/authenticated executable ===
+-- 0047: lookup_claim (deanonymizes a token -> owner uuid + GPS) and
+-- bump_encounter_pair (forges pair history) leaked to anon via PUBLIC default.
+DO $$
+BEGIN
+  ASSERT NOT has_function_privilege('anon','public.lookup_claim(text)','execute'),
+    'T37 lookup_claim executable by anon';
+  ASSERT NOT has_function_privilege('authenticated','public.lookup_claim(text)','execute'),
+    'T37 lookup_claim executable by authenticated';
+  ASSERT NOT has_function_privilege('anon','public.bump_encounter_pair(uuid,uuid,range_type)','execute'),
+    'T37 bump_encounter_pair executable by anon';
+  ASSERT NOT has_function_privilege('anon','public.claim_token(text,timestamptz,double precision,double precision,range_type,double precision)','execute'),
+    'T37 claim_token executable by anon';
+  ASSERT NOT has_function_privilege('anon','public.record_sighting(text,double precision,double precision,integer,timestamptz,range_type,double precision)','execute'),
+    'T37 record_sighting executable by anon';
+  -- The intentional public NCII form stays anon-callable.
+  ASSERT has_function_privilege('anon','public.submit_ncii_report(text,text,text,text,text,boolean)','execute'),
+    'T37 submit_ncii_report must remain anon-callable';
+END $$;
+
+-- ============ TEST 38: token_claim_history is actually pruned (hold-aware) ===
+DO $$
+DECLARE
+  v_u UUID := '38a00000-0000-0000-0000-00000000038a';
+  v_h UUID := '38b00000-0000-0000-0000-00000000038b';
+BEGIN
+  INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+    (v_u,'00000000-0000-0000-0000-000000000000','authenticated','authenticated','w38a@t.local',now(),now()),
+    (v_h,'00000000-0000-0000-0000-000000000000','authenticated','authenticated','w38b@t.local',now(),now());
+  INSERT INTO public.token_claim_history (token,user_id,valid_from,valid_until) VALUES
+    (repeat('38',16), v_u, NOW()-INTERVAL '13 days', NOW()-INTERVAL '13 days'),
+    (repeat('39',16), v_h, NOW()-INTERVAL '13 days', NOW()-INTERVAL '13 days'),  -- held
+    (repeat('3a',16), v_u, NOW()-INTERVAL '10 min',  NOW()+INTERVAL '5 min');    -- fresh
+  PERFORM public.place_legal_hold(v_h,'law_enforcement','test','ref',NULL);
+
+  PERFORM public.cleanup_ephemeral_data();
+
+  ASSERT NOT EXISTS (SELECT 1 FROM public.token_claim_history WHERE token=repeat('38',16)),
+    'T38 stale token_claim_history was not pruned';
+  ASSERT EXISTS (SELECT 1 FROM public.token_claim_history WHERE token=repeat('39',16)),
+    'T38 pruned a held user''s token_claim_history';
+  ASSERT EXISTS (SELECT 1 FROM public.token_claim_history WHERE token=repeat('3a',16)),
+    'T38 pruned a fresh token_claim_history row';
+END $$;
+
+-- ============ TEST 39: caller-side location withdrawal blocks the feed ======
+-- 0047: 0046 filtered withdrawn PEERS but let a withdrawn CALLER read the feed
+-- off their own preserved (held) ping.
+DO $$
+DECLARE
+  v_c UUID := '39a00000-0000-0000-0000-00000000039a';
+BEGIN
+  INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+    (v_c,'00000000-0000-0000-0000-000000000000','authenticated','authenticated','w39a@t.local',now(),now());
+  UPDATE public.profiles SET display_name='C39',dob='1990-01-01',is_active=true,
+    age_verified=true,photo_urls=ARRAY['39a.jpg'],is_paused=false,is_incognito=false
+   WHERE id=v_c;
+  INSERT INTO public.photo_verifications (user_id,photo_path,slot_index,state,decided_at)
+    VALUES (v_c,'39a.jpg',0,'approved',NOW());
+  INSERT INTO public.location_pings (user_id,geo,range_type,created_at) VALUES
+    (v_c, ST_SetSRID(ST_MakePoint(-76.9,38.9),4326)::geography,'miles_1',NOW()-INTERVAL '1 min');
+
+  PERFORM public.place_legal_hold(v_c,'law_enforcement','test','ref',NULL);
+  PERFORM set_config('request.jwt.claims', json_build_object('sub',v_c,'role','authenticated')::text, true);
+  PERFORM public.grant_consent('precise_location','2026-07-20','test');
+  PERFORM public.withdraw_consent('precise_location');  -- ping preserved (held)
+  BEGIN
+    PERFORM public.get_locals_feed(38.9,-76.9,'miles_1',50);
+    ASSERT false, 'T39 a caller who withdrew precise_location still read the feed';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;  -- 42501
+  END;
+  PERFORM set_config('request.jwt.claims', NULL, true);
+END $$;
+
+-- ============ TEST 40: Storage gate honors enforce_consent=1 (never-asked) ==
+DO $$
+DECLARE
+  v_u UUID := '40a00000-0000-0000-0000-00000000040a';
+BEGIN
+  INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+    (v_u,'00000000-0000-0000-0000-000000000000','authenticated','authenticated','w40a@t.local',now(),now());
+  UPDATE public.app_settings SET value_num=1 WHERE key='enforce_consent';
+
+  -- No photo_processing row at all (never asked). Upload must be blocked.
+  SET LOCAL ROLE authenticated;
+  PERFORM set_config('request.jwt.claims', json_build_object('sub',v_u,'role','authenticated')::text, true);
+  BEGIN
+    INSERT INTO storage.objects (bucket_id,name) VALUES ('profile_photos', v_u::text || '/x.jpg');
+    ASSERT false, 'T40 storage upload allowed with enforce_consent=1 and no consent row';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  -- With consent granted, the same upload is allowed.
+  PERFORM public.grant_consent('photo_processing','2026-07-20','test');
+  INSERT INTO storage.objects (bucket_id,name) VALUES ('profile_photos', v_u::text || '/y.jpg');
+  RESET ROLE;
+  PERFORM set_config('request.jwt.claims', NULL, true);
+  UPDATE public.app_settings SET value_num=0 WHERE key='enforce_consent';
+  ASSERT (SELECT value_num FROM public.app_settings WHERE key='enforce_consent')=0,
+    'T40 must restore enforce_consent=0';
+END $$;
+
+-- ============ TEST 41: hold-aware storage dequeue skips held owners =========
+DO $$
+DECLARE
+  v_u UUID := '41a00000-0000-0000-0000-00000000041a';  -- queued then held
+  v_o UUID := '41b00000-0000-0000-0000-00000000041b';  -- queued, unheld
+BEGIN
+  INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+    (v_u,'00000000-0000-0000-0000-000000000000','authenticated','authenticated','w41a@t.local',now(),now()),
+    (v_o,'00000000-0000-0000-0000-000000000000','authenticated','authenticated','w41b@t.local',now(),now());
+  INSERT INTO public.storage_deletion_queue (user_id,bucket_id,object_name) VALUES
+    (v_u,'profile_photos', v_u::text || '/a.jpg'),
+    (v_o,'profile_photos', v_o::text || '/b.jpg');
+  -- Object queued FIRST, hold placed AFTER: must not be handed to the worker.
+  PERFORM public.place_legal_hold(v_u,'law_enforcement','test','ref',NULL);
+
+  ASSERT NOT EXISTS (SELECT 1 FROM public.pending_storage_deletions(200) WHERE object_name=v_u::text || '/a.jpg'),
+    'T41 dequeue returned a held owner''s object';
+  ASSERT EXISTS (SELECT 1 FROM public.pending_storage_deletions(200) WHERE object_name=v_o::text || '/b.jpg'),
+    'T41 dequeue dropped an unheld object';
 END $$;
 
 SELECT '✅ ALL RECIPROCITY SECURITY INVARIANTS PASSED' AS result;

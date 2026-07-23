@@ -148,19 +148,20 @@ Deno.serve(async (req) => {
         ? requestedHood
         : "Nearby";
 
-      const { data: profile } = await supabase.from("profiles")
-        .select(
-          "is_active,is_paused,is_incognito,age_verified,is_photo_verified,deleted_at,photo_urls",
-        )
-        .eq("id", single.user_id)
-        .maybeSingle();
-      if (
-        !profile || profile.is_active !== true || profile.is_paused === true ||
-        profile.is_incognito === true || profile.age_verified !== true ||
-        profile.is_photo_verified !== true || profile.deleted_at != null ||
-        !Array.isArray(profile.photo_urls) || profile.photo_urls.length === 0
-      ) {
+      // Discoverability is the DB's single source of truth: is_discoverable_user()
+      // requires an APPROVED photo_verifications row for a current photo, not the
+      // denormalized is_photo_verified boolean this function used to trust.
+      const { data: discoverable, error: discErr } = await supabase
+        .rpc("is_discoverable_user", { p_user_id: single.user_id });
+      if (discErr || discoverable !== true) {
         return json({ ok: false, error: "user_not_discoverable" }, 403);
+      }
+      // Never insert a GPS ping for a user who withdrew precise_location — this
+      // service-role insert bypasses record_location_ping's require_consent gate.
+      const { data: locWithdrawn } = await supabase
+        .rpc("consent_withdrawn", { p_uid: single.user_id, p_purpose: "precise_location" });
+      if (locWithdrawn === true) {
+        return json({ ok: false, error: "location_consent_withdrawn" }, 403);
       }
 
       const { error: pingErr } = await supabase.from("location_pings").insert({

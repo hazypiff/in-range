@@ -25,6 +25,18 @@ These gate the whole chain. None is code.
 - [ ] **Deploy the public pages** (`web/report.html`, `web/delete-account.html`)
       and paste their URLs into the store listings and privacy policy.
 - [ ] Agree who watches the two queues daily, and how they get alerted.
+- [ ] **Schedule the `maintenance` Edge function (not just the SQL RPC).**
+      Physical erasure of Storage objects can only happen through the Storage
+      API, which lives in the `maintenance` Edge function — Postgres cannot
+      delete `storage.objects`. Prod cron currently runs `run_maintenance()`
+      (which only *enqueues* objects into `storage_deletion_queue`); until the
+      Edge worker runs on a schedule, queued photos are never physically
+      deleted. Deploy the Edge functions (`supabase functions deploy
+      maintenance miles-correlate`) and schedule the `maintenance` function
+      every 15 min (dashboard scheduled function, or `pg_cron` + `pg_net`
+      `net.http_post` with the service-role key from Vault). The worker now
+      calls `pending_storage_deletions()`, which is hold-aware, so it will
+      never delete an object whose owner is under a legal hold.
 
 ---
 
@@ -138,7 +150,7 @@ A released hold lets any pending deletion complete automatically.
 
 ## 5. What the machinery guarantees, and what it doesn't
 
-**Guaranteed by code (harness T13–T25):**
+**Guaranteed by code (harness T13–T41):**
 - A held account survives the retention purge until the hold is released.
 - Escalation preserves before the subject can race a deletion.
 - Deletion under a hold is deferred, not refused — it completes on release.
@@ -153,6 +165,12 @@ A released hold lets any pending deletion complete automatically.
   ephemeral sweeps, and consent withdrawal cannot wipe it either.
 - Media hashes can't be forged onto someone else's object, so an approved
   NCII removal can't be weaponized to delete an innocent user's photo.
+- A withdrawn consent is enforced at every write path, not just recorded:
+  BLE token history, photo uploads/verification, and location correlation all
+  refuse a withdrawn user, and the Storage worker skips objects whose owner is
+  under a hold (queued-then-held can't be raced into deletion).
+- Internal token/pair helpers are no longer callable by anonymous clients, so
+  a live BLE token can't be resolved to its owner + approximate GPS by anyone.
 
 **Only a human can do:**
 - Register with NCMEC, review a report, decide, file, confirm.
