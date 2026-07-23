@@ -1956,5 +1956,55 @@ BEGIN
   ASSERT NOT v_raised, 'T46 empty IP hash was rate-limited (should fall through)';
 END $$;
 
+-- ============ TEST 47: photo review queue — visible to mods, not to users ===
+-- The moderation board must list photos awaiting a human decision and must be
+-- service-role only (it exposes pending photos + display names). (0052.)
+DO $$
+DECLARE
+  v_u UUID := '47a00000-0000-0000-0000-00000000047a';
+  v_oid UUID;
+  v_oupd TIMESTAMPTZ;
+BEGIN
+  INSERT INTO auth.users (id,instance_id,aud,role,email,created_at,updated_at) VALUES
+    (v_u,'00000000-0000-0000-0000-000000000000','authenticated','authenticated','w47a@t.local',now(),now());
+  -- photo_urls must include the pending photo (as the real upload flow sets it):
+  -- decide only marks the profile verified if the approved photo is a current one.
+  UPDATE public.profiles SET display_name='PhotoPending', photo_urls=ARRAY[v_u::text||'/pending.jpg'] WHERE id=v_u;
+  -- A real storage object so the anti-tamper check (photo unchanged since
+  -- submission) passes, and the verification enters at 'ai_review' as a fresh
+  -- client submission does (nothing advances it automatically).
+  INSERT INTO storage.objects (bucket_id, name) VALUES ('profile_photos', v_u::text||'/pending.jpg')
+    RETURNING id, updated_at INTO v_oid, v_oupd;
+  INSERT INTO public.photo_verifications
+    (user_id, photo_path, slot_index, state, submitted_at, storage_object_id, storage_object_updated_at)
+    VALUES (v_u, v_u::text||'/pending.jpg', 0, 'ai_review', now()-interval '3 hours', v_oid, v_oupd);
+
+  -- Appears on the board with the fields a moderator needs.
+  ASSERT (SELECT count(*) FROM public.v_photo_review_queue WHERE user_id=v_u) = 1,
+    'T47 pending photo missing from the moderation board';
+  ASSERT (SELECT bucket_id='profile_photos' AND photo_path=v_u::text||'/pending.jpg'
+            FROM public.v_photo_review_queue WHERE user_id=v_u),
+    'T47 board is missing the storage bucket/path a moderator needs to view the image';
+
+  -- Privilege boundary: app roles cannot read the board.
+  ASSERT NOT has_table_privilege('anon','public.v_photo_review_queue','SELECT'),
+    'T47 anon can read the photo moderation board';
+  ASSERT NOT has_table_privilege('authenticated','public.v_photo_review_queue','SELECT'),
+    'T47 authenticated users can read the photo moderation board';
+  ASSERT has_table_privilege('service_role','public.v_photo_review_queue','SELECT'),
+    'T47 service_role cannot read the photo moderation board';
+
+  -- review_photo advances the ai_review submission and records the decision in
+  -- one call; it must clear the board and verify the profile.
+  PERFORM public.review_photo(
+    (SELECT verification_id FROM public.v_photo_review_queue WHERE user_id=v_u), TRUE, 'T47 approve');
+  ASSERT (SELECT count(*) FROM public.v_photo_review_queue WHERE user_id=v_u) = 0,
+    'T47 approved photo still on the board';
+  ASSERT (SELECT is_photo_verified FROM public.profiles WHERE id=v_u),
+    'T47 approval did not set is_photo_verified';
+  ASSERT (SELECT state='approved' FROM public.photo_verifications WHERE user_id=v_u),
+    'T47 review_photo did not move the row to approved';
+END $$;
+
 SELECT '✅ ALL RECIPROCITY SECURITY INVARIANTS PASSED' AS result;
 ROLLBACK;

@@ -160,9 +160,45 @@ A released hold lets any pending deletion complete automatically.
 
 ---
 
+## 4b. Photo verification queue (daily) — GATES DISCOVERABILITY
+
+**There is no automated photo AI** (the `photo-review` function is a stub). A
+user does **not** become discoverable until a human approves their photo:
+`is_discoverable_user` requires an *approved* `photo_verifications` row. **If
+nobody works this queue, no user is ever shown to anyone** — Locals stays empty
+for everyone. Watch it daily. All of this is service-role only.
+
+1. **See the queue** (oldest first):
+   ```sql
+   SELECT verification_id, user_id, display_name, state, bucket_id, photo_path, waiting
+     FROM public.v_photo_review_queue;
+   ```
+2. **Look at the image.** It is object `photo_path` in bucket `profile_photos`.
+   Generate a short-lived signed URL — from the Dashboard (Storage →
+   profile_photos → the file → "Get URL"), or with a service-role client
+   (`createSignedUrl(photo_path, 300)`). Never make the bucket public.
+3. **Decide** (one call; approves/rejects and notifies the user):
+   ```sql
+   -- Approve (unlocks discoverability):
+   SELECT public.review_photo('<verification_id>', TRUE,  '<your name>: clear face, ok');
+   -- Reject (asks them to re-upload):
+   SELECT public.review_photo('<verification_id>', FALSE, '<your name>: face not visible');
+   ```
+   `review_photo` handles a freshly-submitted photo (state `ai_review`) directly
+   — you do not need to advance it first. The anti-tamper check means if the user
+   swapped the file after submitting, approval fails safely; ask them to
+   re-upload.
+
+**When a real photo AI is built:** deploy it as the `photo-review` Edge function
+and schedule it (like `maintenance` in §0). Photos will then arrive already
+screened in `manual_review`; `review_photo` / `decide_photo_verification` still
+apply for the human decision.
+
+---
+
 ## 5. What the machinery guarantees, and what it doesn't
 
-**Guaranteed by code (harness T13–T45):**
+**Guaranteed by code (harness T13–T47):**
 - A held account survives the retention purge until the hold is released.
 - Escalation preserves before the subject can race a deletion.
 - Deletion under a hold is deferred, not refused — it completes on release.
