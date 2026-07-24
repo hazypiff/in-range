@@ -107,12 +107,15 @@ verify_builds() {
       echo "  FAIL $L: $sha is not a commit in this repo — git fetch, or rebuild" >&2
       bad=1; continue
     fi
-    if git diff --quiet "$want" "$sha" -- lib android ios scripts 2>/dev/null; then
+    # Client code ONLY. The stamp describes an APK, so comparing host-side
+    # scripts/ against it is a category error — deploy-web.sh cannot change what
+    # a phone emits, and including it made this check block its own harness.
+    if git diff --quiet "$want" "$sha" -- lib android ios 2>/dev/null; then
       echo "  ok   $L: $sha (differs from freeze outside client code only)"
       continue
     fi
     echo "  FAIL $L: $sha differs from freeze $want in client code:" >&2
-    git diff --stat "$want" "$sha" -- lib android ios scripts 2>/dev/null \
+    git diff --stat "$want" "$sha" -- lib android ios 2>/dev/null \
       | sed 's/^/         /' >&2
     bad=1
   done
