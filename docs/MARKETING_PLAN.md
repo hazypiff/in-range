@@ -1,16 +1,20 @@
 # In Range — Go-To-Market: "City Strike" Marketing & Financial Plan
 
-> Status: **adopted 2026-07-24** (owner call). This is the reference plan for
-> launch marketing AND the revenue model that funds it. It lives in the repo
-> so future automation work (growth features, monetization, waitlist tooling,
-> ambassador telemetry, unit-economics dashboards) can be generated straight
-> from it — see **§13 Automation hooks** for the mapping to code we already
-> have or will need.
+> Status: **adopted 2026-07-24, research-revised same day** (owner call). This
+> is the reference plan for launch marketing AND the revenue model that funds
+> it. It lives in the repo so future automation work (growth features,
+> monetization, waitlist tooling, ambassador telemetry, unit-economics
+> dashboards) can be generated straight from it — see **§14 Automation hooks**
+> for the mapping to code we already have or will need.
 >
-> **Monetization direction (decided with this revision):** freemium
-> subscriptions as the base + local business partnerships as the engine, with
-> IAP boosts and (guarded) aggregate insights later. This supersedes the
-> previous "monetization undecided / simulated" state.
+> **Monetization direction (decided):** freemium subscriptions as the base +
+> local venue partnerships and ticketed events as the engine, with IAP boosts
+> and (guarded) aggregate insights later.
+>
+> **2026-07-24 research revision:** every load-bearing assumption was checked
+> against primary sources (four research tracks: competitor autopsies,
+> subscription/CAC benchmarks, launch playbooks, venue-ad economics). Numbers
+> that failed the check were corrected below. Sources in **§15**.
 
 ---
 
@@ -20,386 +24,469 @@
 Its value depends entirely on having other users nearby. Without a critical
 mass in a specific location, the app offers no value, and users churn.
 
-**The Solution**: Instead of a broad, global launch, In Range will implement a
-**"City Strike" strategy** — focusing all resources on saturating one
-high-density, tech-savvy city at a time. The goal is to create a "magical"
-experience for the first 1,000 users in a city, turning them into
-evangelists. For location-based social apps, the critical threshold is
-typically **500–1,000 active users per city**.
+**The Solution**: A **"City Strike" strategy** — saturate one high-density
+neighborhood at a time. Create a "magical" experience for the first users in
+a zone, turn them into evangelists, publish the density number, repeat. For
+location-based social apps the critical threshold is **500–1,000 active users
+per zone** — and the research says this is not just a GTM choice for a
+crossed-paths app, it's existential (§2).
 
-**The Funding Loop**: Marketing is funded by cash flow from a mix of user
-subscriptions and local business partnerships. The path to profitability is a
-math problem: blended revenue per user (ARPU) must consistently exceed the
-cost to acquire that user (CAC) — with **LTV ≥ 3× CAC** as the gate for
-scaling paid spend (§9).
+**The Funding Loop**: Marketing is funded by cash flow from subscriptions +
+venue partnerships + ticketed events. The path to profitability is a math
+problem: blended revenue per user must consistently exceed blended cost to
+acquire that user, with **LTV ≥ 3× CAC** as the gate for scaling paid spend.
+Benchmark reality: the dating industry runs LTV:CAC of ~1.0–1.5× on paid
+acquisition — **no one passes the gate on ads alone**. The gate is passed on
+the organic/venue side or not at all (§10).
 
 ---
 
-## 2. Phase 1: Pilot City Selection & Preparation (Month 1)
+## 2. Category Evidence: why this plan (research, 2026-07)
 
-### 2.1. City Selection Criteria
+What happened to everyone who tried adjacent things — and what it prescribes.
 
-Do not guess. Choose a city based on data:
+### 2.1. Happn — the crossed-paths incumbent's autopsy
 
-- **High Density**: A concentrated urban core where people naturally cluster
-  (e.g., downtown, university campus, or a specific trendy neighborhood).
-- **Tech-Savvy Population**: High smartphone penetration and comfort with new
-  social apps.
-- **High "Movement"**: A city with festivals, conferences, a strong nightlife,
-  or a large young professional population.
+- Grew to ~50M registered by 2019; by 2024–25, ~100–170M registered but only
+  **~6.5M active (~4–6%)** — a feed full of ghosts. Stalled in the US/West,
+  **sold to China's Hello Group in Sept 2025**. Its CEO's own diagnosis:
+  users want to spend *less* time in apps.
+- Its four wounds, each one an In Range design answer:
+  1. **GPS crossings are low-trust** ("a stalker's dream" framing followed it
+     from launch) and spoofable → ours are mutual BLE handshakes: symmetric,
+     provable, indoors-capable.
+  2. **Ghost-polluted feed** (4–6% active ratio) → both-phones-verified
+     crossings require two live apps; our feed is structurally 100% recent
+     users.
+  3. **Tinder-clone monetization** ($29.99/mo, pay-to-see-likes) layered on a
+     discovery gimmick → we monetize the *meeting* (§9).
+  4. **No IRL layer** — never converted "we crossed paths" into "we met."
+- **Positioning to use verbatim**: three claims Happn structurally cannot
+  make — *"Both phones must agree you really crossed paths (no fakes). Everyone
+  in your feed was live this week (no ghosts). Your location history never
+  leaves your phone (BLE, not GPS tracking)."*
 
-**Example Targets**: Austin, TX; Nashville, TN; or a specific borough of NYC
-like Williamsburg. Launching in a **college town** is also a proven tactic —
-Tinder famously targeted college campuses first, focusing on Greek
-organizations to create dense, self-sustaining "atomic networks".
+### 2.2. The IRL wave — where the category's growth actually is
 
-### 2.2. "Founder Program" Activation
+- **Thursday** shut its 2M-user dating app (Jan 2025, "rapidly declining
+  consumer interest") and pivoted to **ticketed IRL events only** — now 150+
+  cities, **projected $20M revenue in 2026 (+108% YoY)**, $50M valuation.
+- **Breeze** (NL) skips chat and books a **real first date at a partner
+  venue**, both sides paying upfront: 300k+ dates arranged, 1,500+ partner
+  bars, <1% no-shows, 75% number-exchange rate — compounding into NYC/UK.
+- **Jigsaw** abandoned its app mechanic for in-person events (200+/month,
+  30+ cities). Apps capture ~0.3% of the $3T singles economy; the growth is
+  in the **experience layer**, not the subscription layer.
+- **Anti-patterns**: Left Field (location-based, NYC, ~5k users spread thin →
+  dead) and First Round's on Me (nationwide launch at once, no traction) —
+  both are density failures. Every survivor engineered density.
 
-The "per-city unlock Founder model" is our most powerful tool. Lean into it
-heavily:
+**Prescription adopted in this plan**: events are a first-class revenue AND
+density product from day one (§3.3, §9.3), not a Phase-4 afterthought.
 
-- **Recruit 50–100 "Founders"** in the pilot city *before* the public launch.
-- Give them **exclusive perks**: founder pricing locked for life (see §8.1 —
-  prefer deeply-discounted-forever over free-forever so founders still count
-  as paying conversions), a unique "Founder" badge, and a direct line to the
-  In Range team.
-- Their mission: Use the app daily, provide feedback, and invite their
-  immediate network. Clubhouse used a similar invite-only model to create
-  exclusivity, turning each new member into a brand ambassador.
+---
+
+## 3. Phase 1: Pilot Zone Selection & Preparation (Month 1)
+
+### 3.1. Zone Selection Criteria
+
+Do not guess. Choose a **neighborhood-scale zone** (not a whole city) based
+on data: high density urban core or campus, tech-savvy population, high
+"movement" (nightlife, festivals, young professionals). Example targets:
+Austin, Nashville, Williamsburg — or a college town. Tinder's original
+playbook (USC, 2012) remains the canonical proof: sorority-gated parties
+("show the bouncer the app to get in"), then pitch the fraternity with
+"they're already on it" — **~15,000 users in about a week, zero paid
+acquisition**.
+
+**Sequencing rule (from Tinder)**: seed the scarce side of the network
+FIRST, then market to the other side with proof the first side is present.
+
+### 3.2. "Founder Program" Activation
+
+- **Recruit 50–100 "Founders"** in the pilot zone *before* public launch.
+- Perks: founder pricing locked for life (§9.1 — deeply-discounted-forever
+  beats free-forever so founders still count as paying conversions; reserve
+  fully-free for ~25 working founders), permanent Founder badge, direct line
+  to the team, feature votes.
+- Mission: daily use, feedback, and recruiting their immediate network.
 
 > Already live: inrange.life collects founder signups into the `waitlist`
-> table with a live "#N in line" position (migration 0054). The founder perks
-> promised on the page — first city access, permanent badge, founder pricing
-> that never goes up, feature votes — are the same perks this section commits
-> to. Keep site copy and this plan in sync.
+> table with a live "#N in line" position (migration 0054). Keep site copy
+> and this plan in sync.
+
+### 3.3. Upgrade the waitlist to a referral ladder (highest-leverage build)
+
+Robinhood's ~1M-person waitlist worked because the number **moved**:
+
+- Show position instantly at signup (✅ live) **plus how many people are
+  behind you** (loss aversion — you have something to defend).
+- One button: *"Skip the line — every friend who joins moves you up."*
+  Jumps visible immediately.
+- The reward is **early access itself**, not a discount.
+- **Superhuman twist — ratio-balanced admission**: collect 2–3 signup fields
+  (neighborhood, age band, gender/orientation) and admit cohorts that keep
+  the day-one network balanced, with priority-lane jumps for the scarce
+  side. The waitlist doubles as the tool that prevents a lopsided launch.
+- **Clubhouse caution**: waitlist FOMO decays fast and is not a retention
+  mechanic. Pre-plan the waitlist→open transition per zone (open fully when
+  the zone hits its density threshold, §7).
 
 ---
 
-## 3. Phase 2: The "Dense Launch" Strategy (Month 2)
+## 4. Phase 2: The "Dense Launch" (Month 2)
 
 The goal is not downloads; the goal is **density**.
 
-### 3.1. The "First 500" Challenge
+### 4.1. The "First 500" Challenge
 
-Instead of marketing to a whole city, market to a **neighborhood**.
+Market to the zone, not the city: "In Range is live in [Neighborhood]. The
+first 500 to download and stay active 7 days get [founder pricing / local
+reward / sweepstakes]."
 
-- **Tactic**: Run a campaign saying, "In Range is live in [Neighborhood Name].
-  The first 500 users to download and keep the app active for 7 days get
-  [Reward]."
-- **Reward**: Founder pricing for life, a gift card to a local popular coffee
-  shop, or entry into a sweepstakes.
+### 4.2. App-Gated Launch Events (Tinder mechanic, Thursday economics)
 
-### 3.2. Leverage Existing Networks
+- Launch party at the anchor venue partner: **entry = app installed +
+  waitlist position shown at the door**. Thursday's Dubai template: one
+  ~150-cap event, sell it out in advance (110+ tickets in 2 weeks), raise
+  capacity, then adjacent areas.
+- Crossings captured at the event unlock matches afterward — the product
+  demo IS the party.
 
-Make it frictionless for the first users to bring their friends:
+### 4.3. Guerrilla stunts, privacy-flavored (Thursday formula)
 
-- **"Invite Your Group Chat"**: Build a one-click flow that allows users to
-  invite their entire WhatsApp, iMessage, or Telegram group chats.
-- **Cross-Platform Social Proof**: Allow users to anonymously share their
-  "daily encounters summary" or "explorer badge" to Instagram Stories or
-  TikTok with a QR code to download.
+Every stunt: (a) physical, in the strike zone; (b) handwritten/low-fi
+aesthetic; (c) designed to be screenshot-shareable within minutes;
+(d) posted same-day by founders on LinkedIn/TikTok. Thursday got **23,000
+downloads in 2 hours** from interns with cardboard signs. Privacy-positive
+angle writes itself: *"This app doesn't know where you live. It only knows
+you're in range. — launching here Thursday."* **Avoid** cheating/edgy-coded
+stunts (Thursday's Sydney backfire) — wrong fit for a safety-first brand.
 
-### 3.3. Partner with Local Venues
+### 4.4. Concentrate liquidity in time, not just space
 
-Partner with 5–10 high-traffic venues (gyms, co-working spaces, university
-dorms, popular cafes) in the target neighborhood.
+Thursday's one-day-a-week scarcity produced 110k likes → 7,500 matches in a
+single day. A BLE app needs *concurrent physical presence* even more:
+promote **live hours** ("In Range is live in Williamsburg tonight, 7–10 pm"),
+align ambassador shifts (§6.1) and venue events to the same window.
 
-- **Tactic**: Offer their patrons a free drink or a day pass if they download
-  In Range and "check in" or ping someone at the venue.
-- **Why**: This creates an immediate, tangible reward for downloading and
-  creates a burst of activity in a specific location — **and these same
-  venues are the warm pipeline for the Promoted Places revenue stream
-  (§8.2).** Every venue partnership should be structured as "free pilot now,
-  paid placement once we show you the foot-traffic numbers."
+### 4.5. Leverage Existing Networks
 
----
+- **"Invite Your Group Chat"**: one-click invite of WhatsApp/iMessage/
+  Telegram groups.
+- **Cross-platform social proof**: anonymously share "daily encounters
+  summary" / explorer badge to IG Stories or TikTok with a QR download code.
 
-## 4. Phase 3: Creating "Single-Player" Value (Ongoing)
+### 4.6. Venue Partnerships (the revenue pipeline starts free)
 
-This is the most critical retention strategy. Users will not stay if the app
-is empty. We must give them a reason to open the app even when no one is
-around.
-
-### 4.1. Gamification & Exploration
-
-- **"Explorer" Rankings**: Award points and badges for visiting new places.
-  Create a leaderboard for the neighborhood.
-- **Streaks**: Reward users for keeping the app active in the background
-  daily.
-
-### 4.2. Anonymized Local Insights
-
-Give users data about their own behavior and the area:
-
-- **"Your Week in Review"**: A summary of where they went, how many potential
-  "pings" they crossed paths with (anonymized), and busy times at local
-  venues.
-- **Heat Maps**: Show where activity is happening in the city (without
-  revealing individual locations).
-
-### 4.3. Icebreakers & Journaling
-
-Provide prompts or a lightweight journaling feature that lets users document
-their day. This gives them a reason to engage with the app as a personal
-tool, not just a social one.
-
-> Privacy guardrail (binding): every feature in this phase must clear the
-> existing consent/retention envelope — precise GPS purges in 24 h, sightings
-> are short-lived, and nothing here may create a persistent movement history.
-> "Week in Review" and heat maps must be computed from data we already retain
-> (encounter aggregates), not from new location logging. See
-> `docs/SAFETY_RUNBOOK.md` before building any of these.
+Partner with 5–10 high-traffic venues in the zone. Free pilot placements +
+patron perks for check-ins now; convert to **paid packages once we can show
+them their own verified foot-traffic numbers** (§9.2). Every launch venue is
+a warm Promoted Places lead.
 
 ---
 
-## 5. Phase 4: Scaling & Expansion (Month 3+)
+## 5. Phase 3: Creating "Single-Player" Value (Ongoing)
 
-### 5.1. The "Over-Supply" Tactic
+Users will not stay if the app is empty. Give them a reason to open it even
+when no one is around.
 
-Uber famously solved its chicken-and-egg problem by **over-supplying the
-supply side** — paying drivers to be online even when there were no riders.
-For In Range:
+- **Explorer rankings** and neighborhood leaderboards; **streaks** for
+  keeping the beacon alive daily.
+- **"Your Week in Review"**: where you went, how many verified crossings
+  (anonymized), busy times at local venues.
+- **Heat maps** of zone activity (never individuals).
+- **Icebreakers & lightweight journaling.**
 
-- **Tactic**: Pay or incentivize a group of "Ambassadors" to keep the app
-  running in the background during peak hours (e.g., 5–10 PM) in the pilot
-  neighborhood.
-- **Why**: This guarantees that when a new user opens the app, they see
-  *someone* is nearby. This creates a great first experience.
-
-### 5.2. Host Real-World Events
-
-- **"In Range Happy Hour"**: Partner with a local bar. The first 50 people to
-  show up and ping each other on the app get a free drink.
-- **University Takeover**: If launching near a university, host a welcome-week
-  event where students must download In Range to get into the party.
-
-### 5.3. The City-to-City Expansion
-
-Once we have **1,000+ active, retained users** in the pilot city, replicate
-the playbook in the next city. Do not launch a new city until the previous
-one has reached critical mass **and its unit economics clear the §9 gate.**
+> Privacy guardrail (binding): every feature here must clear the existing
+> consent/retention envelope — precise GPS purges in 24 h, sightings are
+> short-lived, nothing may create a persistent movement history. Week in
+> Review and heat maps compute from encounter aggregates we already retain,
+> not new location logging. See `docs/SAFETY_RUNBOOK.md` first.
 
 ---
 
-## 6. Key Metrics for Success
+## 6. Phase 4: Scaling & Expansion (Month 3+)
+
+### 6.1. The "Over-Supply" Tactic — with real ambassador economics
+
+Uber over-supplied drivers; Fizz saturated Stanford to **95% of undergrads**
+with paid student ambassadors (fliers + free donuts) and ~15 paid moderators
+per campus — and the *moderators*, not the flier crews, kept campuses alive.
+
+- **Structure**: 3–5 ambassadors per zone at **$15–20/hr, ~10 hrs/week**,
+  scheduled in the 5–10 pm live window ≈ **$600–800/mo each** (~$3–4k/mo per
+  zone) — well under agency cost (~$2,450/ambassador/semester).
+- **Pay for scripted, countable actions** (downloads at a table, venue
+  check-ins, +N friends at launch night), never vague "influence."
+- Promote the best ambassador into a durable **community lead / safety
+  first-responder** role — that's the retention engine.
+
+### 6.2. In Range Nights (events as product)
+
+Recurring ticketed singles nights at venue partners — the app is the entry
+mechanic and crossings from the night unlock matches. This is
+simultaneously: cold-start density, pre-subscription revenue (§9.3), venue
+upsell proof, and the source of the "X couples met at In Range Nights" PR
+stats Thursday and Breeze both weaponize.
+
+### 6.3. Zone-to-Zone Expansion
+
+- **Publish density, not downloads** (Fizz's "95% of Stanford" IS the growth
+  story): *"[Zone 1] hit 40% saturation in 6 weeks"* seeds Zone 2's waitlist.
+- Do not open a new zone until the previous one holds its **activation
+  metric** (§7) **and** its unit economics clear the §10 gate.
+
+---
+
+## 7. Key Metrics
 
 Growth metrics:
 
-- **Density Ratio**: Active Users / Square Mile in the target neighborhood.
-- **Retention Rate (Day 7 & Day 30)**: More important than downloads. If
-  users aren't coming back, density is not high enough.
-- **Pings per Active User**: Are users actually finding each other?
-- **Referral Rate**: How many users are inviting friends? The ultimate sign
-  of product-market fit.
+- **Crossing-density activation (THE gate)**: median active user gets ≥N
+  verified crossings per week in-zone. Zone 2 does not open until Zone 1
+  holds it. (Also publishable as "% of zone saturated".)
+- **Density Ratio**: active users / square mile in the zone.
+- **Retention (D7 & D30)** — more important than downloads.
+- **Pings per active user**; **referral rate** (the PMF signal).
 
-Money metrics (tracked from day one, §9):
+Money metrics (tracked from day one, §10):
 
-- **Blended CAC** (all marketing spend / all new active users) AND **paid
-  CAC** (paid spend / paid-attributed users) — kept separate.
-- **ARPU / ARPPU**, **free→paid conversion %**, **subscriber churn %**.
-- **LTV : CAC ratio** (gate: ≥3× before scaling paid spend).
-- **CAC payback period** (target: < 6 months).
-- **Venue partner count, retention, and revenue** (MBR).
+- **Blended CAC** and **paid CAC** — computed separately, never mixed.
+- **Payers / MAU** (not payers/installs — see §10.2), ARPPU, subscriber
+  churn, trial-to-paid rate.
+- **LTV : CAC** (≥3× gate) and **CAC payback < 6 months** before paid scale.
+- **Venue partners**: count, monthly logo churn (target ≤3–5%), MBR;
+  **event nights**: tickets, sell-through, venue renewal rate.
 
 ---
 
-## 7. Marketing Budget Allocation (Example for Pilot City)
+## 8. Marketing Budget Allocation (Pilot Zone)
 
 | Category | Allocation | Purpose |
 | :--- | :--- | :--- |
-| **Ambassador Incentives** | 30% | Paying users to keep the app active to guarantee density. |
-| **Local Venue Partnerships** | 25% | Subsidizing free drinks/items for check-ins — doubles as Promoted Places sales pipeline. |
-| **Influencer Marketing** | 20% | Partnering with 3–5 local micro-influencers to create buzz. |
-| **Events** | 15% | Hosting launch parties and meetups. |
-| **Ads** | 10% | Hyper-targeted geo-fenced ads in the pilot neighborhood. |
+| **Ambassador program** | 30% | 3–5 ambassadors × $600–800/mo, scripted actions in the live window (§6.1). |
+| **Venue & event partnerships** | 25% | Free-pilot placements, launch-night costs — doubles as the Promoted Places sales pipeline. |
+| **Micro-influencers** | 20% | 3–5 local micro-influencers; same-day founder-posted stunt content (§4.3) is the multiplier. |
+| **Events** | 15% | Launch parties, In Range Nights seed costs (recouped via tickets). |
+| **Ads** | 10% | Geo-fenced only, in-zone; capped until the §10 gate is passed. Android-first (CPI ~40–60% below iOS). |
 
 ---
 
-## 8. Revenue Streams: How In Range Makes Money
+## 9. Revenue Streams
 
-To fund marketing, we need multiple revenue streams, activated in this order.
-
-| # | Revenue Stream | Model & Mechanics | Realistic Benchmark | Store cut? |
+| # | Stream | Mechanics | Benchmarks (researched) | Store cut? |
 | :--- | :--- | :--- | :--- | :--- |
-| 1 | **Freemium Subscriptions** | Free tier with core encounters; premium (~$9.99/mo) for unlimited encounters, advanced filters, "who liked you", etc. | **2–5%** of free users convert; top performers **7–10%** | **Yes** — 15–30% |
-| 2 | **Local Business Partnerships** | Venues pay for "Promoted Places" / featured visibility; monthly fee or foot-traffic commission. Sold and billed **via web dashboard, outside the app stores.** | Proximity marketing is a **$65B** industry; this is the high-margin stream | **No** |
-| 3 | **In-App Purchases** | One-time "Boosts" for visibility, virtual gifts, temporary features. | Variable; complements subscriptions | **Yes** |
-| 4 | **Aggregate Insights (B2B)** | Anonymized, aggregated foot-traffic/busy-time data for local businesses. Later-stage. | High-value if density is real | **No** |
+| 1 | **Freemium subscriptions** | $9.99 base tier; **$19.99–24.99 premium tier**; **annual $39.99–59.99**; 7+ day trial | NA median price is exactly $9.99; category ARPPU runs $21–30 (Bumble $22–27, Hinge ~$30) — blended target **$13–16** | Yes (15–30%) |
+| 2 | **Venue partnerships** | Base placement **$49–99/mo** + performance kicker; web-billed | Yelp's blended avg = $213/mo/location but bars/restaurants average ~$150–170 and churn hardest | No |
+| 3 | **In Range Nights (events)** | Ticketed singles nights **$10–20/ticket**; venue pays event package **$150–300/event** | Maps 1:1 to what bars already pay trivia hosts ($100–250/night) for guaranteed traffic (25–40% weeknight lift); Thursday's events business: $20M projected 2026 | Tickets web-billed: No |
+| 4 | **IAP boosts** | Consumable visibility boosts | Complements subs; à la carte is a large share of Tinder revenue | Yes |
+| 5 | **Aggregate insights (B2B)** | k-anonymous coarse foot-traffic aggregates, later-stage | GUARDED — see §9.4 | No |
 
-### 8.1. In Range adjustments the generic model misses
+### 9.1. Subscription design notes (benchmark-driven)
 
-- **App-store fees change the subscription math.** Under the small-business
-  programs (both stores, <$1M/yr) the cut is **15%**, so a $9.99 sub nets
-  **~$8.49**; at scale it's 30% (~$6.99 net). All subscription projections in
-  §9 use the 15% net figure. This is also why the venue stream matters so
-  much: **business revenue is billed on the web and keeps ~97%** (card fees
-  only).
-- **Founder pricing beats founder-free.** "Lifetime premium free" for 100
-  founders permanently zeroes our best evangelists' ARPPU. Prefer **founder
-  pricing locked for life** (e.g., $4.99/mo forever, ~50% off): founders
-  still feel elite, still count as revenue, and the "never goes up" promise
-  on inrange.life is honored. Reserve fully-free lifetime premium for the
-  handful of pre-launch working founders (§2.2's 50–100 can be split:
-  free for the first ~25 working founders, locked pricing for the rest).
-- **B2B insights are guarded, not free money.** Stream #4 may only ever ship
-  as **k-anonymous, coarse-bucketed aggregates** (same guardrail as §4.2 heat
-  maps: bucket counts with a k-floor, never individual movement, nothing
-  outliving the 24 h GPS purge), and it must be disclosed in the privacy
-  policy **before** the first sale. If a buyer wants anything finer, the
-  answer is no — the privacy posture IS the brand.
+- **15% store fee** (small-business tier) in all math: $9.99 → ~$8.49 net.
+- **Founder price-lock** (e.g., $4.99/mo forever) — honors the site promise,
+  keeps founders as paying conversions.
+- **Add a 7+ day trial**: trial-to-paid at 17–32-day trials is **42.5%** vs
+  25.5% for ≤4-day — the single highest-leverage conversion lever in the
+  RevenueCat data.
+- **Annual plan matters**: 61.7% first-renewal vs ~17% twelve-month retention
+  on monthly plans; annuals dampen the month-1 churn cliff (~30% of annual
+  subs cancel in month 1 — set winback + billing-recovery from day one;
+  31% of Play cancellations are involuntary billing failures).
 
----
+### 9.2. Venue product design (from the Yelp/Foursquare/Groupon evidence)
 
-## 9. Unit Economics: The Math of Profitability
+- **Sell events first, placements second.** Foursquare's promoted-places
+  died with check-in engagement; venues renew what visibly fills seats.
+- **The killer differentiator: verified walk-ins.** BLE presence lets us
+  report *"X In Range users were physically in your venue this month"* —
+  attribution Yelp, Google, and trivia companies cannot offer. "High cost,
+  limited results" is the #1 SMB churn driver (41% leave within 1–2 years);
+  **attribution IS the retention product.**
+- **Never** Groupon-style 50% commissions (one-and-done deal-hunters killed
+  it: $3.2B → $515M revenue). A capped $1–2 per verified *first-time*
+  visitor kicker is the acceptable performance component.
+- **Plan for churn**: model 3–5% monthly logo churn even with attribution.
 
-- **LTV (Lifetime Value):** total net revenue expected from a user over their
-  lifetime in the app.
-- **CAC (Customer Acquisition Cost):** total cost to acquire a new *active*
-  user.
-- **The Golden Rule:** **LTV ≥ 3× CAC** before paid acquisition scales.
+### 9.3. Realistic venue+events volume
 
-### 9.1. CAC — and why City Strike changes it
+Per 1,000 zone actives: **2–4 flat-fee partners + 1–2 event packages/month**
+(not 10 flat partners — a venue paying monthly needs 10–20 incremental
+visits/month, and 1,000 actives at realistic DAU deliver that to a few
+venues, not ten). Let event partners upsell themselves into always-on
+placement once their singles night works.
 
-Industry benchmarks: social-app CPI runs **$3–5**; cost per *activated*
-dating/social user runs **~$34–40**. A naive $40k-for-1,000-users pilot gives
-**CAC ≈ $40**.
+### 9.4. B2B insights are guarded, not free money
 
-**But the whole point of Phases 1–2 is that we don't buy the first cohort.**
-Founders, referrals, venue partnerships, and events are cheap per user;
-geo-fenced ads are only 10% of the pilot budget (§7). So we track two
-numbers and never blend them silently:
-
-- **Blended CAC (pilot target): ≤ $10–15** per active user — the $40k pilot
-  budget should yield well over 1,000 actives because most arrive organically.
-- **Paid CAC (~$34–40)** applies only to the paid channel — and paid spend
-  stays capped at the §7 10% until measured LTV clears the 3× gate against
-  *paid* CAC.
-
-### 9.2. LTV scenarios (1,000 active users, net of 15% store fees)
-
-**Base case (conservative):** 2.5% premium conversion → 25 paying × $8.49
-net × 6-month lifetime = **LTV ≈ $1.27 per active user**. Not sustainable
-against any real CAC.
-
-**Best case (optimistic):** 7% conversion → 70 paying × $8.49 net ×
-12-month lifetime = **LTV ≈ $7.13 per active user**. Still under even blended
-CAC. **Subscriptions alone cannot fund marketing. Ever.**
-
-**Revised model with the venue stream:**
-
-- 70 paying users → **~$594/mo** net subscription revenue
-- **10 venue partners × $200/mo = $2,000/mo** (web-billed, ~97% kept)
-- Total ≈ **$2,594/mo** → 12-month blended LTV ≈ **$31 per active user**
-
-Against **blended CAC ≤ $15**, that's **2–3×+ and workable**; against a $40
-all-paid CAC it still isn't — which is the quantitative proof of plan rule
-#3 (density first, paid ads later).
-
-**Sanity anchor for the venue stream:** 10 partners per 1,000 actives is
-~1 venue per 100 users in one neighborhood — the same 5–10 venues already
-recruited as §3.3 launch partners, upsold from free pilot to paid placement
-with their own foot-traffic numbers.
-
-### 9.3. Standing rules
-
-1. Track LTV and CAC continuously (dashboards in §13, not spreadsheets).
-2. Paid spend unlocks a city only when that city's measured LTV ≥ 3× paid
-   CAC and CAC payback < 6 months.
-3. Price experiments (founder $4.99 lock, boost pricing) run per-city, never
-   globally, so cohorts stay comparable.
+Only ever k-anonymous, coarse-bucketed aggregates (same guardrail as §5 heat
+maps), disclosed in the privacy policy **before** the first sale. Finer
+granularity is a hard no — the privacy posture IS the brand. And drop the
+"$65B proximity marketing market" line from all materials: analyst estimates
+for that "market" span $2B–$150B (it's mostly geofenced ad spend and mall
+beacon hardware, none of it addressable by us). Size the venue opportunity
+bottoms-up only: venues in live zones × $1.2–2.4k/yr × realistic adoption.
 
 ---
 
-## 10. Cash Flow: Phased Plan
+## 10. Unit Economics (research-corrected)
+
+### 10.1. CAC — two numbers, never blended silently
+
+- Current dating benchmarks: CPI $2.76 global / **$5–7 US** (2025, nearly
+  doubled YoY); paid CAC per paying subscriber **$39 at 7% payer conversion,
+  $55 at 5%, $92 at 3%**. Industry-wide LTV:CAC on paid runs **1.0–1.5×** —
+  structurally below our 3× gate.
+- **Paid CAC (model $40–60)**: applies only to the 10% ads line; capped
+  until measured LTV clears 3× against *paid* CAC.
+- **Blended CAC (target $12–20, ≥60% organic mix)**: founders, referral
+  ladder, venue co-marketing, events, and stunts are the majority channel.
+  **This is the only path that passes the gate** — the City Strike plan is
+  the unit economics.
+
+### 10.2. LTV — corrected assumptions
+
+Research corrections to the original model:
+
+- **Conversion**: freemium install-to-paid median is **2.1% (D35)**, NA 2.8%,
+  top-quartile 4.5%+. The "7%" figures in dating are **payers/MAU of
+  retained users** (Tinder ~13% payers/MAU) — a different denominator.
+  Model **payers/MAU 4% base / 7% bull** on the active base.
+- **Subscriber lifetime**: dating premium subs live **2–5 months** (<15%
+  renew a second term; monthly churn ~12%). Base case **3 months**, bull
+  5–6 with annual mix + winback. The original 6–12-month assumption is not
+  defensible. (Partial hedge: ~30% churn because the app *worked* — those
+  users remain event-goers and evangelists.)
+- **ARPPU**: $13–16 blended (base tier + premium tier + boosts), $11–13.60
+  net of 15% store fee.
+
+### 10.3. Steady-state revenue per 1,000 zone actives (monthly)
+
+| Stream | Assumption | Net $/mo |
+| :--- | :--- | :--- |
+| Subscriptions | 4% payers/MAU × $13 ARPPU × 85% | **~$440** |
+| Venue placements | 3 partners × ~$75 realized | **~$225** |
+| Event packages | 1.5/mo × $200 | **~$300** |
+| Event tickets | 1.5 nights × 100 tickets × $15 × ~50% margin | **~$1,125** |
+| **Total** | | **~$2,100/mo ≈ $2.10/active/mo** |
+
+12-month blended revenue per active seat ≈ **$25**. Against blended CAC of
+$12–20 → **1.3–2× at base case**; the 3× gate is reached via the bull levers
+(higher payer mix from trials, 2 event nights/mo, event sell-through, venue
+kicker) — and is *unreachable* on paid acquisition at any modeled level.
+That is the quantitative case for density-first, ads-last.
+
+### 10.4. Standing rules
+
+1. LTV and CAC tracked continuously in dashboards (§14), not spreadsheets.
+2. Paid spend unlocks per zone only at LTV ≥ 3× paid CAC and payback < 6 mo.
+3. Price experiments run per-zone, never globally, so cohorts stay
+   comparable.
+4. Payers/MAU is the conversion metric of record; installs-based rates are
+   reported alongside, never substituted.
+
+---
+
+## 11. Cash Flow: Phased Plan
 
 ### Phase 1: Seed & Validate (Months 1–6)
+- Density in the pilot zone; **no heavy paid ads.**
+- First revenue: founder-priced subs, event tickets from launch nights, 2–3
+  venues converting from free pilot to paid.
+- Cash flow negative by design; priority is retention + the activation
+  metric.
 
-- **Focus:** Build density in the pilot city. **Do not spend heavily on paid
-  ads.**
-- **Revenue Goal:** First dollars from founder-priced subscriptions and 2–3
-  pilot venue partners converting from free to paid placement.
-- **Cash Flow:** Negative by design — investing to prove the model. Priority
-  is retention, not revenue.
-- **Marketing Budget:** Minimal; organic growth, referrals, Founder program.
+### Phase 2: The Density Engine (Months 7–12)
+- Monetize the active core: trials on, premium tier live, **2–4 paying
+  venues + 1–2 event packages/month per zone**, recurring In Range Nights.
+- Aim for **break-even**: MRR + MBR + ticket margin covers core operating
+  costs (infra is trivially cheap; the costs are people and incentives).
+- Reinvest 20–30% of revenue into in-zone paid ads **only if** the §10 gate
+  passes. Channel rule: 70% proven / 20% new / 10% experimental.
 
-### Phase 2: The "Density" Engine (Months 7–12)
-
-- **Focus:** Monetize the active core.
-- **Revenue Goal:** 3–5% premium conversion on the growing base; **10–15
-  paying venue partners.**
-- **Cash Flow:** Aim for **break-even** — MRR (subs) + MBR (venues) covers
-  core operating costs (Supabase/infra is currently trivially cheap; the
-  real costs are people and incentives).
-- **Marketing Budget:** Reinvest 20–30% of revenue into targeted paid ads in
-  the pilot city. **Channel rule: 70% best performers / 20% new channels /
-  10% experiments.**
-
-### Phase 3: The Flywheel & Expansion (Year 2+)
-
-- **Focus:** Replicate the proven playbook city by city.
-- **Revenue Goal:** LTV:CAC healthy (>3:1) with a real margin.
-- **Cash Flow:** **Strongly positive** — existing cities fund new-city
-  launches.
-- **Marketing Budget:** Scales to 30–50% of revenue once users can be
-  acquired profitably at scale.
+### Phase 3: The Flywheel (Year 2+)
+- Replicate zone playbook; existing zones fund new-zone launches.
+- Published density stats + couple-counts from In Range Nights are the
+  expansion marketing.
+- Marketing scales to 30–50% of revenue once users are acquired profitably.
 
 ---
 
-## 11. Financial Takeaways
+## 12. Financial Takeaways
 
-1. **Subscriptions are the base, not the engine.** Premium users provide a
-   foundation, but growth capital comes from **local business partnerships**
-   — web-billed, store-fee-free, and sold on density we already built.
-2. **The first 1,000 users are an investment, not a profit center.** Their
-   LTV will be low; they are the proof needed to sell venues.
-3. **Density before paid marketing.** Buying users into an empty app is
-   paying for churn — the §9.2 math shows exactly why.
-4. **The math must work, per city.** LTV ≥ 3× CAC and payback < 6 months, or
-   the city doesn't get paid spend.
+1. **Subscriptions are the base, not the engine** — and at real dating-app
+   lifetimes (2–5 months) they're an even smaller base than the original
+   model assumed. Events + venues are the engine, and they're store-fee-free.
+2. **The 3× gate is unreachable on paid acquisition** (industry runs
+   1.0–1.5×). Organic density loops aren't the cheap option; they're the
+   only option.
+3. **Attribution is the venue-retention product.** Verified walk-ins is the
+   one thing we can sell that Yelp/Google/trivia can't.
+4. **Success = churn in dating** (~30% quit because it worked). Route
+   graduated couples into events and referrals instead of losing them.
 5. **Never blend paid and organic CAC** — it hides a broken channel behind
    free growth.
 
 ---
 
-## 12. Conclusion
+## 13. Conclusion
 
 The "magic" for In Range won't come from a million downloads spread across
 the globe. It will come from **500 people in one neighborhood having a
-serendipitous experience** — and from the ten venues those people already
-visit paying for placement in front of them.
+serendipitous experience** — at venues that pay for the foot traffic, on
+nights we ticket, measured by crossings per user per week.
 
-Hyper-local density, single-player value, aggressive supply-side seeding,
-and venue revenue that funds it all: once a city is won, the playbook —
-growth AND unit economics — is replicated. Patience, and a relentless focus
-on one small area at a time.
+Happn proved crossed-paths demand and then showed every way to squander it.
+Thursday and Breeze proved the money is in the meeting. Fizz and Tinder
+proved bounded-community saturation works. This plan is the synthesis:
+hyper-local density, events as product, verified attribution as the B2B
+moat, and unit economics that only work the way we're already building.
 
 ---
 
-## 13. Automation hooks (build-from-this-doc map)
-
-What already exists, and what each plan item will need when we generate the
-code. Keep this table current — it's the contract between marketing,
-monetization, and engineering.
+## 14. Automation hooks (build-from-this-doc map)
 
 | Plan item | Status | Where it lives / what to build |
 | :--- | :--- | :--- |
-| Founder waitlist + "#N in line" | ✅ LIVE | `waitlist` table + `waitlist-join` Edge fn (0054); landing page at `web/index.html` |
-| Campaign attribution | ✅ partial | `waitlist.source` (40 chars) — per-neighborhood/campaign codes (e.g. `atx-eastside-first500`), no new columns |
-| Per-city unlock | ❌ | `city` on waitlist (campaign code or optional field), unlock flag, signup-order gating at onboarding |
-| First-500 challenge (7-day active) | ❌ | activity-day counter derived from existing sighting uploads (no new tracking) + reward flag |
-| Founder badge | ❌ | profile flag + client badge UI; grant by joining `waitlist.email` to `auth.users.email` at signup |
-| **Subscription entitlements** | ❌ UNBLOCKED | model decided (§8): free/premium tiers + founder price-lock; store billing (RevenueCat or raw StoreKit/Play Billing) + `entitlements` table + RLS-gated feature checks. Replaces the "simulated monetization" stub |
-| **Founder pricing lock** | ❌ UNBLOCKED | per-user locked price honored for life (§8.1); needs store promo-pricing strategy per platform |
-| **Promoted Places (venue product)** | ❌ | venue account + placement flag + web billing (Stripe, outside stores) + a self-serve venue dashboard with their own foot-traffic aggregates |
-| **Boosts (IAP)** | ❌ | consumable IAP + time-boxed visibility multiplier; abuse-capped |
-| **Aggregate insights (B2B)** | ❌ GUARDED | only k-anonymous coarse buckets per §8.1; privacy-policy disclosure BEFORE first sale |
-| Invite group chat / share cards | ❌ | client share-sheet flow + QR deep link; share cards from aggregates only |
-| Explorer badges / streaks | ❌ | streaks from days-with-uploaded-sightings; NO new location retention (§4 guardrail) |
-| Week in Review | ❌ | server rollup over encounter aggregates before the 24 h GPS purge closes |
-| Heat maps | ❌ | coarse H3/geohash bucket counts with k-anonymity floor; never individual points |
-| Ambassador uptime ("over-supply") | ❌ | beacon-uptime metric for opted-in ambassador accounts (hourly upload presence 5–10 PM); payout report |
-| **LTV/CAC + density dashboards (§6, §9)** | ❌ | SQL views: blended vs paid CAC (needs spend log table), conversion %, churn, MRR/MBR, density ratio, pings/active-user; internal dashboard, not the app |
+| Founder waitlist + "#N in line" | ✅ LIVE | `waitlist` table + `waitlist-join` Edge fn (0054); `web/index.html` |
+| **Waitlist referral ladder** | ❌ **NEXT** | referral code per signup, position jump on referred joins, "people behind you" count, share button; §3.3 mechanics (Robinhood) |
+| **Ratio-balanced admission** | ❌ | 2–3 optional signup fields (zone, age band, gender/orientation) + cohort-admit tooling; priority-lane jumps (Superhuman) |
+| Campaign attribution | ✅ partial | `waitlist.source` codes (e.g. `atx-eastside-first500`) |
+| Per-zone unlock | ❌ | zone on waitlist, unlock flag, signup-order + ratio gating at onboarding |
+| First-500 challenge (7-day active) | ❌ | activity-day counter from existing sighting uploads + reward flag |
+| Founder badge | ❌ | profile flag + badge UI; grant via waitlist-email join at signup |
+| **Subscription entitlements** | ❌ UNBLOCKED | tiers $9.99/$19.99+/annual + **7+ day trial** + founder price-lock; RevenueCat or raw store billing; `entitlements` table + RLS feature gates; winback + billing-failure recovery flows |
+| **Promoted Places (venue product)** | ❌ | venue account + placement flag + Stripe web billing + self-serve dashboard whose centerpiece is **verified walk-ins attribution** |
+| **In Range Nights (events)** | ❌ **NEW** | event entity + ticketing (web, Stripe) + app-gated door check (BLE presence = ticket validation) + post-event match unlock |
+| **App-gated entry** | ❌ NEW | door-mode screen: show waitlist position / installed state; event crossings tagged to the event |
+| Boosts (IAP) | ❌ | consumable IAP + time-boxed visibility multiplier; abuse-capped |
+| Aggregate insights (B2B) | ❌ GUARDED | k-anonymous coarse buckets only per §9.4; privacy-policy disclosure BEFORE first sale |
+| Invite group chat / share cards | ❌ | share-sheet flow + QR deep link; cards from aggregates only |
+| Explorer badges / streaks | ❌ | streaks from days-with-uploaded-sightings; NO new location retention (§5 guardrail) |
+| Week in Review | ❌ | server rollup over encounter aggregates inside the 24 h GPS purge window |
+| Heat maps | ❌ | coarse H3/geohash buckets with k-anonymity floor |
+| Ambassador uptime + payouts | ❌ | beacon-uptime metric for opted-in ambassador accounts (5–10 pm window) + scripted-action counters (downloads at table, event check-ins) → payout report |
+| **Crossing-density activation metric** | ❌ NEW | per-zone weekly median verified-crossings-per-active view — THE zone-gate metric (§7) |
+| LTV/CAC + density dashboards | ❌ | SQL views: blended vs paid CAC (needs spend-log table), payers/MAU, churn, MRR/MBR/ticket margin, density ratio, crossings/active |
 
-Constraints that bind all of the above: consent-gated features only,
+Constraints binding all of the above: consent-gated features only,
 `enforce_consent` flip pending, and nothing may widen data retention beyond
-what `docs/SAFETY_RUNBOOK.md` and the privacy pages promise.
+`docs/SAFETY_RUNBOOK.md` and the privacy pages.
+
+---
+
+## 15. Sources (research 2026-07-24)
+
+Competitors & category: [Happn — Wikipedia](https://en.wikipedia.org/wiki/Happn) · [Happn acquired by Hello Group — GDI](https://www.globaldatinginsights.com/featured/happn-acquired-by-hello-group-as-ceo-calls-for-industry-reinvention/) · [Thursday shutters app for events — GDI](https://www.globaldatinginsights.com/featured/thursday-shutters-dating-app-to-shift-focus-on-real-world-events/) · [Thursday $50M value — GDI](https://www.globaldatinginsights.com/featured/thursday-acquires-thursday-com-domain-hits-50m-in-value/) · [Thursday Dubai launch — GDI](https://www.globaldatinginsights.com/featured/thursday-expands-to-mena-with-dubai-launch-and-future-plans/) · [Breeze US launch — GDI](https://www.globaldatinginsights.com/news/taking-online-dates-offline-dating-app-breeze-launches-in-the-u-s-starting-with-nyc/) · [Beyond matching revenue — Dating Industry Insights](https://www.datingindustryinsights.com/resources/singles-economy/beyond-matching-dating-platforms-capture-revenue)
+
+Subscription & CAC benchmarks: [RevenueCat State of Subscription Apps](https://www.revenuecat.com/state-of-subscription-apps/) ([2025 ed.](https://www.revenuecat.com/state-of-subscription-apps-2025/)) · [Match Group Q1 2026 — StockTitan](https://www.stocktitan.net/news/MTCH/match-group-announces-first-quarter-zyqyf28c5xyj.html) · [Bumble Q3 2025 — StockTitan](https://www.stocktitan.net/news/BMBL/bumble-inc-announces-third-quarter-2025-eh5p703z3p0q.html) · [Tinder statistics — DemandSage](https://www.demandsage.com/tinder-statistics/) · [Dating unit economics — DII](https://www.datingindustryinsights.com/resources/market-insights/dating-platform-unit-economics-analysis) · [Dating churn benchmarks — RetentionCheck](https://retentioncheck.com/churn-benchmarks/dating-apps)
+
+Launch playbooks: [Tinder's first 1000 — First 1000](https://read.first1000.co/p/tinder) · [Robinhood's waitlist — First 1000](https://read.first1000.co/p/robinhood) · [Fizz at 80 campuses — TechCrunch](https://techcrunch.com/2023/08/10/insiders-bet-more-on-fizz-a-social-network-that-has-now-bubbled-up-at-80-college-campuses/) · [Fizz Stanford launch — TechCrunch](https://techcrunch.com/2022/10/04/fizz-app-college-stanford-social/) · [Thursday organic launch — Social Chain](https://www.socialchain.com/social-minds/insights/when-everyone-goes-left-go-right-how-thursday-championed-organic-reach-to-launch-a-brand/) · [Superhuman PMF engine — First Round Review](https://review.firstround.com/how-superhuman-built-an-engine-to-find-product-market-fit/) · [Clubhouse — Wikipedia](https://en.wikipedia.org/wiki/Clubhouse_(app)) · [Campus ambassador pay — Campus Commandos](https://campuscommandos.com/how-much-money-can-you-make-as-a-college-brand-rep/)
+
+Venue economics: [Yelp 2024 results — Yelp IR](https://www.yelp-ir.com/news/press-releases/news-release-details/2025/Growth-in-Services-Drove-Yelps-2024-Results/) · [Yelp ads cost — iCatch](https://www.icatchgroup.com/how-much-do-yelp-ads-cost/) · [Google Ads cost — WordStream](https://www.wordstream.com/blog/google-ads-cost) · [Groupon — Wikipedia](https://en.wikipedia.org/wiki/Groupon) · [Foursquare City Guide — Wikipedia](https://en.wikipedia.org/wiki/Foursquare_City_Guide) · [Trivia night ROI — Icebreakers](https://icebreakersapp.com/blog/trivia-night-roi-bar-owners-2026) · [Restaurant marketing budgets — Back of House](https://backofhouse.io/resources/whats-an-average-restaurant-marketing-budget) · [SMB advertiser churn — PR Newswire/vcita](https://www.prnewswire.com/news-releases/new-vcita-report-warns-4-in-10-smb-advertisers-leave-their-media-partners-within-a-year-302581956.html)
+
+*Caveats: Business of Apps & AppsFlyer pages were bot-blocked; their figures
+arrived via secondary citations (±30% tolerance). Happn standalone revenue
+and "3M paying" are third-party estimates/company claims. Verify any number
+before use in investor materials.*
