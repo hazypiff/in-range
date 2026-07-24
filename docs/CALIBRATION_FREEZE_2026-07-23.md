@@ -18,6 +18,26 @@ mixed — this round simply starts here instead.
 2026-07-23 (merge `106612a`); one tag on one history pins everything.
 Both remotes (`inrangeai/in-range`, `hazypiff/in-range`) carry it.
 
+**Caveat for the pre-unification freezes (`07-18`, `07-18b`).** Those predate
+the merge, when two trees existed — and each remote had tagged its *own* tree,
+so the same tag name resolved to different commits depending on which repo you
+cloned. The two sides differ by ~73 files: `inrangeai` tagged the **app** tree
+(`extract_walk.py`, `walk_capture.sh`), `hazypiff` tagged the **learn/**
+tree (GNB trainer, registry, self-learning loop). Neither was wrong; they were
+answering different questions.
+
+Aligned 2026-07-24 to `inrangeai`'s targets on both remotes, so a clone of
+either now reproduces the same code. `hazypiff`'s previous targets are recorded
+here so the change is reversible:
+
+| Tag | Now (both remotes) | `hazypiff` before 2026-07-24 |
+|---|---|---|
+| `calib-freeze-2026-07-18` | `225b661` | `91e954a` |
+| `calib-freeze-2026-07-18b` | `a2de130` | `5f8497d` |
+
+Low stakes — both rounds are superseded and produced zero trainable walks. From
+`07-23` onward there is one history, so this cannot recur.
+
 ## Frozen components
 
 | Component | Where | Version |
