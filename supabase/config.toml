@@ -64,3 +64,8 @@ verify_jwt = false
 [functions.maintenance]
 # Self-authenticates via requireServiceRole(); see miles-correlate note.
 verify_jwt = false
+
+[functions.waitlist-join]
+# Public early-access signup from inrange.life — visitors have no JWT.
+# Abuse control is the per-IP limit inside the function (0054), not the gateway.
+verify_jwt = false
