@@ -32,16 +32,39 @@ Usage:
   --offset-a/--offset-b = host_minus_device_s from walk_capture.sh meta.json
   (seconds ADDED to that phone's log timestamps to align them to the host
   clock the station times were noted on).
+
+iPHONE SIDE. Either input may instead be an iPhone's in_range_local.db (there
+is no adb for iOS; pull it with `xcrun devicectl device copy from` — see
+scripts/ios_station_check.sh). Mixed pairs are the normal case for S22<->iPhone:
+
+  python3 scripts/extract_walk.py s22.threadtime.log.gz iphone.db \
+      --stations 10ft@10:00:00+90 25ft@10:05:00+90 \
+      --pair s22-iphone15p --offset-a 1.2 --json walk.json
+
+Three things differ on that side, all handled here:
+  * rssi_log is BLE-only, so venue V and GPS delta are None for those stations.
+    train.py:73-74 SKIPS a None feature rather than imputing it, so the walk
+    still trains on its BLE features.
+  * at_ms is absolute epoch, so there is no midnight unwrapping and no clock
+    offset needed — but the walk DATE must be established. --ios-date sets it;
+    otherwise it is inferred by station-window coverage.
+  * rssi_log is append-only across sessions, so a soak or desk test from
+    another day sits in the same table. Windows exclude it; --ios-corr also
+    filters by peer. IMPORTANT: the iPhone must be foregrounded once after the
+    walk before pulling, or buffered samples never flush and the table is empty.
 """
 import argparse
 import csv
+import datetime as dt
 import gzip
 import hashlib
 import json
 import math
 import os
 import re
+import sqlite3
 import statistics as st
+import time
 
 DAY = 86400
 TRIM_S = 20        # drop the first N s of each station (walking-into-position)
@@ -118,6 +141,137 @@ def parse_log(path, offset=0.0):
     return {"adverts": adverts,
             "wifi": sorted(scans.values(), key=lambda s: s["t"]),
             "gps": gps}
+
+
+# --- iOS side -------------------------------------------------------------
+# There is no adb for iOS. The iPhone persists its own received adverts to
+# rssi_log in Documents/in_range_local.db (local_db.dart:38-46), pulled with
+# `xcrun devicectl device copy from` — see scripts/ios_station_check.sh.
+#
+# rssi_log carries BLE only: no WifiAp, no GpsFix. An iPhone side therefore
+# produces empty wifi/gps lists, so venue_score() returns None and gps_delta_m
+# is None for those stations. That is correct and safe: learn/train.py:73-74
+# SKIPS a None feature rather than imputing it, so the walk trains on its BLE
+# features instead of being poisoned by fabricated zeros.
+IOS_EXTS = (".db", ".sqlite", ".sqlite3")
+
+
+def is_ios_db(path):
+    return str(path).lower().endswith(IOS_EXTS)
+
+
+def local_midnight_epoch(date_str):
+    """Epoch seconds of local midnight on YYYY-MM-DD (host timezone, which is
+    the clock the station times were noted on)."""
+    y, m, d = (int(x) for x in date_str.split("-"))
+    return time.mktime(dt.date(y, m, d).timetuple())
+
+
+def _local_date(epoch_s):
+    return dt.datetime.fromtimestamp(epoch_s).strftime("%Y-%m-%d")
+
+
+def ios_rows(path, corr_prefix=None):
+    """Raw rssi_log rows as [(at_ms, correlation_id, rssi, power)]."""
+    con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        rows = con.execute(
+            "SELECT at_ms, correlation_id, rssi, power FROM rssi_log "
+            "ORDER BY at_ms ASC").fetchall()
+    finally:
+        con.close()
+    if corr_prefix:
+        # The Android log truncates to 8 hex chars (beacon_service.dart:973)
+        # while rssi_log stores the full id, so this is a PREFIX match.
+        rows = [r for r in rows if str(r[1]).startswith(corr_prefix)]
+    return rows
+
+
+def ios_dates(rows):
+    """{local_date: n_rows} — used to pick the walk day and to show the
+    operator what else is sitting in an append-only table."""
+    out = {}
+    for (at_ms, _c, _r, _p) in rows:
+        d = _local_date(at_ms / 1000.0)
+        out[d] = out.get(d, 0) + 1
+    return out
+
+
+def ios_best_date(rows, stations, offset=0.0):
+    """Pick the local date whose rows best fill the station windows.
+
+    NOT the densest day and NOT the latest row: rssi_log is append-only, and an
+    overnight soak routinely holds far more rows than a 90 s-per-station walk
+    (the S22 logged ~100 samples/30 s against a locked iPhone). Both of those
+    heuristics therefore anchor to the soak and every station reports SILENT.
+    Scoring candidate dates by in-window coverage optimises the only thing that
+    matters, and degrades to an explicit warning when nothing fits.
+    """
+    best, best_n = None, -1
+    for date in sorted(ios_dates(rows)):
+        base = local_midnight_epoch(date)
+        n = 0
+        for (at_ms, _c, _r, _p) in rows:
+            t = at_ms / 1000.0 - base + offset
+            if any(lo <= t < hi for (_l, lo, hi) in stations):
+                n += 1
+        if n > best_n:
+            best, best_n = date, n
+    return best, best_n
+
+
+def parse_ios_db(path, offset=0.0, date=None, corr_prefix=None, stations=None):
+    """Same shape as parse_log(), from an iPhone's rssi_log.
+
+    at_ms is ABSOLUTE epoch, so unlike logcat there is nothing to unwrap and
+    no year to guess: times are converted directly to seconds-since-local-
+    midnight of `date`. That also makes this immune to the stale-row hazard —
+    rssi_log is append-only across sessions (only clearRssiLog empties it), so
+    a prior soak's rows sit in the same table and an unwrapper seeded on "the
+    first row in the file" would anchor the whole walk to the wrong day.
+    """
+    rows = ios_rows(path, corr_prefix)
+    if not rows:
+        return {"adverts": [], "wifi": [], "gps": [], "ios": {
+            "date": date, "n_total": 0, "n_day": 0, "dates": {}}}
+    dates = ios_dates(rows)
+    inferred_n = None
+    if date is None:
+        if stations:
+            date, inferred_n = ios_best_date(rows, stations, offset)
+        else:
+            date = max(dates, key=lambda d: (dates[d], d))
+    base = local_midnight_epoch(date)
+    adverts = []
+    for (at_ms, corr, rssi, power) in rows:
+        t = at_ms / 1000.0 - base + offset
+        adverts.append((t, str(corr)[:8], int(rssi),
+                        "H" if str(power).upper().startswith("H") else "M"))
+    return {"adverts": adverts, "wifi": [], "gps": [], "ios": {
+        "date": date, "n_total": len(rows), "n_day": dates.get(date, 0),
+        "dates": dates, "inferred_in_window": inferred_n}}
+
+
+def ios_digest(rows, side):
+    """Content hash of the IN-WINDOW SAMPLES — not the file, and not the whole
+    table.
+
+    An Android .gz is immutable once pulled. An iPhone .db is a LIVING file:
+    rssi_log keeps appending after the walk, so hashing the file (or even every
+    row in it) mints a fresh walk_id on every re-pull. Two extractions of ONE
+    walk would then present as two walks and satisfy the >=3-walk promotion
+    gate with duplicates of itself — precisely what walk_manifest.v1 exists to
+    prevent. Hashing only the samples that landed inside the station windows
+    makes identity a property of the walk, not of when the DB was copied.
+    """
+    h = hashlib.sha256()
+    for r in rows:
+        p = r[side]
+        for (t, rssi) in p["raw"]["adverts_high"]:
+            h.update(f"H|{t}|{rssi}\n".encode())
+        for (t, rssi) in p["raw"]["adverts_med"]:
+            h.update(f"M|{t}|{rssi}\n".encode())
+    return h.hexdigest()
 
 
 STATION_RE = re.compile(
@@ -269,12 +423,17 @@ def file_sha256(path):
     return h.hexdigest()
 
 
-def build_manifest(log_a, log_b, pair, capture_meta_path=None, freeze=None):
+def build_manifest(log_a, log_b, pair, capture_meta_path=None, freeze=None,
+                   digests=None):
     """walk_manifest.v1 — immutable identity for this walk. walk_id is a
     content hash of the raw archives, so it survives renames and cannot
     collide across walks; pair/devices are captured HERE so training can
-    VERIFY identity instead of assigning it via CLI."""
-    digests = {os.path.basename(p): file_sha256(p) for p in (log_a, log_b)}
+    VERIFY identity instead of assigning it via CLI.
+
+    `digests` overrides the per-input hash for sources where the FILE is not
+    a stable identity — see ios_digest()."""
+    if digests is None:
+        digests = {os.path.basename(p): file_sha256(p) for p in (log_a, log_b)}
     walk_id = hashlib.sha256(
         "".join(sorted(digests.values())).encode()).hexdigest()[:16]
     devices = None
@@ -312,8 +471,17 @@ def csv_row(r):
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("logA", help="phone A logcat (threadtime, .gz ok)")
-    ap.add_argument("logB", help="phone B logcat (threadtime, .gz ok)")
+    ap.add_argument("logA", help="phone A: logcat (threadtime, .gz ok) or "
+                    "iPhone in_range_local.db")
+    ap.add_argument("logB", help="phone B: logcat (threadtime, .gz ok) or "
+                    "iPhone in_range_local.db")
+    ap.add_argument("--ios-date", help="YYYY-MM-DD (host-local) the walk ran "
+                    "on, for .db inputs. Default: the densest day in rssi_log. "
+                    "rssi_log is append-only across sessions, so set this "
+                    "explicitly when the DB also holds soak/desk-test rows")
+    ap.add_argument("--ios-corr", help="only count rssi_log rows whose "
+                    "correlation_id starts with this prefix (the peer being "
+                    "measured) — use when the DB saw more than one peer")
     ap.add_argument("--stations", nargs="+",
                     help="LABEL@HH:MM:SS+DUR or LABEL@HH:MM:SS-HH:MM:SS per station")
     ap.add_argument("--stations-file", help="JSON station list (see module docstring)")
@@ -346,14 +514,52 @@ def main():
     stations = (load_stations_file(args.stations_file) if args.stations_file
                 else parse_stations(args.stations))
 
-    dataA = parse_log(args.logA, args.offset_a)
-    dataB = parse_log(args.logB, args.offset_b)
-    print(f"Phone A: {len(dataA['adverts'])} adverts, {len(dataA['wifi'])} wifi scans, "
-          f"{len(dataA['gps'])} gps fixes (offset {args.offset_a:+.1f}s)")
-    print(f"Phone B: {len(dataB['adverts'])} adverts, {len(dataB['wifi'])} wifi scans, "
-          f"{len(dataB['gps'])} gps fixes (offset {args.offset_b:+.1f}s)")
+    def load(path, offset):
+        if is_ios_db(path):
+            return parse_ios_db(path, offset, args.ios_date, args.ios_corr,
+                                stations)
+        return parse_log(path, offset)
+
+    dataA = load(args.logA, args.offset_a)
+    dataB = load(args.logB, args.offset_b)
+    for side, path, data, off in (("A", args.logA, dataA, args.offset_a),
+                                  ("B", args.logB, dataB, args.offset_b)):
+        print(f"Phone {side}: {len(data['adverts'])} adverts, "
+              f"{len(data['wifi'])} wifi scans, {len(data['gps'])} gps fixes "
+              f"(offset {off:+.1f}s)")
+        if "ios" not in data:
+            continue
+        io = data["ios"]
+        how = ("" if args.ios_date else
+               f" (inferred — {io['inferred_in_window']} rows land in station "
+               "windows)" if io["inferred_in_window"] is not None
+               else " (inferred — densest day)")
+        print(f"          iOS rssi_log: {io['n_total']} rows total, "
+              f"{io['n_day']} on {io['date']}{how}")
+        if len(io["dates"]) > 1:
+            other = ", ".join(f"{d}:{n}" for d, n in sorted(io["dates"].items())
+                              if d != io["date"])
+            print(f"          other days present (ignored): {other}")
+        print("          NOTE: rssi_log is BLE-only — no WiFi/GPS from this "
+              "phone, so venue V and GPS Δ are unavailable for these stations")
 
     rows = extract(dataA, dataB, stations, args.trim, args.max_ap_age)
+
+    # A wrong --ios-date is the one failure that looks like a successful run:
+    # every station reports SILENT and the walk quietly becomes untrainable.
+    for side, path, data in (("A", args.logA, dataA), ("B", args.logB, dataB)):
+        if not is_ios_db(path) or not data["adverts"]:
+            continue
+        in_win = sum(r[side.lower()]["high_n"] + r[side.lower()]["med_n"]
+                     for r in rows)
+        if in_win == 0:
+            print(f"\nWARNING: phone {side} has {len(data['adverts'])} rssi_log "
+                  f"samples on {data['ios']['date']} but ZERO fell inside any "
+                  "station window.")
+            print("  Almost always a date/clock mismatch, not a silent walk. "
+                  "Check --ios-date against the day the stations were timed, "
+                  f"and that {data['ios']['date']} is the right day "
+                  f"(rows by day: {data['ios']['dates']}).")
 
     print(f"\n{'station':>14} | {'A high med/IQR':>18} {'rate':>5} {'medN':>4} | "
           f"{'B high med':>10} | {'venue V':>8} {'scans':>5} | {'GPS Δm':>7} {'fixes':>5}")
@@ -377,8 +583,13 @@ def main():
                 "offset_a": args.offset_a, "offset_b": args.offset_b,
                 "trim_s": args.trim, "max_ap_age_s": args.max_ap_age,
                 "gate_dbm": GATE, "trainable": args.trainable == "yes",
-                "manifest": build_manifest(args.logA, args.logB, args.pair,
-                                           args.capture_meta, args.freeze),
+                "manifest": build_manifest(
+                    args.logA, args.logB, args.pair, args.capture_meta,
+                    args.freeze,
+                    digests={
+                        os.path.basename(p): (ios_digest(rows, side)
+                                              if is_ios_db(p) else file_sha256(p))
+                        for (p, side) in ((args.logA, "a"), (args.logB, "b"))}),
                 "stations": [{"label": l, "start": hms(a), "end": hms(b)}
                              for (l, a, b) in stations]}
         with open(args.json, "w") as f:

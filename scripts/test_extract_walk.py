@@ -164,5 +164,161 @@ class ExtractionTest(unittest.TestCase):
         self.assertEqual(len(raw["gps_fixes"]), 1)
 
 
+def write_ios_db(rows):
+    """rows: [(at_ms, correlation_id, rssi, power)] -> temp sqlite path."""
+    import sqlite3
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE rssi_log (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "at_ms INTEGER NOT NULL, correlation_id TEXT NOT NULL, "
+                "rssi INTEGER NOT NULL, power TEXT NOT NULL)")
+    con.executemany("INSERT INTO rssi_log (at_ms, correlation_id, rssi, power) "
+                    "VALUES (?,?,?,?)", rows)
+    con.commit()
+    con.close()
+    return path
+
+
+def at(date_str, hhmmss, ms=0):
+    """Local wall-clock on `date_str` -> epoch ms, matching the extractor's
+    host-local convention."""
+    return int((ew.local_midnight_epoch(date_str) + ew.ts(hhmmss)) * 1000) + ms
+
+
+class IosDbTest(unittest.TestCase):
+    DATE = "2026-07-25"
+
+    def test_epoch_maps_to_seconds_since_local_midnight(self):
+        p = write_ios_db([(at(self.DATE, "10:00:30"), "abcdef0123", -70, "H")])
+        self.addCleanup(os.remove, p)
+        d = ew.parse_ios_db(p, date=self.DATE)
+        self.assertEqual(len(d["adverts"]), 1)
+        t, corr, rssi, pw = d["adverts"][0]
+        self.assertAlmostEqual(t, ew.ts("10:00:30"), places=3)
+        self.assertEqual((corr, rssi, pw), ("abcdef01", -70, "H"))
+
+    def test_ble_only_no_wifi_or_gps(self):
+        p = write_ios_db([(at(self.DATE, "10:00:30"), "aa", -70, "H")])
+        self.addCleanup(os.remove, p)
+        d = ew.parse_ios_db(p, date=self.DATE)
+        self.assertEqual(d["wifi"], [])
+        self.assertEqual(d["gps"], [])
+
+    def test_venue_and_gps_are_none_not_zero(self):
+        """A None feature is SKIPPED by train.py; a 0.0 would be a lie."""
+        p = write_ios_db([(at(self.DATE, "10:00:30"), "aa", -70, "H")])
+        self.addCleanup(os.remove, p)
+        ios = ew.parse_ios_db(p, date=self.DATE)
+        rows = ew.extract(ios, ios, ew.parse_stations(["10ft@10:00:00+60"]), trim=0)
+        self.assertIsNone(rows[0]["venue"])
+        self.assertIsNone(rows[0]["gps_delta_m"])
+
+    def test_stale_rows_from_another_day_are_excluded(self):
+        """rssi_log is append-only across sessions — an overnight soak must not
+        drag the walk's anchor onto the wrong day."""
+        p = write_ios_db(
+            [(at("2026-07-24", "22:00:00", i), "aa", -95, "H") for i in range(50)]
+            + [(at(self.DATE, "10:00:30", i), "aa", -70, "H") for i in range(5)])
+        self.addCleanup(os.remove, p)
+        d = ew.parse_ios_db(p, date=self.DATE)
+        rows = ew.extract(d, d, ew.parse_stations(["10ft@10:00:00+60"]), trim=0)
+        # Only the 5 walk-day samples land in the window; the 50 soak rows sit
+        # ~12 h earlier and are excluded by the window, not by luck.
+        self.assertEqual(rows[0]["a"]["high_n"], 5)
+        self.assertEqual(rows[0]["a"]["high_med"], -70)
+
+    def test_date_inference_beats_a_bigger_soak_on_another_day(self):
+        """Regression: densest-day inference picked the SOAK, not the walk.
+
+        A 90 s-per-station walk is easily out-numbered by an overnight soak, so
+        row count is the wrong signal — every station then reports SILENT and
+        the walk looks like a hardware failure. Score by in-window coverage.
+        """
+        stations = ew.parse_stations(["10ft@10:00:00+90"])
+        walk = [(at(self.DATE, "10:00:%02d" % (i % 60), i), "aa", -60, "H")
+                for i in range(60)]
+        soak = [(at("2026-07-24", "22:00:00", i * 1000), "aa", -93, "H")
+                for i in range(500)]
+        p = write_ios_db(walk + soak)
+        self.addCleanup(os.remove, p)
+        self.assertEqual(len(soak), 500)          # soak really is the bigger day
+        d = ew.parse_ios_db(p, stations=stations)
+        self.assertEqual(d["ios"]["date"], self.DATE)
+        rows = ew.extract(d, d, stations, trim=0)
+        self.assertEqual(rows[0]["a"]["high_n"], 60)
+
+    def test_date_inference_picks_densest_day_not_latest_row(self):
+        p = write_ios_db(
+            [(at(self.DATE, "10:00:30", i), "aa", -70, "H") for i in range(20)]
+            + [(at("2026-07-26", "09:00:00", i), "aa", -50, "H") for i in range(3)])
+        self.addCleanup(os.remove, p)
+        self.assertEqual(ew.parse_ios_db(p)["ios"]["date"], self.DATE)
+
+    def test_corr_prefix_filters_other_peers(self):
+        p = write_ios_db([(at(self.DATE, "10:00:30"), "aaaaaaaa11", -70, "H"),
+                          (at(self.DATE, "10:00:31"), "bbbbbbbb22", -60, "H")])
+        self.addCleanup(os.remove, p)
+        d = ew.parse_ios_db(p, date=self.DATE, corr_prefix="aaaaaaaa")
+        self.assertEqual([a[2] for a in d["adverts"]], [-70])
+
+    def test_power_medium_preserved(self):
+        p = write_ios_db([(at(self.DATE, "10:00:30"), "aa", -70, "M")])
+        self.addCleanup(os.remove, p)
+        d = ew.parse_ios_db(p, date=self.DATE)
+        self.assertEqual(d["adverts"][0][3], "M")
+
+    def test_offset_shifts_times(self):
+        p = write_ios_db([(at(self.DATE, "10:00:30"), "aa", -70, "H")])
+        self.addCleanup(os.remove, p)
+        d = ew.parse_ios_db(p, offset=2.5, date=self.DATE)
+        self.assertAlmostEqual(d["adverts"][0][0], ew.ts("10:00:30") + 2.5, places=3)
+
+    def test_digest_survives_rows_appended_after_the_walk(self):
+        """The re-pull hazard: a growing .db must not mint a new walk_id, or
+        one walk ingests twice and fakes the >=3-walk promotion gate."""
+        walk = [(at(self.DATE, "10:00:30", i), "aa", -70, "H") for i in range(5)]
+        stations = ew.parse_stations(["10ft@10:00:00+60"])
+
+        p1 = write_ios_db(walk)
+        self.addCleanup(os.remove, p1)
+        d1 = ew.parse_ios_db(p1, date=self.DATE)
+        r1 = ew.extract(d1, d1, stations, trim=0)
+
+        # same walk, DB re-pulled later with a day of extra rows in it
+        p2 = write_ios_db(
+            walk + [(at(self.DATE, "18:00:00", i), "aa", -88, "H") for i in range(400)])
+        self.addCleanup(os.remove, p2)
+        d2 = ew.parse_ios_db(p2, date=self.DATE)
+        r2 = ew.extract(d2, d2, stations, trim=0)
+
+        self.assertEqual(ew.ios_digest(r1, "a"), ew.ios_digest(r2, "a"))
+
+    def test_digest_changes_when_the_walk_data_changes(self):
+        stations = ew.parse_stations(["10ft@10:00:00+60"])
+        a = write_ios_db([(at(self.DATE, "10:00:30"), "aa", -70, "H")])
+        b = write_ios_db([(at(self.DATE, "10:00:30"), "aa", -71, "H")])
+        self.addCleanup(os.remove, a)
+        self.addCleanup(os.remove, b)
+        da = ew.parse_ios_db(a, date=self.DATE)
+        db = ew.parse_ios_db(b, date=self.DATE)
+        self.assertNotEqual(
+            ew.ios_digest(ew.extract(da, da, stations, trim=0), "a"),
+            ew.ios_digest(ew.extract(db, db, stations, trim=0), "a"))
+
+    def test_empty_table_is_not_a_crash(self):
+        p = write_ios_db([])
+        self.addCleanup(os.remove, p)
+        d = ew.parse_ios_db(p, date=self.DATE)
+        self.assertEqual(d["adverts"], [])
+        self.assertEqual(d["ios"]["n_total"], 0)
+
+    def test_is_ios_db_detection(self):
+        for p in ("in_range_local.db", "x.sqlite", "X.SQLITE3"):
+            self.assertTrue(ew.is_ios_db(p), p)
+        for p in ("walk.threadtime.log.gz", "walk.log"):
+            self.assertFalse(ew.is_ios_db(p), p)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
