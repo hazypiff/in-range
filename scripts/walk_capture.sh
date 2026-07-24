@@ -18,7 +18,7 @@
 # reproducible from this archive.
 #
 # prep aborts if any phone's installed build is not the FREEZE build (default
-# calib-freeze-2026-07-23). ALLOW_BUILD_MISMATCH=1 downgrades that to a warning.
+# calib-freeze-2026-07-24). ALLOW_BUILD_MISMATCH=1 downgrades that to a warning.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -28,7 +28,7 @@ EXCLUDE="${EXCLUDE:-0A081JECB06627}"   # Pixel proxy — never touch
 BUF="${BUF:-64M}"
 # Calibration freeze the walk must run under. prep verifies every connected
 # phone's installed build against this before touching the buffers.
-FREEZE="${FREEZE:-calib-freeze-2026-07-23}"
+FREEZE="${FREEZE:-calib-freeze-2026-07-24}"
 PKG="${PKG:-io.inrange.app}"
 MODE="${1:-}"
 NAME="${2:-}"
@@ -76,7 +76,11 @@ installed_stamp() {
 # Override with ALLOW_BUILD_MISMATCH=1 for deliberate cross-build experiments.
 verify_builds() {
   local want S L got sha bad=0
-  want=$(git rev-parse --short "$FREEZE" 2>/dev/null || true)
+  # ^{commit} is load-bearing: on an ANNOTATED tag plain rev-parse returns the
+  # tag object, which never equals a build stamp, so every phone would fall
+  # through to the diff path and report "differs outside client code" instead
+  # of an exact match. (07-23 was lightweight and hid this; 07-24 is annotated.)
+  want=$(git rev-parse --short "$FREEZE^{commit}" 2>/dev/null || true)
   if [ -z "$want" ]; then
     echo "ERROR: cannot resolve freeze '$FREEZE' — try: git fetch --tags" >&2
     exit 1
