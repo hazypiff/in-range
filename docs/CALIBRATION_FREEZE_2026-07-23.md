@@ -1,5 +1,12 @@
 # Calibration freeze — 2026-07-23 (tag `calib-freeze-2026-07-23`)
 
+> **Re-pinned 2026-07-24 → tag `calib-freeze-2026-07-24` (`793f278`).** Everything
+> below still describes this round; only the pinned commit moved. The client build
+> changed because Android now stamps its source commit into `versionName` (see
+> *Build verification*), so the freeze had to name the stamped build. `07-23` is
+> **not** moved — it is published to both remotes. Nothing was orphaned: this round
+> has collected zero trainable walks so far.
+
 Supersedes `calib-freeze-2026-07-18b`. Cut because 2026-07-23 changed the
 app under the walkers' feet: locked-phone BLE carrier (W1–W4), per-direction
 iPhone tier locks from the real-carry sweep, the tier-picker UI, beacon-path
@@ -35,7 +42,7 @@ Both remotes (`inrangeai/in-range`, `hazypiff/in-range`) carry it.
   per-direction cutoffs (`docs/PROXIMITY_TIERS.md`); bilateral fusion is
   load-bearing. Walks should capture both directions' logs, not just one.
 - Extraction unchanged: `--pair <pair> --capture-meta <meta-pull.json>
-  --freeze calib-freeze-2026-07-23`.
+  --freeze calib-freeze-2026-07-24`.
 
 ## Collection round (unchanged targets)
 
@@ -53,10 +60,11 @@ the fail-closed trainer gates will pass a model fit on that mixture.
 
 - `build-install-s9.sh` stamps the source commit into `versionName`
   (`0.1.0-<sha>`, `-dirty` suffix if the client tree is dirty).
-- `walk_capture.sh prep` resolves `$FREEZE` (default this tag) and **aborts
+- `walk_capture.sh prep` resolves `$FREEZE` (default `calib-freeze-2026-07-24`) and **aborts
   before touching buffers or creating the archive dir** unless every connected
   phone matches. A later commit passes if it changes nothing under
-  `lib/ android/ ios/ scripts/` — docs and web churn must not block a walk.
+  `lib/ android/ ios/` — the stamp describes an APK, so host-side `scripts/`
+  is deliberately excluded; docs and web churn must not block a walk.
 - Each device's actual stamp is recorded as `build` in `meta-<phase>.json`, so
   the archive states the data-producing code instead of trusting the prep.
 - `ALLOW_BUILD_MISMATCH=1` downgrades the abort to a warning for deliberate

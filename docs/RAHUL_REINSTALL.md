@@ -19,16 +19,15 @@ Takes about 15 minutes for both.
 ```bash
 cd ~/in-range
 git fetch --tags
-git checkout calib-freeze-2026-07-23     # = 95c6eae
+git checkout calib-freeze-2026-07-24     # = 793f278
 ```
 
 This puts you on a detached HEAD — that's expected and correct for a calibration round.
 
-> FYI: right now `main` is identical to the tag for client code — everything since the
-> freeze is web/docs/waitlist only, nothing in `lib/`, `android/`, `ios/`, or `scripts/`.
-> So `git checkout main && git pull` would build the same app **today**. Use the tag
-> anyway; the moment app code lands on main that stops being true and the tag is what
-> the walk manifest records.
+> Note the tag: **07-24**, not the 07-23 one in the older docs. It was re-cut because
+> Android builds now stamp their source commit into `versionName`, which changed the
+> client build. 07-23 still exists and was not moved — if you already fetched it,
+> nothing about your checkout broke, you just want the newer one.
 
 **Check `.env` exists and points at prod** — it's gitignored, so it survives a checkout,
 but confirm:
@@ -55,6 +54,16 @@ first or you'll flash something you didn't mean to.
 
 It builds a multi-ABI debug APK, installs with `-r`, force-stops, and relaunches
 `io.inrange.app`. When it prints `Done. Multi-ABI APK on 1 device(s).` you're good.
+
+Sanity-check the stamp — it should be the freeze commit, with **no** `-dirty` suffix:
+
+```bash
+adb shell dumpsys package io.inrange.app | grep -m1 versionName   # expect 0.1.0-793f278
+```
+
+`walk_capture.sh prep` now checks this automatically on every connected Android and
+refuses to start the capture if it doesn't match, so a stale S22 can't quietly poison
+a round again.
 
 ---
 
@@ -111,7 +120,7 @@ Extraction (unchanged):
 ```bash
 python3 scripts/extract_walk.py --pair <pair> \
   --capture-meta <meta-pull.json> \
-  --freeze calib-freeze-2026-07-23
+  --freeze calib-freeze-2026-07-24
 ```
 
 ---
