@@ -59,6 +59,9 @@ Deno.serve(async (req) => {
 
     const email = String(body.email ?? "").trim();
     const source = body.source == null ? null : String(body.source).slice(0, 40);
+    // Referral ladder (0055): optional share code from ?ref= links.
+    const rawRef = String(body.ref ?? "").trim().toLowerCase();
+    const ref = /^[a-z2-9]{4,16}$/.test(rawRef) ? rawRef : null;
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || email.length > 320) {
       return json({ ok: false, error: "invalid_email" }, 400);
     }
@@ -77,22 +80,19 @@ Deno.serve(async (req) => {
       }
     }
 
-    const { error: rpcErr } = await supabase.rpc("join_waitlist", {
+    // join_waitlist (0055) is idempotent and returns the full ladder status:
+    // position (rank by priority DESC, id ASC), total, behind, ref_code,
+    // referral_count, new. Re-posting the same email = status check.
+    const { data, error: rpcErr } = await supabase.rpc("join_waitlist", {
       p_email: email,
       p_source: source,
+      p_ref: ref,
     });
     if (rpcErr) {
       return json({ ok: false, error: "operation_failed" }, 400);
     }
 
-    // "You're #N in line" for the success state. Total list size only — it
-    // reveals nothing about any individual address (the insert is idempotent
-    // and unreadable to anon either way).
-    const { count } = await supabase
-      .from("waitlist")
-      .select("*", { count: "exact", head: true });
-
-    return json({ ok: true, position: count ?? null });
+    return json({ ok: true, ...(data as Record<string, unknown>) });
   } catch (e) {
     console.error("waitlist-join", e);
     return json({ ok: false, error: "operation_failed" }, 500);

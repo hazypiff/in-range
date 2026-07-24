@@ -104,6 +104,24 @@
   .signup .done .big { font-size: 1.25rem; font-weight: 800; }
   .signup .done .pos { color: var(--yellow); }
   .signup .done p { color: var(--grey); margin: .4rem 0 0; font-size: .9rem; }
+  .signup .done .behind { color: var(--white); font-size: .9rem; margin-top: .35rem; }
+  .signup .done .behind b { color: var(--red); }
+  .signup .done .ladder {
+    margin-top: 1rem; padding-top: 1rem; border-top: 1px dashed #2c2c33;
+  }
+  .signup .done .ladder .cta-line { font-weight: 800; margin: 0 0 .6rem; color: var(--white); font-size: .95rem; }
+  .signup .done .linkrow { display: flex; gap: .5rem; }
+  .signup .done .linkrow input {
+    flex: 1; min-width: 0; font: inherit; font-size: .82rem; color: var(--grey);
+    background: #0b0b0c; border: 1.5px solid #2c2c33; border-radius: 10px; padding: .6rem .8rem;
+  }
+  .signup .done .linkrow button {
+    font: inherit; font-weight: 700; font-size: .85rem; cursor: pointer; white-space: nowrap;
+    color: var(--black); background: var(--yellow); border: 0; border-radius: 10px; padding: .6rem 1rem;
+    box-shadow: none;
+  }
+  .signup .done .refcount { font-size: .8rem; color: var(--grey); margin-top: .6rem; }
+  .signup .done .refcount b { color: var(--yellow); }
 
   /* ---------- journey path ---------- */
   section.journey {
@@ -406,12 +424,103 @@
 (function () {
   var ENDPOINT = 'https://riigipzlyqeaadyvbuty.supabase.co/functions/v1/waitlist-join';
 
-  document.querySelectorAll('.signup').forEach(function (box) {
+  // Referral ladder: capture ?ref= from share links; survives navigation.
+  var params = new URLSearchParams(location.search);
+  var incomingRef = (params.get('ref') || '').toLowerCase();
+  if (/^[a-z2-9]{4,16}$/.test(incomingRef)) {
+    try { localStorage.setItem('ir_ref', incomingRef); } catch (e) {}
+  }
+  function getRef() {
+    try { return localStorage.getItem('ir_ref') || null; } catch (e) { return null; }
+  }
+  function esc(s) { return String(s).replace(/[<>&]/g, function (c) { return { '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]; }); }
+
+  function renderDone(box, email, d) {
+    var form = box.querySelector('form');
+    var done = box.querySelector('.done');
+    var shareUrl = 'https://inrange.life/?ref=' + d.ref_code;
+    form.style.display = 'none';
+    box.querySelector('.note').style.display = 'none';
+    done.innerHTML =
+      '<div class="big">You’re in — <span class="pos">#' + esc(d.position) + ' in line</span> 🎉</div>' +
+      (d.behind > 0 ? '<div class="behind"><b>' + esc(d.behind) + (d.behind === 1 ? ' person is' : ' people are') + ' behind you.</b> Keep it that way.</div>' : '') +
+      '<p>Founder spot locked to <strong>' + esc(email) + '</strong>. We’ll email you the moment your neighborhood opens.</p>' +
+      '<div class="ladder">' +
+        '<p class="cta-line">Skip the line — every friend who joins moves you up. ⬆️</p>' +
+        '<div class="linkrow">' +
+          '<input type="text" readonly value="' + shareUrl + '" id="share-' + esc(d.ref_code) + '">' +
+          '<button type="button" data-share="' + shareUrl + '">Share</button>' +
+          '<button type="button" data-copy="' + shareUrl + '">Copy</button>' +
+        '</div>' +
+        '<div class="refcount">' + (d.referral_count > 0
+          ? '<b>' + esc(d.referral_count) + '</b> friend' + (d.referral_count === 1 ? '' : 's') + ' joined with your link.'
+          : 'No friends yet — your link is ready.') + '</div>' +
+      '</div>';
+    done.style.display = 'block';
+
+    done.querySelector('[data-copy]').addEventListener('click', function () {
+      var self = this;
+      (navigator.clipboard ? navigator.clipboard.writeText(shareUrl) : Promise.reject())
+        .then(function () { self.textContent = 'Copied!'; setTimeout(function () { self.textContent = 'Copy'; }, 2000); })
+        .catch(function () {
+          var inp = done.querySelector('input'); inp.select(); document.execCommand('copy');
+          self.textContent = 'Copied!'; setTimeout(function () { self.textContent = 'Copy'; }, 2000);
+        });
+    });
+    done.querySelector('[data-share]').addEventListener('click', function () {
+      if (navigator.share) {
+        navigator.share({
+          title: 'In Range',
+          text: 'I’m #' + d.position + ' in line for In Range — the dating app that only shows people you actually cross paths with. Join behind me (or don’t 😏):',
+          url: shareUrl
+        }).catch(function () {});
+      } else {
+        done.querySelector('[data-copy]').click();
+      }
+    });
+  }
+
+  function submit(box, email, quiet) {
+    var button = box.querySelector('button[type=submit]');
+    var msg = box.querySelector('.msg');
+    return fetch(ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email, source: box.dataset.source, ref: getRef() })
+    })
+    .then(function (r) { return r.json().then(function (b) { return { status: r.status, body: b }; }); })
+    .then(function (res) {
+      if (res.body && res.body.ok) {
+        try {
+          localStorage.setItem('ir_email', email);
+          if (res.body.ref_code) localStorage.setItem('ir_my_code', res.body.ref_code);
+        } catch (e) {}
+        renderDone(box, email, res.body);
+      } else if (quiet) {
+        return; // silent restore failed — leave the form alone
+      } else if (res.status === 429) {
+        throw new Error('Too many signups from this network right now — try again in an hour.');
+      } else if (res.body && res.body.error === 'invalid_email') {
+        throw new Error('That doesn’t look like an email — try again?');
+      } else {
+        throw new Error('Something hiccuped — give it another try.');
+      }
+    })
+    .catch(function (err) {
+      if (quiet) return;
+      msg.textContent = err.message || 'Something hiccuped — give it another try.';
+      msg.classList.add('err');
+      button.disabled = false;
+      button.textContent = box.dataset.source === 'founder' ? 'Claim founder access' : 'Get in line';
+    });
+  }
+
+  var boxes = document.querySelectorAll('.signup');
+  boxes.forEach(function (box) {
     var form = box.querySelector('form');
     var input = box.querySelector('input[type=email]');
-    var button = box.querySelector('button');
+    var button = box.querySelector('button[type=submit]');
     var msg = box.querySelector('.msg');
-    var done = box.querySelector('.done');
 
     form.addEventListener('submit', function (e) {
       e.preventDefault();
@@ -424,39 +533,16 @@
       }
       button.disabled = true;
       button.textContent = 'Saving your spot…';
-
-      fetch(ENDPOINT, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email, source: box.dataset.source })
-      })
-      .then(function (r) { return r.json().then(function (b) { return { status: r.status, body: b }; }); })
-      .then(function (res) {
-        if (res.body && res.body.ok) {
-          form.style.display = 'none';
-          box.querySelector('.note').style.display = 'none';
-          var pos = res.body.position;
-          done.innerHTML = '<div class="big">You’re in' +
-            (pos ? ' — <span class="pos">#' + pos + ' in line</span>' : '') + ' 🎉</div>' +
-            '<p>Founder spot locked to <strong>' + email.replace(/</g,'&lt;') + '</strong>. ' +
-            'We’ll email you the moment your city opens.</p>';
-          done.style.display = 'block';
-        } else if (res.status === 429) {
-          throw new Error('Too many signups from this network right now — try again in an hour.');
-        } else if (res.body && res.body.error === 'invalid_email') {
-          throw new Error('That doesn’t look like an email — try again?');
-        } else {
-          throw new Error('Something hiccuped — give it another try.');
-        }
-      })
-      .catch(function (err) {
-        msg.textContent = err.message || 'Something hiccuped — give it another try.';
-        msg.classList.add('err');
-        button.disabled = false;
-        button.textContent = box.dataset.source === 'founder' ? 'Claim founder access' : 'Get in line';
-      });
+      submit(box, email, false);
     });
   });
+
+  // Returning visitor: restore their card (and refreshed position) silently.
+  var savedEmail = null;
+  try { savedEmail = localStorage.getItem('ir_email'); } catch (e) {}
+  if (savedEmail && boxes.length) {
+    boxes.forEach(function (box) { submit(box, savedEmail, true); });
+  }
 })();
 </script>
 

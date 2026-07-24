@@ -450,7 +450,7 @@ moat, and unit economics that only work the way we're already building.
 | Plan item | Status | Where it lives / what to build |
 | :--- | :--- | :--- |
 | Founder waitlist + "#N in line" | ✅ LIVE | `waitlist` table + `waitlist-join` Edge fn (0054); `web/index.html` |
-| **Waitlist referral ladder** | ❌ **NEXT** | referral code per signup, position jump on referred joins, "people behind you" count, share button; §3.3 mechanics (Robinhood) |
+| **Waitlist referral ladder** | ✅ LIVE (2026-07-24, 0055) | ref code per signup, +10 priority per NEW referred join (cap 100, no self/dup credit), rank = (priority DESC, id ASC), "N behind you" + share/copy buttons + `?ref=` capture + returning-visitor status restore on inrange.life |
 | **Ratio-balanced admission** | ❌ | 2–3 optional signup fields (zone, age band, gender/orientation) + cohort-admit tooling; priority-lane jumps (Superhuman) |
 | Campaign attribution | ✅ partial | `waitlist.source` codes (e.g. `atx-eastside-first500`) |
 | Per-zone unlock | ❌ | zone on waitlist, unlock flag, signup-order + ratio gating at onboarding |
