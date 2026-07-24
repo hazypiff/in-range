@@ -15,12 +15,12 @@ Both remotes (`inrangeai/in-range`, `hazypiff/in-range`) carry it.
 
 | Component | Where | Version |
 |---|---|---|
-| Unified repo (capture, extractor, protocol, learn pipeline, app) | both remotes | tag `calib-freeze-2026-07-23` = `95c6eae` |
+| Unified repo (capture, extractor, protocol, learn pipeline, app) | both remotes | tag `calib-freeze-2026-07-23` = `9c23359` (this doc); client code identical to `95c6eae`, the last commit touching `lib/ android/ ios/ scripts/` |
 | Feature schema | `learn/train.py` / artifact | `inrange-gnb-1` (unchanged) |
 | Extractor defaults | `scripts/extract_walk.py` | trim 20 s, max AP age 60 s, AP gate −70 dBm (unchanged) |
 | Walk protocol | `docs/WALK4_PROTOCOL.md` at tag | stop-and-return, explicit host-clock stop times, 90 s stations |
 | Capture | `scripts/walk_capture.sh` | 64M verified buffer + explicit clear, prep/pull meta with clock offsets |
-| Installed S9 builds (324c…498, 513…498) | this box, debug multi-ABI | built from `95c6eae`, installed 2026-07-23 ~18:2x, desk-verified (advertise + cross-sight + upload) |
+| Installed S9 builds (324c…498, 513…498) | this box, debug multi-ABI | built from `95c6eae`, installed 2026-07-23 ~18:2x, desk-verified (advertise + cross-sight + upload). **Predate build stamping** — `walk_capture.sh prep` now rejects them (`versionName=1.0`); one rebuild makes them walk-eligible |
 | **Rahul's devices (S22, iPhone 15 Plus)** | Mac side | **REINSTALL REQUIRED from ≥ `95c6eae` before the next walk** — their installed builds predate the native-GATT swap (W3 behavior differs) and 0053 client timestamp pass-through |
 | Server (prod riigipzlyqeaadyvbuty) | migrations ledger | `0053` — `late_evidence_window_minutes = 15`. Server state is now walk-relevant: encounter confirmation tolerates late flushes; note it when interpreting confirm timing |
 
@@ -43,6 +43,28 @@ Both remotes (`inrangeai/in-range`, `hazypiff/in-range`) carry it.
 venues/orientations is the comfortable target. After every walk:
 `learn/loop.sh` → review capture quality + class coverage → stamp bad
 captures `--trainable no` → RH-1 phone health check before the next.
+
+## Build verification (new — added 2026-07-24)
+
+Device drift is what actually broke this round: Rahul's S22 and iPhone ran a
+pre-native-GATT build for a whole round and nothing said so. A stale install
+does not fail loudly — it emits plausible rows under different behavior, and
+the fail-closed trainer gates will pass a model fit on that mixture.
+
+- `build-install-s9.sh` stamps the source commit into `versionName`
+  (`0.1.0-<sha>`, `-dirty` suffix if the client tree is dirty).
+- `walk_capture.sh prep` resolves `$FREEZE` (default this tag) and **aborts
+  before touching buffers or creating the archive dir** unless every connected
+  phone matches. A later commit passes if it changes nothing under
+  `lib/ android/ ios/ scripts/` — docs and web churn must not block a walk.
+- Each device's actual stamp is recorded as `build` in `meta-<phase>.json`, so
+  the archive states the data-producing code instead of trusting the prep.
+- `ALLOW_BUILD_MISMATCH=1` downgrades the abort to a warning for deliberate
+  cross-build experiments. Walks captured that way are not comparable to this
+  round — stamp them `--trainable no`.
+
+iOS has no equivalent check (no `adb`); the Mac side stays procedural, see
+`docs/RAHUL_REINSTALL.md`.
 
 ## Gates recap (unchanged)
 

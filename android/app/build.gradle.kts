@@ -14,8 +14,12 @@ android {
         applicationId = "io.inrange.app"
         minSdk = flutter.minSdkVersion
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        // Taken from Flutter (pubspec, or --build-name/--build-code) rather than
+        // hardcoded: build-install-s9.sh stamps the commit into --build-name so
+        // walk_capture.sh can verify a phone is on the frozen build before a
+        // calibration walk. Hardcoding here silently discards that stamp.
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
 
         ndk {
             abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a", "x86_64"))

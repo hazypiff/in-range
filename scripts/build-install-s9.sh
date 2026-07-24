@@ -13,8 +13,22 @@ if [[ -f .env ]]; then
   echo "Using Flutter dart-defines from .env"
 fi
 
+# Stamp the source commit into versionName so walk_capture.sh can verify the
+# phones are on the frozen build before a calibration walk (2026-07-23: Rahul's
+# devices silently ran a pre-native-GATT build for a whole round). A dirty
+# client tree gets a -dirty suffix — the preflight refuses those, because the
+# sha alone would misdescribe what is actually installed.
+STAMP="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+if ! git diff --quiet HEAD -- lib android ios scripts 2>/dev/null; then
+  STAMP="$STAMP-dirty"
+  echo "WARNING: client tree is dirty — stamping $STAMP (not walk-eligible)" >&2
+fi
+BUILD_NAME="0.1.0-$STAMP"
+echo "Build stamp: $BUILD_NAME"
+
 flutter build apk --debug \
   --target-platform android-arm,android-arm64,android-x64 \
+  --build-name="$BUILD_NAME" \
   "${DEFINES[@]}"
 APK="build/app/outputs/flutter-apk/app-debug.apk"
 if [[ ! -f "$APK" ]]; then

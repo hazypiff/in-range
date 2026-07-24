@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Walk capture harness — reproducible calibration log capture.
 #
-#   scripts/walk_capture.sh prep [name]   BEFORE the walk: resize each phone's
-#                                         logcat ring buffer (NOTE: -G clears
-#                                         it) and record clock offsets.
+#   scripts/walk_capture.sh prep [name]   BEFORE the walk: verify every phone
+#                                         runs the frozen build, resize each
+#                                         phone's logcat ring buffer (NOTE: -G
+#                                         clears it) and record clock offsets.
 #   scripts/walk_capture.sh pull [name]   AFTER the walk: raw threadtime dump
 #                                         per phone -> dated gzip archive +
 #                                         meta.json (offsets re-measured).
@@ -15,6 +16,9 @@
 #
 # Raw logs are the source of truth; everything extract_walk.py derives is
 # reproducible from this archive.
+#
+# prep aborts if any phone's installed build is not the FREEZE build (default
+# calib-freeze-2026-07-23). ALLOW_BUILD_MISMATCH=1 downgrades that to a warning.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -22,11 +26,15 @@ EXCLUDE="${EXCLUDE:-0A081JECB06627}"   # Pixel proxy — never touch
 # 64M: the earlier audit found 16M already ~60% consumed on a walk, and full
 # WiFi AP logging adds substantial volume on top.
 BUF="${BUF:-64M}"
+# Calibration freeze the walk must run under. prep verifies every connected
+# phone's installed build against this before touching the buffers.
+FREEZE="${FREEZE:-calib-freeze-2026-07-23}"
+PKG="${PKG:-io.inrange.app}"
 MODE="${1:-}"
 NAME="${2:-}"
 DIR="run_logs/walks/$(date +%F)${NAME:+-$NAME}"
 
-usage() { sed -n '2,17p' "$0"; exit 1; }
+usage() { sed -n '2,22p' "$0"; exit 1; }
 [ "$MODE" = "prep" ] || [ "$MODE" = "pull" ] || usage
 
 devices() {
@@ -54,6 +62,72 @@ offset_for() {
   awk -v h0="$h0" -v h1="$h1" -v d="$dev" 'BEGIN { printf "%.1f", (h0 + h1) / 2 - d }'
 }
 
+# versionName of the installed app, e.g. "0.1.0-95c6eae" (see
+# build-install-s9.sh). Builds predating the stamp report "1.0".
+installed_stamp() {
+  adb -s "$1" shell dumpsys package "$PKG" 2>/dev/null \
+    | tr -d '\r' | sed -n 's/.*versionName=\([^ ]*\).*/\1/p' | head -1
+}
+
+# Refuse to start a calibration walk on phones that are not running the frozen
+# build. This exists because a stale install does not fail loudly — it produces
+# plausible rows under different behavior (2026-07-23: pre-native-GATT W3), and
+# the fail-closed trainer gates will happily pass a model fit on that mixture.
+# Override with ALLOW_BUILD_MISMATCH=1 for deliberate cross-build experiments.
+verify_builds() {
+  local want S L got sha bad=0
+  want=$(git rev-parse --short "$FREEZE" 2>/dev/null || true)
+  if [ -z "$want" ]; then
+    echo "ERROR: cannot resolve freeze '$FREEZE' — try: git fetch --tags" >&2
+    exit 1
+  fi
+  echo "freeze $FREEZE = $want — verifying installed builds"
+  for S in $(devices); do
+    L=$(label_for "$S")
+    got=$(installed_stamp "$S")
+    if [ -z "$got" ]; then
+      echo "  FAIL $L: $PKG not installed" >&2; bad=1; continue
+    fi
+    case "$got" in
+      *-*) sha=${got#*-} ;;
+      *)   echo "  FAIL $L: unstamped build ($got) — predates build stamping, reinstall" >&2
+           bad=1; continue ;;
+    esac
+    case "$sha" in
+      *-dirty) echo "  FAIL $L: built from a dirty tree ($sha) — the commit does not describe it" >&2
+               bad=1; continue ;;
+    esac
+    if [ "$sha" = "$want" ]; then
+      echo "  ok   $L: $sha"
+      continue
+    fi
+    # A later commit is fine as long as it changes nothing the walk measures —
+    # docs/web churn moves HEAD constantly and must not block a walk.
+    if ! git cat-file -e "$sha^{commit}" 2>/dev/null; then
+      echo "  FAIL $L: $sha is not a commit in this repo — git fetch, or rebuild" >&2
+      bad=1; continue
+    fi
+    if git diff --quiet "$want" "$sha" -- lib android ios scripts 2>/dev/null; then
+      echo "  ok   $L: $sha (differs from freeze outside client code only)"
+      continue
+    fi
+    echo "  FAIL $L: $sha differs from freeze $want in client code:" >&2
+    git diff --stat "$want" "$sha" -- lib android ios scripts 2>/dev/null \
+      | sed 's/^/         /' >&2
+    bad=1
+  done
+  if [ "$bad" != 0 ]; then
+    if [ "${ALLOW_BUILD_MISMATCH:-0}" = 1 ]; then
+      echo "ALLOW_BUILD_MISMATCH=1 — continuing on non-frozen builds." >&2
+      echo "This walk is NOT comparable to the frozen round; stamp it --trainable no." >&2
+      return 0
+    fi
+    echo "aborting; reinstall from $FREEZE (see docs/RAHUL_REINSTALL.md)." >&2
+    echo "  bash scripts/build-install-s9.sh" >&2
+    exit 1
+  fi
+}
+
 write_meta() {
   local phase=$1 first=1 S
   {
@@ -65,8 +139,10 @@ write_meta() {
     for S in $(devices); do
       [ "$first" = 0 ] && echo ','
       first=0
-      printf '    {"serial": "%s", "label": "%s", "buffer": "%s", "host_minus_device_s": %s}' \
-        "$S" "$(label_for "$S")" \
+      # build: what was actually installed, so the archive records the
+      # data-producing code rather than relying on the walk being prepped right.
+      printf '    {"serial": "%s", "label": "%s", "build": "%s", "buffer": "%s", "host_minus_device_s": %s}' \
+        "$S" "$(label_for "$S")" "$(installed_stamp "$S")" \
         "$(adb -s "$S" logcat -g main 2>/dev/null | head -1 | tr -d '\r' | sed 's/"/\\"/g')" \
         "$(offset_for "$S")"
     done
@@ -76,6 +152,10 @@ write_meta() {
   } > "$DIR/meta-$phase.json"
   echo "wrote $DIR/meta-$phase.json"
 }
+
+# Before the archive dir exists and before the buffers are touched — a failed
+# verify should leave no trace: no cleared logs, no empty walk directory.
+if [ "$MODE" = "prep" ]; then verify_builds; fi
 
 mkdir -p "$DIR"
 
