@@ -104,6 +104,7 @@ final class BackgroundBeacon: NSObject {
 
   private func handleWake(task: BGTask) {
     scheduleWake()  // always chain the next window
+    logWake("bgtask")
     guard enabled else {
       task.setTaskCompleted(success: true)
       return
@@ -331,6 +332,25 @@ final class BackgroundBeacon: NSObject {
   private func notifyAdvertisingState(_ ok: Bool) {
     channel?.invokeMethod("onAdvertisingState", arguments: ok)
   }
+
+  /// Soak-test observability (2026-07-24: overnight soak produced zero
+  /// samples and zero evidence of WHY): append wake/read events to a file
+  /// in Documents so a USB pull can show whether iOS granted windows at
+  /// all, separately from whether scans saw anything during them.
+  private func logWake(_ kind: String) {
+    let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    let url = docs.appendingPathComponent("bb_wake_log.txt")
+    let line = "\(Int(Date().timeIntervalSince1970 * 1000)) \(kind)\n"
+    if let data = line.data(using: .utf8) {
+      if let h = try? FileHandle(forWritingTo: url) {
+        h.seekToEndOfFile()
+        h.write(data)
+        try? h.close()
+      } else {
+        try? data.write(to: url)
+      }
+    }
+  }
 }
 
 // MARK: - CBPeripheralManagerDelegate
@@ -371,6 +391,7 @@ extension BackgroundBeacon: CBPeripheralManagerDelegate {
     }
     request.value = data.subdata(in: request.offset..<data.count)
     peripheral.respond(to: request, withResult: .success)
+    logWake("gatt-read")
     // A peer reading our token = a peer in range + a moment of background
     // execution time. Background scan deliveries are coalesced for SECONDS,
     // so sessions must be long: a 2 s restart burst produced ZERO return
