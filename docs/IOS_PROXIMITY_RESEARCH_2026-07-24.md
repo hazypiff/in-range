@@ -9,6 +9,7 @@ This document is the implementation handoff for the next proximity upgrade. It c
 Related repository context:
 
 - [`IOS_BACKGROUND_BLE_WIRING.md`](IOS_BACKGROUND_BLE_WIRING.md) — existing W1–W5 wiring/bench record; retain its measurements, but use this document's corrected carrier and lifecycle model.
+- [`IOS_SCREEN_OFF_FUSION_2026-07-24.md`](IOS_SCREEN_OFF_FUSION_2026-07-24.md) — active-session design using background Core Location and server-brokered NI tokens, plus venue-anchor options.
 - [`PROXIMITY_ALGORITHM.md`](PROXIMITY_ALGORITHM.md) — existing fusion direction.
 - [`PROXIMITY_TIERS.md`](PROXIMITY_TIERS.md) — provisional thresholds, not physical truth.
 - [`CALIBRATION_FREEZE_2026-07-23.md`](CALIBRATION_FREEZE_2026-07-23.md) — current walk freeze and device-build preflight.
@@ -18,7 +19,7 @@ Related repository context:
 1. **Two iPhones that are already locked and dark still have no dependable cold-discovery path.** Our bench result — “both iPhones locked, no assists: silent” — remains the correct baseline.
 2. **The iOS overflow area is not invisible to background iOS scanners.** An iOS scanner must explicitly request the service UUID; this app already does. Android can parse the raw Apple manufacturer data and is why the S22-to-locked-iPhone bridge works.
 3. **Persistent GATT is a warm-link continuity mechanism, not a cold-discovery fix.** Once connected, wake writes/notifications can drive `readRSSI()` without waiting for another advertisement callback.
-4. **Nearby Interaction (NI) plus a Live Activity is the best supported iOS-to-iOS continuity path on iOS 18.4+.** BLE is still needed to discover the peer and exchange session-specific NI discovery tokens.
+4. **Nearby Interaction (NI) plus a Live Activity is the best supported iOS-to-iOS continuity path on iOS 18.4+.** NI needs an out-of-band peer handshake, but BLE is only one option: Apple also supports a custom server and explicitly suggests GPS-based candidate matching. The server path may bypass BLE cold discovery during a user-started active session and is now a load-bearing bench spike.
 5. **A Live Activity has a second benefit on iOS 26:** it gives Core Bluetooth foreground-like scanning while the app is backgrounded and the display is lit. Apple confirms that the normal background restrictions return when the Lock Screen goes fully black. This improves “user glances at phone,” not “both phones stay dark.”
 6. **The current restoration setup is incomplete.** Restore identifiers are present, but both restoration callbacks are empty. W5 must not claim resilient persistent links until restored peripherals, delegates, subscriptions, and link state are reattached.
 7. **Do not tune the current `-84` / `-96` dBm tier cutoffs first.** RSSI is coarse, body-dependent evidence. Preserve it for fallback/fusion; use NI distance where available.
@@ -35,7 +36,7 @@ Related repository context:
 
 | Work item | Outcome | Priority |
 |---|---|---|
-| **W6 — NI + Live Activity spike** | Prove supported background UWB ranging on the current iPhone pair; also A/B test the iOS 26 Core Bluetooth Live Activity behavior | P0 spike |
+| **W6 — NI + Live Activity spike** | Prove supported background UWB ranging and server-brokered active-session first contact on the current iPhone pair; also A/B test the iOS 26 Core Bluetooth Live Activity behavior | P0 spike |
 | **W5 — warm-link BLE continuity** | Replace one-shot connect/read/disconnect with a bounded persistent GATT wake/notify/`readRSSI()` loop, including Android peripheral/server support | P0 build |
 | **W8 — restoration and lifecycle hardening** | Make W5 survive ordinary suspension/eviction where Apple permits restoration, and report unsupported termination cases honestly | Required before W5 ships |
 | **W7 — Core Location screen-lit assist** | Optional experiment for older iOS only if the Live Activity tests leave a real product gap | Defer |
@@ -47,7 +48,8 @@ W6 is listed first because it is a small, high-information spike and the same Li
 
 | Situation | Expected behavior | What solves it |
 |---|---|---|
-| Two iPhones, no prior link, both screens dark | No dependable discovery | Nothing currently supported; state this as a platform boundary |
+| Two iPhones, no active proximity session, no prior link, both screens dark | No dependable discovery | Nothing currently supported; state this as a platform boundary |
+| Both iPhones started a Live Activity/location session, server brokers NI tokens, then both screens go dark | Potential active-session first contact without BLE discovery | W6 delayed-join bench; do not claim it until measured |
 | Explicit UUID scan, iPhone backgrounded | Overflow UUID can be matched, but callbacks are coalesced/throttled | Current filter is correct; do not rely on callback cadence |
 | Warm iOS BLE connection, both apps backgrounded | Connection events can wake apps; connected RSSI can be requested | W5, subject to lifecycle and power validation |
 | iOS 18.4+ NI session, app enters background with Live Activity | NI ranging may continue in background | W6 |
@@ -338,17 +340,18 @@ Do not make `connected_rssi` look like a denser version of the same statisticall
 
 ### Goal
 
-Prove background NI continuity on iOS 18.4+ and determine whether its required Live Activity also provides enough screen-lit Core Bluetooth improvement to avoid W7.
+Prove background NI continuity on iOS 18.4+, determine whether a trusted server can broker first contact during a user-started active session while displays are dark, and test whether the Live Activity also provides enough screen-lit Core Bluetooth improvement to avoid W7.
 
 ### Minimal spike
 
 1. Add an ActivityKit widget extension with an honest, minimal Lock Screen activity such as “In Range is active.”
 2. Add `NSSupportsLiveActivities`, `NSNearbyInteractionUsageDescription`, and the `nearby-interaction` background mode.
 3. Create one `NISession` per active peer.
-4. Encode and exchange each `NIDiscoveryToken` through an authenticated/versioned BLE characteristic or the existing trusted backend association. Prefer BLE for the first spike so the dependency is visible.
-5. Start/update the Live Activity while foregrounded before the app backgrounds.
-6. Run the peer configuration and log NI updates, suspension/invalidation reasons, Live Activity state, and app/Lock Screen state.
-7. Expire the Live Activity and session promptly when proximity mode ends.
+4. Encode and exchange each `NIDiscoveryToken` through an authenticated/versioned BLE characteristic or a trusted backend association.
+5. Add a server-brokered test mode that uses coarse GPS/venue eligibility to exchange tokens, then bench the delayed-join case where one phone has already been dark for ten minutes.
+6. Start/update the Live Activity while foregrounded before the app backgrounds.
+7. Run the peer configuration and log NI updates, suspension/invalidation reasons, Live Activity state, and app/Lock Screen state.
+8. Expire the Live Activity and session promptly when proximity mode ends.
 
 Do not use UWB output for security/access-control decisions; Apple does not describe nearby-object distance as secure ranging.
 
@@ -357,7 +360,7 @@ Do not use UWB output for security/access-control decisions; Apple does not desc
 - Unsupported device or iOS version: fall back to W5/fusion.
 - NI warm session: NI distance/direction is the preferred geometric input.
 - NI unavailable/suspended: degrade to connected RSSI, then advertisement/fusion.
-- Cold peer not yet discovered: NI cannot start.
+- Peer token unavailable: NI cannot start. A token may arrive through BLE or the server; the server-brokered active-session path is a W6 bench target, not a shipped guarantee.
 - Live Activity dismissed/expired: surface degraded state in telemetry; do not silently imply full ranging continues.
 
 ## W7 decision gate — Core Location screen-lit assist
@@ -433,28 +436,37 @@ Export raw events. Do not retain only tier transitions.
 
 ### W6: current iPhone 14 + iPhone 15 Plus
 
-Run each case with one Live Activity, two Live Activities, and no Live Activity:
+Run each Live Activity variant in three acquisition modes:
 
-1. Establish BLE and NI in foreground.
-2. Background both apps with screens still lit.
-3. Lock both and wait for both screens to go black.
-4. Wake one screen without foregrounding the app.
-5. Foreground another app while the Live Activity remains active.
-6. Walk through 1 m, 3 m, and 8 m placements with multiple body orientations.
-7. Leave range and return.
-8. Apply memory pressure/normal app eviction where practical.
-9. End/dismiss the Live Activity and verify explicit degradation.
+1. **Warm BLE:** exchange NI tokens over BLE and establish NI in the foreground.
+2. **Server before lock:** both phones start the active proximity session, upload their NI tokens and coarse locations, receive the server match, then lock.
+3. **Delayed join:** phone A starts the active session and remains screen-off for ten minutes; phone B starts later and the server attempts to deliver both tokens without a BLE discovery callback.
+
+For each acquisition mode, test:
+
+1. one Live Activity, two Live Activities, and no Live Activity;
+2. both apps backgrounded with screens still lit;
+3. both screens locked and fully black;
+4. one screen woken without foregrounding the app;
+5. another app foregrounded while the Live Activity remains active;
+6. 1 m, 3 m, and 8 m placements with multiple body orientations;
+7. leaving range and returning;
+8. memory pressure/normal app eviction where practical; and
+9. ending/dismissing the Live Activity and verifying explicit degradation.
 
 Record:
 
 - NI update cadence and longest gap by state;
+- token-upload, candidate-match, token-delivery, and first-NI-update timestamps;
+- whether delayed join succeeds while phone A remains dark, and which callback/runtime delivered the match;
 - whether a one-sided Live Activity preserves both directions;
 - Core Bluetooth `didDiscover` count/cadence with display lit versus black;
 - duplicate/coalescing behavior;
 - session invalidation and recovery;
 - battery and thermal effect over at least two hours.
 
-**Pass for the spike:** repeatable background NI updates while dark after a warm handshake, plus a documented answer for one-sided versus two-sided Live Activities.  
+**Pass for the spike:** repeatable background NI updates while dark after a warm handshake, a documented answer for one-sided versus two-sided Live Activities, and at least 18 successful delayed joins in 20 controlled attempts before treating server-brokered first contact as a product path.
+
 **EDM:** blocked until a second iPhone 15-or-later device is available.
 
 ### W5: cross-platform and iOS-to-iOS
@@ -598,9 +610,9 @@ Herald's repository revision inspected here dates from 2023 and its published iO
 
 The phase is complete only when:
 
-1. W6 has an iPhone 14 ↔ iPhone 15 Plus result for dark-screen NI continuity and one-versus-two Live Activities.
+1. W6 has an iPhone 14 ↔ iPhone 15 Plus result for dark-screen NI continuity, one-versus-two Live Activities, and the server-brokered delayed-join case.
 2. W5 produces bilateral, source-tagged connected-RSSI samples on S22 ↔ iPhone and iPhone ↔ iPhone warm links.
 3. Restoration callbacks rebuild real link state and lifecycle limitations are documented by termination category.
-4. Cold, both-dark iPhone discovery remains labeled unsupported rather than hidden behind scheduled-task optimism.
+4. Cold, both-dark iPhone discovery with no user-started active session remains labeled unsupported rather than hidden behind scheduled-task optimism.
 5. Tier/fusion work consumes source-tagged observations and is calibrated from a multi-placement walk, not one RSSI cutoff.
 6. Privacy and review copy truthfully explains any Live Activity, UWB, Bluetooth, and location behavior that actually ships.
