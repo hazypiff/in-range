@@ -6,7 +6,9 @@ import 'package:in_range/core/prefs/app_prefs.dart';
 import 'package:in_range/core/session/app_session.dart';
 import 'package:in_range/features/beacon/beacon_service.dart';
 import 'package:in_range/features/beacon/range_estimator.dart';
+import 'package:in_range/features/beacon/rssi_uploader.dart';
 import 'package:in_range/features/encounters/local_encounter_store.dart';
+import 'package:in_range/shared/services/rssi_upload_service.dart';
 
 /// Beacon feet range — persisted across restarts.
 final selectedRangeProvider =
@@ -43,6 +45,33 @@ class SelectedRangeController extends StateNotifier<String> {
   }
 }
 
+/// Ships `rssi_log` to the server so a walk can be extracted without the phone
+/// in hand — docs/CLOUD_RSSI_UPLOAD_SPEC.md.
+///
+/// No ClaimManager wrapper, deliberately, though the spec first called for one:
+/// the 45 s flush timer already IS the retry, the watermark makes a retry free,
+/// and ClaimManager's generation/rotation semantics have no counterpart here.
+/// A stuck uploader shows up as [RssiUploader.isStuck] instead.
+final rssiUploaderProvider = Provider<RssiUploader>((ref) {
+  final db = ref.watch(localDbProvider);
+  final uploader = RssiUploader(
+    deviceId: db.deviceId,
+    fetchPage: (afterId, limit) => db.samplesAfter(afterId, limit: limit),
+    send: RssiUploadService.send,
+    readCursor: db.uploadCursor,
+    writeCursor: db.setUploadCursor,
+    enabled: () => RssiUploadService.canUpload,
+  );
+  uploader.onState = (ok, inserted) {
+    if (!ok) {
+      debugPrint('RSSI upload failed (${uploader.consecutiveFailures} in a row)');
+    } else if (inserted > 0) {
+      debugPrint('RSSI upload: $inserted rows');
+    }
+  };
+  return uploader;
+});
+
 final beaconServiceProvider = Provider<BeaconService>((ref) {
   final store = ref.read(localEncounterStoreProvider.notifier);
   final userId = ref.watch(sessionControllerProvider.select((s) => s.userId));
@@ -72,6 +101,15 @@ final beaconServiceProvider = Provider<BeaconService>((ref) {
       );
     },
   );
+  // Rides the service's existing 45 s flush timer and its stop path, so the
+  // upload lifecycle is exactly the beacon session's lifecycle.
+  //
+  // Resolved lazily inside the closure, not eagerly here: the uploader needs
+  // localDbProvider, and BeaconService is deliberately constructible without a
+  // real LocalDb (widget tests pair it with LocalEncounterStore.empty()). An
+  // eager read made merely rendering BeaconScreen throw "Override LocalDb in
+  // main()".
+  service.onFlushUploads = () => ref.read(rssiUploaderProvider).flush();
   ref.onDispose(service.turnOffBeacon);
   return service;
 });

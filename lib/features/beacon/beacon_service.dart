@@ -78,6 +78,13 @@ class BeaconService {
   /// token rotation) so the UI never shows a green beacon over dead BLE.
   void Function()? onBeaconStopped;
 
+  /// Drains the calibration RSSI upload queue (see RssiUploader). Rides the
+  /// existing 45 s sighting-flush timer rather than adding a second one, and
+  /// fires once more on stop so a walk ships its tail without waiting for the
+  /// next session. Failures are swallowed here: the queue is durable and the
+  /// timer IS the retry, so a dead network must never disturb scanning.
+  Future<void> Function()? onFlushUploads;
+
   /// Fired after every claim attempt AND every rotation so the UI reflects the
   /// CURRENT token expiry and cloud-claim state — not the first token's stale
   /// values (reviewer #11). cloudSynced is null when there is no cloud (local
@@ -232,6 +239,7 @@ class BeaconService {
     _sightingFlushTimer = Timer.periodic(const Duration(seconds: 45), (_) {
       if (!_isOn) return;
       _flushSightings();
+      _flushUploads();
     });
     _scanRestartTimer?.cancel();
     // MUST be < 30 min: Android silently downgrades SCAN_MODE_LOW_LATENCY to
@@ -341,6 +349,7 @@ class BeaconService {
     // prior session's samples (reviewer #17).
     rangeEstimator.clear();
     await _flushSightings();
+    await _flushUploads();
     await _releaseClaim();
     await _stopBle();
 
@@ -1128,6 +1137,22 @@ class BeaconService {
   }
 
   String? _currentRangeType;
+
+  /// Fire-and-forget drain of the calibration upload queue.
+  ///
+  /// Swallows everything on purpose. The rows are already durable in SQLite and
+  /// the watermark only advances on server acknowledgement, so a failure here
+  /// costs nothing but a delay — whereas letting it escape would take down the
+  /// flush timer and, on the stop path, the BLE teardown that follows it.
+  Future<void> _flushUploads() async {
+    final flush = onFlushUploads;
+    if (flush == null) return;
+    try {
+      await flush();
+    } catch (e) {
+      debugPrint('RSSI upload flush failed (will retry): $e');
+    }
+  }
 
   Future<void> _flushSightings() async {
     if (_pendingByCorr.isEmpty) return;
