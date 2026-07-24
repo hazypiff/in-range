@@ -23,7 +23,12 @@ lcov.info
 linux/
 macos/
 windows/
-web/
+# web/ holds the inrange.life static site (Flutter web platform not enabled).
+# Only the config-filled pages stay untracked (real Supabase ref baked in by
+# hand from .env — see scripts/deploy-web.sh).
+web/report.html
+web/delete-account.html
+web/.wrangler/
 
 # Generated files
 *.g.dart
