@@ -45,9 +45,18 @@
   nav .cta:hover { background: #ffe14d; }
 
   /* ---------- hero ---------- */
+  .hero-wrap {
+    position: relative;
+    background: url('/img/hero.jpg') center 38% / cover no-repeat;
+  }
+  .hero-wrap::before {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(180deg, rgba(11,11,12,.82) 0%, rgba(11,11,12,.72) 45%, rgba(11,11,12,.97) 100%);
+  }
   header.hero {
+    position: relative;
     max-width: 46rem; margin: 0 auto; text-align: center;
-    padding: clamp(3rem, 8vw, 5.5rem) clamp(1rem, 4vw, 2.5rem) clamp(2rem, 5vw, 3.5rem);
+    padding: clamp(3rem, 8vw, 6rem) clamp(1rem, 4vw, 2.5rem) clamp(2.5rem, 6vw, 4.5rem);
   }
   .kicker {
     display: inline-flex; align-items: center; gap: .5rem;
@@ -123,6 +132,11 @@
   .stop .icon svg { width: 34px; height: 34px; }
   .stop h3 { margin: .3rem 0 .35rem; font-size: 1.12rem; }
   .stop p { margin: 0; color: var(--grey); font-size: .95rem; max-width: 32rem; }
+  .stop img.photo {
+    display: block; width: 100%; max-width: 24rem; aspect-ratio: 16 / 10;
+    object-fit: cover; border-radius: 14px; margin-top: 1rem;
+    border: 1px solid #222228;
+  }
   .stop .num {
     font-size: .7rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase;
     color: var(--red);
@@ -211,6 +225,7 @@
   <a class="cta" href="#founder">Claim founder access</a>
 </nav>
 
+<div class="hero-wrap">
 <header class="hero">
   <span class="kicker"><span class="dot"></span> Launching soon — founding list open</span>
   <h1>You crossed paths with someone <em>today</em>.</h1>
@@ -228,6 +243,7 @@
     <p class="note">Free to join. First cities get access first. No spam — launch news only.</p>
   </div>
 </header>
+</div>
 
 <section class="journey" id="how">
   <h2>Here's how your story goes</h2>
@@ -248,6 +264,7 @@
         <h3>You live your day</h3>
         <p>Order the latte. Lift the weights. Catch the train. Your phone stays in your
         pocket — screen off, doing its quiet thing.</p>
+        <img class="photo" src="/img/day.jpg" alt="Someone walking a sunny city sidewalk with an iced coffee, phone in pocket" loading="lazy">
       </div>
     </div>
 
@@ -265,6 +282,7 @@
         <h3>Your phones say hello</h3>
         <p>When another In Range phone comes near, the two of them swap an anonymous,
         constantly-changing hello. Nobody's name, face, or location is in it.</p>
+        <img class="photo" src="/img/coffee.jpg" alt="Two strangers standing near each other in a coffee shop, both on their phones" loading="lazy">
       </div>
     </div>
 
@@ -286,6 +304,7 @@
         <p>Later, you both see it: <em style="color:var(--white); font-style:normal">"You crossed
         paths at 6:40 tonight."</em> Only real encounters show up — both phones have to agree
         it happened, so nobody can fake their way into your feed.</p>
+        <img class="photo" src="/img/train.jpg" alt="Two people noticing each other on a subway platform as a train passes" loading="lazy">
       </div>
     </div>
 
@@ -302,6 +321,7 @@
         <h3>Like back — it's a match</h3>
         <p>If you both tap like, you're in. And the icebreaker writes itself — you were
         literally in the same room. <a href="#founder" style="color:var(--yellow); font-weight:700; text-decoration:none">Get in line before your city opens →</a></p>
+        <img class="photo" src="/img/match.jpg" alt="Two people laughing together at a table under string lights at night" loading="lazy">
       </div>
     </div>
   </div>
