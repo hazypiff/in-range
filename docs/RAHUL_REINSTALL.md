@@ -28,14 +28,23 @@ This puts you on a detached HEAD — that's expected and correct for a calibrati
 > instrumentation needed for the baseline walk. The published 07-24 tag still exists
 > and was not moved.
 
-**Check `.env` exists and points at prod** — it's gitignored, so it survives a checkout,
-but confirm:
+**Check `.env`** — it's gitignored, so it survives a checkout, but confirm **both** keys.
+Run these before you build, not after:
 
 ```bash
-grep SUPABASE_URL .env      # expect riigipzlyqeaadyvbuty.supabase.co
+grep SUPABASE_URL .env         # expect riigipzlyqeaadyvbuty.supabase.co
+grep INRANGE_CALIB_SCAN .env   # MUST be true — see below
 ```
 
-If it's missing, copy it over from the Linux box (see `docs/MAC_SETUP.md` §1).
+If `SUPABASE_URL` is missing, copy `.env` over from the Linux box (see `docs/MAC_SETUP.md` §1).
+
+⚠️ **If `INRANGE_CALIB_SCAN` is missing or `false`, add `INRANGE_CALIB_SCAN=true` and rebuild.**
+This single key gates every line the walk produces — the `Advert` and `WifiAp` entries the
+extractor parses, the lat/lon on `GpsFix`, and `rssi_log` inserts on the iPhone. It defaults
+to **false**, and a walk with it off looks completely normal the whole way through: the app
+runs, the phones pair, nothing errors. You find out the walk was empty at extraction, hours
+later. It was absent from `.env.example` until 2026-07-24, so an `.env` created from that
+template does not have it.
 
 ---
 

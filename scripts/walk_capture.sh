@@ -178,7 +178,9 @@ case "$MODE" in
       # -G does NOT reliably clear on the S9s (desk test 2026-07-18 found
       # hours of retained backlog) — clear explicitly so the walk starts on
       # an empty buffer.
-      adb -s "$S" logcat -c
+      # -b all: plain `logcat -c` clears only main. The 2026-07-18 archive
+      # caught 5137…3498 starting a walk on 39 h / 63 MiB of backlog anyway.
+      adb -s "$S" logcat -b all -c 2>/dev/null || adb -s "$S" logcat -c
       # Verify the resize actually took — walking with a silently-small buffer
       # loses the start of the walk. Normalizes "64Mb" / "64 MiB" style output.
       line=$(adb -s "$S" logcat -g main 2>/dev/null | head -1 | tr -d '\r')
@@ -192,7 +194,29 @@ case "$MODE" in
         echo "aborting; do not walk on this buffer." >&2
         exit 1
       fi
-      echo "  verified: $got"
+      # Size alone is not enough: the 07-18 walk passed this check on a buffer
+      # that was 63 of 64 MiB full, because the clear had silently failed. A
+      # cleared buffer refills from ~0, so anything large here means the clear
+      # did not take and the walk's early stations may be overwritten.
+      # sed 'ib->b' matters: "63 MiB consumed" collapses to "63mibconsumed",
+      # which matches no case pattern below and would silently never block.
+      consumed=$(echo "$line" | grep -oiE '[0-9]+ *[kmg]i?b consumed' \
+                   | tr -d ' ' | tr '[:upper:]' '[:lower:]' | sed 's/ib/b/')
+      case "$consumed" in
+        *gbconsumed) mib=$(( ${consumed%%g*} * 1024 )) ;;
+        *mbconsumed) mib=${consumed%%m*} ;;
+        *kbconsumed) mib=0 ;;
+        *)           mib="" ;;   # unparsed — do not block the walk on it
+      esac
+      if [ -n "$mib" ] && [ "$mib" -gt "${MAX_CONSUMED_MIB:-8}" ]; then
+        echo "ERROR: $L buffer still holds ${mib} MiB after clear:" >&2
+        echo "  $line" >&2
+        echo "the clear did not take. Try:" >&2
+        echo "  adb -s $S logcat -b all -c && adb -s $S logcat -g main" >&2
+        echo "aborting; walking on a stale buffer risks losing early stations." >&2
+        exit 1
+      fi
+      echo "  verified: $got${mib:+, ${mib} MiB consumed}"
     done
     write_meta prep
     echo "ready — walk now; station times on the HOST clock, then: $0 pull${NAME:+ $NAME}"
