@@ -499,30 +499,22 @@ Only adjust tier boundaries after this data exists.
 
 ## Calibration freeze and immediate preflight
 
-**The re-pin blocker is NOT resolved — this is the live blocker.** `calib-freeze-2026-07-24`
-still points at `793f278`, the same commit it was cut at; nothing was re-pinned. `main` has
-since advanced to `4aaff94`, and the delta is inside client code the preflight guards:
+**Resolved with a new additive baseline tag:** `calib-freeze-2026-07-24b`. The
+published `calib-freeze-2026-07-24` tag remains at `793f278`; it was not moved.
 
-```
-$ git diff --stat calib-freeze-2026-07-24^{commit} HEAD -- lib android ios
- ios/Runner/BackgroundBeacon.swift | 21 +++++++++++++++++++++
-```
+The `07-24b` baseline includes Rahul's `6827be3` wake-log observability. It
+records BGTask grants and GATT-read wakes, which is exactly the instrumentation
+needed to interpret a locked-phone leg. `walk_capture.sh` and
+`RAHUL_REINSTALL.md` now default to the new tag.
 
-That is Rahul's `6827be3` wake-log observability. So rebuilding from `main` stamps phones
-`0.1.0-4aaff94`, and `walk_capture.sh prep` will abort before touching the buffers. Verified,
-not predicted.
-
-Resolving it means cutting a **new** freeze at current HEAD (nothing moves; `07-24` stays
-published), then updating `FREEZE` in `scripts/walk_capture.sh` and the checkout line in
-`docs/RAHUL_REINSTALL.md`. Re-pinning is also independently desirable: `6827be3` records
-BGTask grants and GATT-read wakes, which is exactly the instrumentation that tells you
-whether wakes fired during a locked-phone leg. Freezing without it measures the envelope blind.
-
-The device-install blocker is not resolved merely by moving the tag. The freeze document records:
+The device-install blocker is not resolved merely by creating the tag. The
+freeze document records:
 
 - the installed S9 builds predate build stamping and must be rebuilt;
 - the S22 and iPhone 15 Plus must be reinstalled from at least the current native-GATT client baseline;
 - `walk_capture.sh prep` intentionally rejects a mismatched client build.
+- IG-fleet S9 `3931395a4d583398` is protected by default and is not part of the
+  In Range walk rig.
 
 Do not bypass that check for a training walk. W5 and W6 will materially change the sampling process, so their implementation requires:
 

@@ -6,7 +6,7 @@
 #
 # Usage:
 #   bash scripts/beacon_monitor.sh            # monitor all connected devices
-#   EXCLUDE="0A081JECB06627" bash scripts/... # exclude serials (default: the Pixel)
+#   EXCLUDE="<serial>" bash scripts/...        # add another excluded serial
 #   CALIB=1 bash scripts/beacon_monitor.sh    # also pass the calibration record
 #                                             # types (Advert/WifiScan/WifiAp/
 #                                             # GpsFix) so walk health is visible
@@ -20,7 +20,10 @@
 # then the monitor keeps streaming over WiFi.
 
 set -u
-EXCLUDE="${EXCLUDE:-0A081JECB06627}"   # never touch the Pixel proxy
+# Pixel proxy + S9 assigned to the Instagram fleet — never touch. EXCLUDE adds
+# serials without replacing these protected defaults.
+PROTECTED_DEVICES="0A081JECB06627 3931395a4d583398"
+EXCLUDE="$PROTECTED_DEVICES ${EXCLUDE:-}"
 OUT_DIR="$(cd "$(dirname "$0")/.." && pwd)/run_logs/beacon_test"
 mkdir -p "$OUT_DIR"
 COMBINED="$OUT_DIR/combined_$(date +%H%M%S).log"

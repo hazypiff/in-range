@@ -1,5 +1,11 @@
 # Calibration freeze — 2026-07-23 (tag `calib-freeze-2026-07-23`)
 
+> **Current baseline freeze: `calib-freeze-2026-07-24b`.** This additive tag
+> includes `6827be3`, the locked-phone BGTask/GATT wake-log instrumentation needed
+> to interpret the next S22 ↔ iPhone walk. The published `07-24` tag remains at
+> `793f278`; it was not moved. W5/W6 will require another freeze because they
+> change the sampling regime.
+>
 > **Re-pinned 2026-07-24 → tag `calib-freeze-2026-07-24` (`793f278`).** Everything
 > below still describes this round; only the pinned commit moved. The client build
 > changed because Android now stamps its source commit into `versionName` (see
@@ -42,7 +48,7 @@ Low stakes — both rounds are superseded and produced zero trainable walks. Fro
 
 | Component | Where | Version |
 |---|---|---|
-| Unified repo (capture, extractor, protocol, learn pipeline, app) | both remotes | tag `calib-freeze-2026-07-23` = `9c23359` (this doc); client code identical to `95c6eae`, the last commit touching `lib/ android/ ios/ scripts/` |
+| Unified repo (capture, extractor, protocol, learn pipeline, app) | both remotes | current baseline tag `calib-freeze-2026-07-24b`; resolve its commit with `git rev-parse --short 'calib-freeze-2026-07-24b^{commit}'` |
 | Feature schema | `learn/train.py` / artifact | `inrange-gnb-1` (unchanged) |
 | Extractor defaults | `scripts/extract_walk.py` | trim 20 s, max AP age 60 s, AP gate −70 dBm (unchanged) |
 | Walk protocol | `docs/WALK4_PROTOCOL.md` at tag | stop-and-return, explicit host-clock stop times, 90 s stations |
@@ -62,7 +68,7 @@ Low stakes — both rounds are superseded and produced zero trainable walks. Fro
   per-direction cutoffs (`docs/PROXIMITY_TIERS.md`); bilateral fusion is
   load-bearing. Walks should capture both directions' logs, not just one.
 - Extraction unchanged: `--pair <pair> --capture-meta <meta-pull.json>
-  --freeze calib-freeze-2026-07-24`.
+  --freeze calib-freeze-2026-07-24b`.
 
 ## Collection round (unchanged targets)
 
@@ -80,11 +86,14 @@ the fail-closed trainer gates will pass a model fit on that mixture.
 
 - `build-install-s9.sh` stamps the source commit into `versionName`
   (`0.1.0-<sha>`, `-dirty` suffix if the client tree is dirty).
-- `walk_capture.sh prep` resolves `$FREEZE` (default `calib-freeze-2026-07-24`) and **aborts
+- `walk_capture.sh prep` resolves `$FREEZE` (default `calib-freeze-2026-07-24b`) and **aborts
   before touching buffers or creating the archive dir** unless every connected
   phone matches. A later commit passes if it changes nothing under
   `lib/ android/ ios/` — the stamp describes an APK, so host-side `scripts/`
   is deliberately excluded; docs and web churn must not block a walk.
+- The Pixel proxy and IG-fleet S9 `3931395a4d583398` are protected defaults in
+  the build, monitor, and capture scripts. The frozen In Range Android pair
+  remains `324c…498` and `513…498`.
 - Each device's actual stamp is recorded as `build` in `meta-<phase>.json`, so
   the archive states the data-producing code instead of trusting the prep.
 - `ALLOW_BUILD_MISMATCH=1` downgrades the abort to a warning for deliberate

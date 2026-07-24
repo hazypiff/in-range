@@ -19,15 +19,14 @@ Takes about 15 minutes for both.
 ```bash
 cd ~/in-range
 git fetch --tags
-git checkout calib-freeze-2026-07-24     # = 793f278
+git checkout calib-freeze-2026-07-24b
 ```
 
 This puts you on a detached HEAD — that's expected and correct for a calibration round.
 
-> Note the tag: **07-24**, not the 07-23 one in the older docs. It was re-cut because
-> Android builds now stamp their source commit into `versionName`, which changed the
-> client build. 07-23 still exists and was not moved — if you already fetched it,
-> nothing about your checkout broke, you just want the newer one.
+> Note the **07-24b** suffix. This additive freeze includes the locked-phone wake-log
+> instrumentation needed for the baseline walk. The published 07-24 tag still exists
+> and was not moved.
 
 **Check `.env` exists and points at prod** — it's gitignored, so it survives a checkout,
 but confirm:
@@ -49,16 +48,19 @@ adb devices                       # confirm ONLY the S22 is listed
 bash scripts/build-install-s9.sh
 ```
 
-⚠️ **That script installs to every connected adb device.** Unplug any other Android
-first or you'll flash something you didn't mean to.
+The script permanently protects the Pixel proxy and IG-fleet S9
+`3931395a4d583398`. It still installs to every other connected Android, so unplug
+anything else that is not part of this build.
 
 It builds a multi-ABI debug APK, installs with `-r`, force-stops, and relaunches
 `io.inrange.app`. When it prints `Done. Multi-ABI APK on 1 device(s).` you're good.
 
-Sanity-check the stamp — it should be the freeze commit, with **no** `-dirty` suffix:
+Sanity-check the stamp — it should equal the freeze commit, with **no** `-dirty`
+suffix:
 
 ```bash
-adb shell dumpsys package io.inrange.app | grep -m1 versionName   # expect 0.1.0-793f278
+git rev-parse --short 'calib-freeze-2026-07-24b^{commit}'
+adb shell dumpsys package io.inrange.app | grep -m1 versionName
 ```
 
 `walk_capture.sh prep` now checks this automatically on every connected Android and
@@ -120,7 +122,7 @@ Extraction (unchanged):
 ```bash
 python3 scripts/extract_walk.py --pair <pair> \
   --capture-meta <meta-pull.json> \
-  --freeze calib-freeze-2026-07-24
+  --freeze calib-freeze-2026-07-24b
 ```
 
 ---

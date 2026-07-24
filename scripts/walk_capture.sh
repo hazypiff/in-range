@@ -18,17 +18,20 @@
 # reproducible from this archive.
 #
 # prep aborts if any phone's installed build is not the FREEZE build (default
-# calib-freeze-2026-07-24). ALLOW_BUILD_MISMATCH=1 downgrades that to a warning.
+# calib-freeze-2026-07-24b). ALLOW_BUILD_MISMATCH=1 downgrades that to a warning.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-EXCLUDE="${EXCLUDE:-0A081JECB06627}"   # Pixel proxy — never touch
+# Pixel proxy + S9 assigned to the Instagram fleet — never touch. EXCLUDE adds
+# session-specific serials without replacing these protected defaults.
+PROTECTED_DEVICES="0A081JECB06627 3931395a4d583398"
+EXCLUDE="$PROTECTED_DEVICES ${EXCLUDE:-}"
 # 64M: the earlier audit found 16M already ~60% consumed on a walk, and full
 # WiFi AP logging adds substantial volume on top.
 BUF="${BUF:-64M}"
 # Calibration freeze the walk must run under. prep verifies every connected
 # phone's installed build against this before touching the buffers.
-FREEZE="${FREEZE:-calib-freeze-2026-07-24}"
+FREEZE="${FREEZE:-calib-freeze-2026-07-24b}"
 PKG="${PKG:-io.inrange.app}"
 MODE="${1:-}"
 NAME="${2:-}"

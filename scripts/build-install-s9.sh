@@ -5,6 +5,19 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+# Devices owned by another rig. Extra serials can be appended through EXCLUDE,
+# but callers cannot accidentally remove the protected defaults.
+PROTECTED_DEVICES="0A081JECB06627 3931395a4d583398"
+EXCLUDE="$PROTECTED_DEVICES ${EXCLUDE:-}"
+
+is_excluded() {
+  local serial=$1 excluded
+  for excluded in $EXCLUDE; do
+    [[ "$serial" == "$excluded" ]] && return 0
+  done
+  return 1
+}
+
 echo "=== flutter build apk --debug (arm + arm64 + x64) ==="
 # Flutter parses the env file directly. Do not source an untrusted file as shell.
 DEFINES=()
@@ -43,11 +56,22 @@ if [[ ${#DEVICES[@]} -eq 0 ]]; then
   exit 1
 fi
 
+installed=0
 for ser in "${DEVICES[@]}"; do
+  if is_excluded "$ser"; then
+    echo "--- $ser: skip (protected/excluded) ---"
+    continue
+  fi
   echo "--- $ser ---"
   adb -s "$ser" install -r "$APK"
   adb -s "$ser" shell am force-stop io.inrange.app || true
   adb -s "$ser" shell monkey -p io.inrange.app -c android.intent.category.LAUNCHER 1 >/dev/null || true
+  installed=$((installed + 1))
 done
 
-echo "Done. Multi-ABI APK on ${#DEVICES[@]} device(s)."
+if [[ "$installed" -eq 0 ]]; then
+  echo "No non-excluded devices connected; nothing installed" >&2
+  exit 1
+fi
+
+echo "Done. Multi-ABI APK on $installed device(s)."
