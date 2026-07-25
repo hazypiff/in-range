@@ -1,5 +1,10 @@
 # Walk #4 — the calibration walk
 
+> **Not the protocol for the 2026-07-25 S22 ↔ iPhone locked-bridge repeat.**
+> That walk uses the six-station cross-platform ladder and USB capture in
+> [`WALK_PREFLIGHT_2026-07-25.md`](WALK_PREFLIGHT_2026-07-25.md). This document
+> remains the S9/three-radio and indoor Wi-Fi experiment.
+
 One walk, three radios, every remaining unknown. The phones are already built,
 installed, and beaconing — nothing to set up.
 

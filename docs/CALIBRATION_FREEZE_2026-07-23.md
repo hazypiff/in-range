@@ -6,6 +6,11 @@
 > `793f278`; it was not moved. W5/W6 will require another freeze because they
 > change the sampling regime.
 >
+> **2026-07-25 S22 ↔ iPhone locked-bridge walk:** use
+> [`WALK_PREFLIGHT_2026-07-25.md`](WALK_PREFLIGHT_2026-07-25.md). It pins the
+> six-station ladder, USB-only capture, foreground-before-copy flush, and
+> explicit no-migration/no-cloud boundary for this walk.
+>
 > **Re-pinned 2026-07-24 → tag `calib-freeze-2026-07-24` (`793f278`).** Everything
 > below still describes this round; only the pinned commit moved. The client build
 > changed because Android now stamps its source commit into `versionName` (see

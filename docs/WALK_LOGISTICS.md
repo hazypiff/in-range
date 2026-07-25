@@ -1,5 +1,9 @@
 # Walk logistics — what needs a computer, what the phones log themselves
 
+> Historical 2026-07-18 logistics. Cross-platform capture is no longer blocked.
+> For the current S22 ↔ iPhone locked-bridge walk, use
+> [`WALK_PREFLIGHT_2026-07-25.md`](WALK_PREFLIGHT_2026-07-25.md).
+
 Status report, 2026-07-18 (calibration freeze `calib-freeze-2026-07-18`).
 **Required reading for anyone (human or agent) running or processing a
 calibration walk — including the Mac/iOS side.**
