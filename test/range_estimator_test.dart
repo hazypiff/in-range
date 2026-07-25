@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:in_range/features/beacon/proximity_observation.dart';
 import 'package:in_range/features/beacon/range_estimator.dart';
 
 void main() {
@@ -187,6 +188,36 @@ void main() {
       // while a recent id survives — proves the map didn't grow unbounded.
       expect(e.classify('peer0'), 'none');
       expect(e.classify('peer699'), isNot('none'));
+    });
+  });
+
+  group('observation envelope', () {
+    test('non-advert samples are retained but do not affect live band', () {
+      // Six strong connected-RSSI observations would look like feet_10 if the
+      // estimator mixed sources; it must ignore them until calibrated.
+      for (var i = 0; i < 6; i++) {
+        est.addObservation(
+          'a',
+          const ProximityObservation(
+            source: ProximitySource.connectedRssi,
+            rssi: -50,
+          ),
+        );
+        tick();
+      }
+      expect(est.classify('a'), 'none');
+
+      // A single advert sample then makes the peer present.
+      est.addSample('a', -70, AdvertPower.high);
+      expect(est.classify('a'), 'feet_60');
+    });
+
+    test('addSample wraps advert observations', () {
+      for (var i = 0; i < 6; i++) {
+        est.addSample('a', -70, AdvertPower.high);
+        tick();
+      }
+      expect(est.classify('a'), 'feet_10');
     });
   });
 

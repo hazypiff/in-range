@@ -1,5 +1,6 @@
 import 'dart:collection';
 
+import 'package:in_range/features/beacon/proximity_observation.dart';
 import 'package:in_range/features/beacon/venue_matcher.dart';
 
 /// Which transmit-power slot a received advert was sent in.
@@ -11,10 +12,11 @@ import 'package:in_range/features/beacon/venue_matcher.dart';
 enum AdvertPower { high, medium }
 
 class _Sample {
-  const _Sample(this.at, this.rssi, this.power);
+  const _Sample(this.at, this.rssi, this.power, this.source);
   final DateTime at;
   final int rssi;
   final AdvertPower power;
+  final ProximitySource source;
 }
 
 class _PeerTrack {
@@ -53,14 +55,34 @@ class RangeEstimator {
 
   final Map<String, _PeerTrack> _peers = {};
 
+  /// Convenience wrapper that records a legacy BLE advert sample.
+  ///
+  /// Preserves the existing API used by tests and the beacon service; new
+  /// sources should call [addObservation] directly.
   void addSample(String correlationId, int rssi, AdvertPower power) {
+    addObservation(
+      correlationId,
+      ProximityObservation(source: ProximitySource.advertRssi, rssi: rssi),
+      power: power,
+    );
+  }
+
+  /// Single ingest point for a source-tagged proximity observation.
+  ///
+  /// The classifier currently uses only [ProximitySource.advertRssi] samples
+  /// for tier decisions; other sources are stored for future fusion/training
+  /// but do not change the live band until they are calibrated.
+  void addObservation(String correlationId, ProximityObservation observation,
+      {AdvertPower power = AdvertPower.high}) {
+    final rssi = observation.rssi;
+    if (rssi == null) return;
     final now = _now();
     final track = _peers.putIfAbsent(correlationId, _PeerTrack.new);
     // Prune BEFORE appending: if the window went silent, the stale NEAR
     // interval must close at its evidence expiry — appending first would
     // keep the window non-empty and bank the whole silent gap as dwell.
     _prune(track, now);
-    track.samples.addLast(_Sample(now, rssi, power));
+    track.samples.addLast(_Sample(now, rssi, power, observation.source));
     while (track.samples.length > _maxSamplesPerPeer) {
       track.samples.removeFirst();
     }
@@ -98,21 +120,27 @@ class RangeEstimator {
 
   /// Narrowest band the current window supports: feet_10 | feet_30 |
   /// feet_60 | none.
+  ///
+  /// Only [ProximitySource.advertRssi] samples participate in the live band
+  /// decision; connected-RSSI and NI samples are retained but not used until
+  /// they have been calibrated.
   String classify(String correlationId) {
     final track = _peers[correlationId];
     if (track == null) return 'none';
     _prune(track, _now());
-    if (track.samples.isEmpty) return 'none';
+    final advertSamples =
+        track.samples.where((s) => s.source == ProximitySource.advertRssi);
+    if (advertSamples.isEmpty) return 'none';
     if (_isNear(track)) return 'feet_10';
     final mediumCount =
-        track.samples.where((s) => s.power == AdvertPower.medium).length;
+        advertSamples.where((s) => s.power == AdvertPower.medium).length;
     if (mediumCount >= midMinMediumSamples) return 'feet_30';
     return 'feet_60';
   }
 
   /// Sample volume + dwell behind this peer's current classification — the
   /// evidence the fusion layer weights confidence by. Counts high-power
-  /// samples in the live window (the ones the tier decision rests on).
+  /// advert samples in the live window (the ones the tier decision rests on).
   ProximityEvidence evidenceFor(String correlationId) {
     final track = _peers[correlationId];
     if (track == null) {
@@ -120,7 +148,9 @@ class RangeEstimator {
     }
     _prune(track, _now());
     final high = track.samples
-        .where((s) => s.power == AdvertPower.high)
+        .where((s) =>
+            s.source == ProximitySource.advertRssi &&
+            s.power == AdvertPower.high)
         .map((s) => s.rssi)
         .toList();
     return ProximityEvidence(
@@ -158,7 +188,9 @@ class RangeEstimator {
 
   bool _isNear(_PeerTrack track) {
     final highRssi = track.samples
-        .where((s) => s.power == AdvertPower.high)
+        .where((s) =>
+            s.source == ProximitySource.advertRssi &&
+            s.power == AdvertPower.high)
         .map((s) => s.rssi)
         .toList();
     if (highRssi.length < nearMinSamples) return false;

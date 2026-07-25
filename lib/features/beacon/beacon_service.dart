@@ -13,6 +13,7 @@ import 'package:in_range/features/beacon/gatt_token_reader.dart';
 import 'package:in_range/features/beacon/claim_manager.dart';
 import 'package:in_range/features/beacon/ephemeral_token_generator.dart';
 import 'package:in_range/features/beacon/location_keepalive.dart';
+import 'package:in_range/features/beacon/proximity_observation.dart';
 import 'package:in_range/features/beacon/range_estimator.dart';
 import 'package:in_range/features/beacon/wifi_scanner.dart';
 
@@ -985,7 +986,15 @@ class BeaconService {
     // for an entire field test (2026-07-13 walk).
     if (_ownCorrHexes.contains(hexId)) return;
 
-    rangeEstimator.addSample(hexId, rssi, power);
+    rangeEstimator.addObservation(
+      hexId,
+      ProximityObservation(
+        source: ProximitySource.advertRssi,
+        rssi: rssi,
+        localState: defaultTargetPlatform == TargetPlatform.iOS ? 'locked' : 'scan',
+      ),
+      power: power,
+    );
     // Raw per-advert persistence + verbose peer logging is CALIBRATION only.
     // In production it would retain a place/peer fingerprint and print peer
     // ids to release logs / bug reports (reviewer #18).
