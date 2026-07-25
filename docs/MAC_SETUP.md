@@ -53,7 +53,10 @@ no iOS-specific server step. You are only building a second client.
 3. Tick **Automatically manage signing**, pick your **Team** (any Apple ID works
    for device testing; a free account gives a 7-day provisioning profile, a paid
    account lasts a year).
-4. Bundle id is `io.inrange.inRange`. If your account already has that App ID or
+4. Add two capabilities if they are not already present:
+   - **Background Modes** → tick **Location updates** (BLE modes are already set).
+   - **Access WiFi Information** (needed by `WifiAssistPlugin.swift`).
+5. Bundle id is `io.inrange.inRange`. If your account already has that App ID or
    it collides, change it here to something unique (e.g. `io.inrange.inRange.dev`)
    — fine for testing; only the store build needs the final id.
 
@@ -99,6 +102,10 @@ connected iPhone, and runs. For a two-phone BLE test where both phones roam, use
   with). Until it lands: **foreground BLE works now** — keep the iPhone screen
   awake with the app open during walks. (The Androids do NOT need this — their
   foreground service runs locked-in-pocket.)
+- **New Swift files (`WifiAssistPlugin.swift`, `BackgroundLocationCoordinator.swift`)**
+  have not been compiled on the Linux box. Run the build script once before any
+  field test to catch Xcode/Swift/API errors early; `flutter test` does not
+  cover native code.
 
 ---
 
