@@ -26,6 +26,10 @@ final class SubtleWakeCoordinator: NSObject {
   private var channel: FlutterMethodChannel?
   private var locationManager: CLLocationManager?
   private var isRunning = false
+  /// True after Dart calls start(), even if it returned false because Location
+  /// Always was not yet granted. Lets applyAuthorizationStatus re-arm when the
+  /// user upgrades to Always mid-session.
+  private var wantsToRun = false
   /// Latest anchor set from Dart (id/lat/lon/radius/onEnter/onExit dicts),
   /// kept so start() and authorization upgrades can re-arm regions without a
   /// Dart round-trip. Regions are built lazily in applyRegions so the radius
@@ -67,6 +71,7 @@ final class SubtleWakeCoordinator: NSObject {
   // MARK: - Lifecycle
 
   private func start(result: FlutterResult) {
+    wantsToRun = true
     guard !isRunning else {
       result(true)
       return
@@ -95,7 +100,8 @@ final class SubtleWakeCoordinator: NSObject {
     case .notDetermined, .authorizedWhenInUse, .denied, .restricted:
       // Do NOT request authorization natively. Without Always there are no
       // background wakes, so report unavailable and let Dart's permission
-      // flow (or a fallback) handle it.
+      // flow (or a fallback) handle it. wantsToRun stays true so an auth
+      // upgrade re-arms without another Dart call.
       manager.delegate = nil
       result(false)
     @unknown default:
@@ -105,6 +111,7 @@ final class SubtleWakeCoordinator: NSObject {
   }
 
   private func stop(result: FlutterResult?) {
+    wantsToRun = false
     if let manager = locationManager {
       manager.stopMonitoringSignificantLocationChanges()
       for region in manager.monitoredRegions {
@@ -133,19 +140,33 @@ final class SubtleWakeCoordinator: NSObject {
     for region in manager.monitoredRegions where !wantedIds.contains(region.identifier) {
       manager.stopMonitoring(for: region)
     }
-    let monitoredIds = Set(manager.monitoredRegions.map { $0.identifier })
+    let monitoredById = Dictionary(
+      uniqueKeysWithValues: manager.monitoredRegions.compactMap {
+        $0 as? CLCircularRegion
+      }.map { ($0.identifier, $0) })
     for entry in desiredRegions {
       guard let id = entry["id"] as? String, !id.isEmpty,
-            !monitoredIds.contains(id),
             let lat = (entry["lat"] as? NSNumber)?.doubleValue,
             let lon = (entry["lon"] as? NSNumber)?.doubleValue,
             let radius = (entry["radius"] as? NSNumber)?.doubleValue
       else { continue }
       let center = CLLocationCoordinate2D(latitude: lat, longitude: lon)
       guard CLLocationCoordinate2DIsValid(center), radius > 0 else { continue }
+      let clampedRadius = min(radius, manager.maximumRegionMonitoringDistance)
+
+      // M1: an existing region with the same id but different geometry must be
+      // replaced, not skipped — otherwise the stale fence keeps firing.
+      if let existing = monitoredById[id] {
+        let sameCenter = abs(existing.center.latitude - lat) < 0.0001 &&
+                         abs(existing.center.longitude - lon) < 0.0001
+        let sameRadius = abs(existing.radius - clampedRadius) < 1
+        if sameCenter && sameRadius { continue }
+        manager.stopMonitoring(for: existing)
+      }
+
       let region = CLCircularRegion(
         center: center,
-        radius: min(radius, manager.maximumRegionMonitoringDistance),
+        radius: clampedRadius,
         identifier: id)
       region.notifyOnEntry = (entry["onEnter"] as? Bool) ?? true
       region.notifyOnExit = (entry["onExit"] as? Bool) ?? true
@@ -246,12 +267,18 @@ extension SubtleWakeCoordinator: CLLocationManagerDelegate {
   private func applyAuthorizationStatus(
     _ status: CLAuthorizationStatus, manager: CLLocationManager
   ) {
-    guard isRunning else { return }
     switch status {
     case .authorizedAlways:
-      manager.startMonitoringSignificantLocationChanges()
-      applyRegions(to: manager)
+      if isRunning {
+        manager.startMonitoringSignificantLocationChanges()
+        applyRegions(to: manager)
+      } else if wantsToRun {
+        // Dart asked to start earlier but Always was missing; the user just
+        // granted it. Re-arm without waiting for the next beacon toggle.
+        start { _ in }
+      }
     default:
+      guard isRunning else { return }
       // Anything below Always means no background wakes. Tear down so a
       // later start() — after Dart's permission flow — can re-arm cleanly.
       manager.stopMonitoringSignificantLocationChanges()

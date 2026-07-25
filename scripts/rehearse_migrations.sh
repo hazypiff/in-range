@@ -44,7 +44,15 @@ say "Bootstrapping Supabase platform stubs"
 $PSQL "$DB_NAME" <<'SQL'
 CREATE SCHEMA IF NOT EXISTS extensions;
 CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;
-CREATE EXTENSION IF NOT EXISTS pg_cron WITH SCHEMA extensions;
+-- pg_cron can only be installed into the database named in cron.database_name
+-- (normally 'postgres'). The rehearsal DB is throwaway, so skipping it is
+-- expected and does not affect the migration chain being tested.
+DO $$
+BEGIN
+  CREATE EXTENSION IF NOT EXISTS pg_cron WITH SCHEMA extensions;
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'pg_cron skipped: only installable in the cron.database_name database';
+END $$;
 CREATE EXTENSION IF NOT EXISTS pg_net WITH SCHEMA extensions;
 CREATE SCHEMA IF NOT EXISTS auth;
 CREATE TABLE auth.users (

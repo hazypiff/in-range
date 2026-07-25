@@ -68,6 +68,7 @@ class BeaconService {
       ..onRefreshLocation = _ensureLocationCache
       ..cachedFix = _cachedLocationFix
       ..hashSalt = () => _correlationSalt;
+    subtleWake.isBeaconOn = () => _isOn;
     subtleWake.onAnchorDerived = _onAnchorDerived;
     venueAnchors.onChanged =
         (descriptors) => unawaited(subtleWake.syncAnchors(descriptors));

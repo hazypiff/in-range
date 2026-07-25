@@ -102,6 +102,11 @@ class SubtleWakeService {
   /// Bounded BLE burst (scan restart). BeaconService.burst.
   Future<void> Function()? onBurst;
 
+  /// Whether the beacon is currently on. Checked before uploading a venue
+  /// hint so a buffered wake flushed after beacon-off does not leak the
+  /// user's coarse location and BSSID.
+  bool Function()? isBeaconOn;
+
   /// A wake-carried fix, fed into the sighting location cache.
   void Function(LocationAssistFix fix)? onFix;
 
@@ -117,7 +122,7 @@ class SubtleWakeService {
   /// VenueAnchorService.upsert.
   void Function(double lat, double lon, String? hashedBssid)? onAnchorDerived;
 
-  /// Salt for the BSSID hash. MUST be the same rotating salt the venue
+  /// Salt for the BSSID hash. MUST be the same static app HMAC secret the venue
   /// matcher uses (BeaconService's correlation salt) or client anchors and
   /// server-side fingerprints stop being comparable.
   String Function() hashSalt = () => AppConfig.hmacSecret;
@@ -267,6 +272,12 @@ class SubtleWakeService {
   /// the hint is an optimization for co-location inference, and a dead network
   /// or missing entitlement must never disturb the burst above.
   Future<void> _maybeUploadHint(SubtleWake wake) async {
+    // M3: do not leak location/BSSID after the user turned the beacon off.
+    // A buffered wake flushed on foreground must not upload.
+    if (isBeaconOn?.call() == false) {
+      debugPrint('Subtle wake: beacon off — venue hint skipped');
+      return;
+    }
     final fix = wake.fix ?? cachedFix?.call();
     if (fix == null) {
       // No position, no geohash — an anchor on nothing is worse than none.
@@ -355,9 +366,11 @@ class SubtleWakeService {
     return out.toString();
   }
 
-  /// HMAC-SHA256 of the lowercase BSSID with the rotating salt, 12 hex chars
-  /// — byte-for-byte the same form as Fingerprint.hashed, so a hint row
-  /// matches the venue fingerprints the Android matcher uploads.
+  /// HMAC-SHA256 of the lowercase BSSID with the static app HMAC secret, 12 hex
+  /// chars — byte-for-byte the same form as Fingerprint.hashed, so a hint row
+  /// matches the venue fingerprints the Android matcher uploads. (This is a
+  /// keyed hash, not a rotating salt: it protects BSSIDs only against parties
+  /// without the app binary.)
   static String hashBssid(String bssid, String salt) {
     final mac = Hmac(sha256, utf8.encode(salt));
     final digest = mac.convert(utf8.encode(bssid.toLowerCase()));

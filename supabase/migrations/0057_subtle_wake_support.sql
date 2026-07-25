@@ -7,8 +7,9 @@
 --                              uploads so the server can infer co-location
 --                              WITHOUT continuous raw GPS. Privacy model: the
 --                              geohash is city-level and the BSSID is hashed
---                              with a rotating salt before it leaves the device,
---                              so this table cannot reconstruct where a user is.
+--                              with the static app HMAC secret before it leaves
+--                              the device, so this table cannot reconstruct
+--                              where a user is.
 --   proximity_wake_requests  — internal outbox drained by the proximity-wake
 --                              Edge Function, which sends APNs silent pushes to
 --                              likely co-located devices so they run a BLE burst.

@@ -29,7 +29,7 @@ Tiers 0–4 are the "subtle" path: invisible to the user, low battery, and built
   - Coarse geohash (city-level) for candidate pruning.
   - Hashed BSSID for venue matching.
   - Full GPS only with a sighting record, as today.
-- **BSSIDs are hashed with a rotating salt** before leaving the device, same as the Android venue matcher.
+- **BSSIDs are hashed with the static app HMAC secret** before leaving the device, same as the Android venue matcher. This is a keyed hash, not a rotating salt: it protects BSSIDs only against parties without the app binary.
 - **Push tokens** are stored in the existing `public.device_push_tokens` table (migration 0005).
 - **Silent pushes contain no user data** — only a wake hint and a nonce.
 
@@ -90,7 +90,7 @@ Tiers 0–4 are the "subtle" path: invisible to the user, low battery, and built
 The combination is the novel part, not any single API:
 
 1. **BSSID venue anchors as privacy-preserving geofences.** Instead of geofencing raw coordinates, the client geofences the *hashed BSSID* of the current network. When the phone joins a network whose hash matches a peer's recent network, the server can infer co-location without either side revealing where they are.
-2. **Server-side co-location from sparse hints.** The server does not need continuous GPS. A coarse geohash plus a hashed BSSID is enough to say "these two devices are probably in the same coffee shop" and trigger a silent push.
+2. **Server-side co-location from sparse hints.** The server does not need continuous GPS. A coarse geohash plus a hashed BSSID is enough to say "these two devices are probably in the same coffee shop" and trigger a silent push. (The BSSID hash is keyed with the static app HMAC secret, not a rotating salt — see §Privacy model.)
 3. **BLE burst on co-location inference.** The expensive radio (BLE) only runs hot when the cheap radios (GPS + WiFi) say it is worth it.
 
 ## Setup requirements (Mac / Apple Developer)

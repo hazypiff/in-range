@@ -368,7 +368,18 @@ extension BackgroundBeacon: CBPeripheralManagerDelegate {
   func peripheralManager(
     _ peripheral: CBPeripheralManager, willRestoreState dict: [String: Any]
   ) {
-    // Restored services re-attach automatically; didUpdateState re-advertises.
+    // iOS relaunched us to service a GATT read or advert event. Rebuild the
+    // service and advertising state from the persisted batch so a peer can
+    // still read the current token before Dart attaches.
+    if let services = dict[CBPeripheralManagerRestoredStateServicesKey] as? [CBMutableService] {
+      for svc in services where svc.uuid == Self.serviceUUID {
+        serviceAdded = true
+      }
+    }
+    if !serviceAdded {
+      reconfigureAdvertising()
+    }
+    // didUpdateState follows and re-advertises if powered on.
   }
 
   func peripheralManagerDidStartAdvertising(
@@ -426,6 +437,20 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
   }
 
   func centralManager(_ central: CBCentralManager, willRestoreState dict: [String: Any]) {
+    // iOS relaunched us for a central event. Re-attach any restored
+    // peripherals and resume the filtered scan so discoveries keep flowing
+    // before Dart attaches.
+    if let peripherals = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral] {
+      for p in peripherals {
+        p.delegate = self
+        if p.state == .connected {
+          inflight[p.identifier] = p
+        }
+      }
+    }
+    if enabled {
+      ensureScanning()
+    }
     // didUpdateState follows and restarts the filtered scan.
   }
 

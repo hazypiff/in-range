@@ -30,7 +30,7 @@ class VenueAnchor {
   /// [VenueAnchorService.minRadiusM]..[VenueAnchorService.maxRadiusM] on upsert.
   final double radiusM;
 
-  /// HMAC-SHA256 of the venue's BSSID with the rotating device salt, 12 hex
+  /// HMAC-SHA256 of the venue's BSSID with the static app HMAC secret, 12 hex
   /// chars — the same form as the Android venue matcher (Fingerprint.hashed),
   /// so client anchors and server reports are comparable. Null when no network
   /// was seen at the venue.
