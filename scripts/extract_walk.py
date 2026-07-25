@@ -52,6 +52,25 @@ Three things differ on that side, all handled here:
     another day sits in the same table. Windows exclude it; --ios-corr also
     filters by peer. IMPORTANT: the iPhone must be foregrounded once after the
     walk before pulling, or buffered samples never flush and the table is empty.
+
+CLOUD SIDE. Either input may instead be `cloud:<device_id>`, which fetches that
+device's rssi_samples (migration 0056) instead of reading a file — for phones
+you cannot plug in, which is every real user. Needs SUPABASE_URL and
+SUPABASE_SERVICE_ROLE_KEY in the environment:
+
+  python3 scripts/extract_walk.py s22.threadtime.log.gz cloud:<device-uuid> \
+      --stations 10ft@10:00:00+90 --pair s22-iphone15p --json walk.json
+
+Requires a build carrying the uploader; a walk run from an older calibration
+freeze has no server rows and must be pulled over USB. Rows are ordered by
+device_seq (the phone's rssi_log rowid), and a HOLE in that sequence is fatal
+by default: dropped rows and a quiet peer are indistinguishable from the RSSI
+stream alone. --allow-seq-gaps accepts it, and that walk is not trainable.
+
+The walk_id digest covers in-window SAMPLES, not the source file, so the same
+walk extracted over USB and over the network yields the SAME walk_id. That
+equality is the end-to-end check that the upload was lossless — keep pulling
+the DB alongside the cloud fetch until you trust it.
 """
 import argparse
 import csv
@@ -187,6 +206,95 @@ def ios_rows(path, corr_prefix=None):
     return rows
 
 
+CLOUD_PREFIX = "cloud:"
+CLOUD_PAGE = 1000  # PostgREST's default max_rows
+
+
+def is_cloud(path):
+    return str(path).startswith(CLOUD_PREFIX)
+
+
+def cloud_rows(spec, corr_prefix=None, allow_gaps=False):
+    """rssi_samples for one device, in the same shape as ios_rows().
+
+    Spec is `cloud:<device_id>`. Reads SUPABASE_URL and a key from the
+    environment (SUPABASE_SERVICE_ROLE_KEY, else SUPABASE_KEY) — the service
+    role is needed because the walker's rows belong to their auth user, not to
+    whoever runs the extractor.
+
+    Ordered by device_seq, NOT at_ms: device_seq is the phone's rssi_log rowid,
+    so ordering by it is insertion order, and a hole in it is the one thing a
+    stream of RSSI values cannot tell you — "the peer went quiet" and "the
+    upload dropped rows" look identical otherwise.
+    """
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    device_id = spec[len(CLOUD_PREFIX):]
+    if not device_id:
+        raise SystemExit("cloud spec needs a device id: cloud:<device_id>")
+    base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    key = (os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+           or os.environ.get("SUPABASE_KEY", ""))
+    if not base or not key:
+        raise SystemExit(
+            "cloud extraction needs SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY "
+            "(or SUPABASE_KEY) in the environment")
+
+    out, offset = [], 0
+    while True:
+        q = urllib.parse.urlencode({
+            "device_id": f"eq.{device_id}",
+            "select": "device_seq,at_ms,correlation_id,rssi,power",
+            "order": "device_seq.asc",
+            "limit": CLOUD_PAGE,
+            "offset": offset,
+        })
+        req = urllib.request.Request(
+            f"{base}/rest/v1/rssi_samples?{q}",
+            headers={"apikey": key, "Authorization": f"Bearer {key}",
+                     "Accept": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                page = json.load(r)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", "replace")[:400]
+            raise SystemExit(f"cloud fetch failed ({e.code}): {body}")
+        except urllib.error.URLError as e:
+            raise SystemExit(f"cloud fetch failed: {e.reason}")
+        out.extend(page)
+        if len(page) < CLOUD_PAGE:
+            break
+        offset += CLOUD_PAGE
+
+    if not out:
+        raise SystemExit(
+            f"no rssi_samples for device_id={device_id}. Check the id, and "
+            "that the walk phone foregrounded the app after the walk so the "
+            "uploader drained.")
+
+    seqs = [int(r["device_seq"]) for r in out]
+    missing = (seqs[-1] - seqs[0] + 1) - len(seqs)
+    if missing and not allow_gaps:
+        raise SystemExit(
+            f"device_seq has {missing} missing row(s) between {seqs[0]} and "
+            f"{seqs[-1]}. Either the upload dropped samples or the 7-day local "
+            "prune deleted them before they shipped — both make this walk's "
+            "sample counts wrong. Re-run with --allow-seq-gaps to accept it, "
+            "and stamp the walk --trainable no.")
+    if missing:
+        print(f"WARNING: accepting {missing} missing device_seq row(s) — "
+              "high_n/med_n are undercounts for this side")
+
+    rows = [(int(r["at_ms"]), str(r["correlation_id"]), int(r["rssi"]),
+             str(r["power"])) for r in out]
+    rows.sort(key=lambda r: r[0])
+    if corr_prefix:
+        rows = [r for r in rows if r[1].startswith(corr_prefix)]
+    return rows
+
+
 def ios_dates(rows):
     """{local_date: n_rows} — used to pick the walk day and to show the
     operator what else is sitting in an append-only table."""
@@ -230,7 +338,16 @@ def parse_ios_db(path, offset=0.0, date=None, corr_prefix=None, stations=None):
     a prior soak's rows sit in the same table and an unwrapper seeded on "the
     first row in the file" would anchor the whole walk to the wrong day.
     """
-    rows = ios_rows(path, corr_prefix)
+    return parse_ios_rows(ios_rows(path, corr_prefix), offset, date, stations)
+
+
+def parse_ios_rows(rows, offset=0.0, date=None, stations=None):
+    """The half of parse_ios_db() that does not care where the rows came from.
+
+    Shared with the cloud path so a walk extracted over the network goes
+    through byte-identical windowing and digest arithmetic as the same walk
+    extracted over USB — which is what makes the two comparable at all.
+    """
     if not rows:
         return {"adverts": [], "wifi": [], "gps": [], "ios": {
             "date": date, "n_total": 0, "n_day": 0, "dates": {}}}
@@ -479,6 +596,10 @@ def main():
                     "on, for .db inputs. Default: the densest day in rssi_log. "
                     "rssi_log is append-only across sessions, so set this "
                     "explicitly when the DB also holds soak/desk-test rows")
+    ap.add_argument("--allow-seq-gaps", action="store_true",
+                    help="accept missing device_seq rows on a cloud side "
+                         "(sample counts become undercounts; stamp the walk "
+                         "--trainable no)")
     ap.add_argument("--ios-corr", help="only count rssi_log rows whose "
                     "correlation_id starts with this prefix (the peer being "
                     "measured) — use when the DB saw more than one peer")
@@ -515,6 +636,10 @@ def main():
                 else parse_stations(args.stations))
 
     def load(path, offset):
+        if is_cloud(path):
+            return parse_ios_rows(
+                cloud_rows(path, args.ios_corr, args.allow_seq_gaps),
+                offset, args.ios_date, stations)
         if is_ios_db(path):
             return parse_ios_db(path, offset, args.ios_date, args.ios_corr,
                                 stations)
@@ -548,7 +673,7 @@ def main():
     # A wrong --ios-date is the one failure that looks like a successful run:
     # every station reports SILENT and the walk quietly becomes untrainable.
     for side, path, data in (("A", args.logA, dataA), ("B", args.logB, dataB)):
-        if not is_ios_db(path) or not data["adverts"]:
+        if not (is_ios_db(path) or is_cloud(path)) or not data["adverts"]:
             continue
         in_win = sum(r[side.lower()]["high_n"] + r[side.lower()]["med_n"]
                      for r in rows)
@@ -587,8 +712,15 @@ def main():
                     args.logA, args.logB, args.pair, args.capture_meta,
                     args.freeze,
                     digests={
-                        os.path.basename(p): (ios_digest(rows, side)
-                                              if is_ios_db(p) else file_sha256(p))
+                        # A cloud side has no file to hash — and must not: the
+                        # digest covers IN-WINDOW SAMPLES, which is exactly why
+                        # the same walk pulled over USB and fetched from the
+                        # server yields the same walk_id. That equality is the
+                        # end-to-end proof the upload was lossless.
+                        os.path.basename(p): (
+                            ios_digest(rows, side)
+                            if (is_ios_db(p) or is_cloud(p))
+                            else file_sha256(p))
                         for (p, side) in ((args.logA, "a"), (args.logB, "b"))}),
                 "stations": [{"label": l, "start": hms(a), "end": hms(b)}
                              for (l, a, b) in stations]}

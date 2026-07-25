@@ -320,5 +320,109 @@ class IosDbTest(unittest.TestCase):
             self.assertFalse(ew.is_ios_db(p), p)
 
 
+
+
+def fake_cloud(rows, *, drop=()):
+    """Patch urlopen so cloud_rows() sees `rows` as PostgREST JSON.
+
+    rows: [(device_seq, at_ms, correlation_id, rssi, power)]; `drop` removes
+    those device_seqs to simulate samples the upload never delivered.
+    """
+    import contextlib
+    import io as _io
+    import json as _json
+    import urllib.request
+
+    payload = [{"device_seq": s, "at_ms": a, "correlation_id": c,
+                "rssi": r, "power": p}
+               for (s, a, c, r, p) in rows if s not in drop]
+
+    @contextlib.contextmanager
+    def _patch():
+        real = urllib.request.urlopen
+        served = {"n": 0}
+
+        def fake(req, *a, **kw):
+            # One page is enough; cloud_rows stops when a page is short.
+            served["n"] += 1
+            body = _json.dumps(payload if served["n"] == 1 else []).encode()
+            return contextlib.closing(_io.BytesIO(body))
+        urllib.request.urlopen = fake
+        try:
+            yield
+        finally:
+            urllib.request.urlopen = real
+    return _patch()
+
+
+class CloudExtractionTest(unittest.TestCase):
+    DATE = "2026-07-25"
+
+    def _rows(self):
+        # 40 samples inside one station window, contiguous device_seq.
+        return [(i + 1, at(self.DATE, "10:00:%02d" % (20 + i)), "abcdef0123",
+                 -60, "H") for i in range(40)]
+
+    def setUp(self):
+        os.environ["SUPABASE_URL"] = "https://example.invalid"
+        os.environ["SUPABASE_SERVICE_ROLE_KEY"] = "test-key"
+
+    def test_cloud_and_usb_produce_the_same_walk_id(self):
+        """The property the whole cloud path exists to be trusted on.
+
+        The digest covers in-window SAMPLES, not the source, so the same walk
+        pulled over USB and fetched from the server must agree exactly. If it
+        ever does not, the upload dropped or reordered rows and the USB pull is
+        the ground truth that proves it.
+        """
+        rows = self._rows()
+        stations = ew.parse_stations(["10ft@10:00:00+90"])
+
+        db = write_ios_db([(a, c, r, p) for (_s, a, c, r, p) in rows])
+        self.addCleanup(os.remove, db)
+        usb = ew.parse_ios_db(db, date=self.DATE, stations=stations)
+
+        with fake_cloud(rows):
+            cloud = ew.parse_ios_rows(
+                ew.cloud_rows("cloud:dev-a"), date=self.DATE, stations=stations)
+
+        self.assertEqual(usb["adverts"], cloud["adverts"])
+        empty = {"adverts": [], "wifi": [], "gps": []}
+        usb_rows = ew.extract(usb, empty, stations, 0, 60)
+        cloud_rows_ = ew.extract(cloud, empty, stations, 0, 60)
+        self.assertEqual(ew.ios_digest(usb_rows, "a"),
+                         ew.ios_digest(cloud_rows_, "a"))
+
+    def test_a_device_seq_gap_is_fatal(self):
+        """A hole means dropped rows, and RSSI values alone cannot reveal it:
+        'the peer went quiet' and 'the upload lost samples' look identical."""
+        with fake_cloud(self._rows(), drop=(10, 11, 12)):
+            with self.assertRaises(SystemExit) as cm:
+                ew.cloud_rows("cloud:dev-a")
+        self.assertIn("device_seq", str(cm.exception))
+
+    def test_gaps_can_be_accepted_explicitly(self):
+        with fake_cloud(self._rows(), drop=(10,)):
+            got = ew.cloud_rows("cloud:dev-a", allow_gaps=True)
+        self.assertEqual(len(got), 39)
+
+    def test_empty_result_explains_the_usual_cause(self):
+        with fake_cloud([]):
+            with self.assertRaises(SystemExit) as cm:
+                ew.cloud_rows("cloud:dev-a")
+        self.assertIn("foreground", str(cm.exception))
+
+    def test_missing_credentials_fail_loudly(self):
+        os.environ.pop("SUPABASE_SERVICE_ROLE_KEY")
+        os.environ.pop("SUPABASE_KEY", None)
+        with self.assertRaises(SystemExit) as cm:
+            ew.cloud_rows("cloud:dev-a")
+        self.assertIn("SUPABASE", str(cm.exception))
+
+    def test_cloud_spec_detection(self):
+        self.assertTrue(ew.is_cloud("cloud:abc"))
+        self.assertFalse(ew.is_cloud("walk.threadtime.log.gz"))
+        self.assertFalse(ew.is_cloud("iphone.db"))
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
