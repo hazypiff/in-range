@@ -42,19 +42,42 @@ mechanically; record everything; the decision rule is at the bottom.
 
 ## 1. The pair test (two stationary dark phones, one venue)
 
-1. Sign in on both phones, turn the beacon **on** on both. Confirm the UI
-   shows on and `cloudSynced` true (claim landed).
-2. Background both apps (home gesture — **never force-quit**; a force-quit
+**Contamination rules — violations produce a false pass, which is worse
+than no data:**
+
+- Install the release build, then **detach the debugger** and launch from
+  the home screen. A debugger-attached process changes background-push
+  throttling (Apple, forums 745188), and silent pushes are capped at ~2-3
+  per hour regardless — this test measures production behavior or it
+  measures nothing.
+- Keep the phones **out of BLE range of each other for all of setup**
+  (different rooms). Every artifact produced before the dark interval
+  must be excludable by timestamp — a foreground/setup sighting surfacing
+  later as a "dark detection" is the classic false pass.
+- Record an exact **UTC T0** (the moment both screens go dark). Either
+  clear `Documents/bb_wake_log.txt` and any prior test rows first, or
+  strictly filter every artifact — wake log, sightings, rssi_samples —
+  by `observed_at >= T0`. Never eyeball unfiltered logs.
+
+**Procedure:**
+
+1. Apart (no BLE contact): sign in on both, beacon **on**, confirm UI on +
+   `cloudSynced` true. Confirm Location Always on both.
+2. Background both apps (home gesture — **never force-quit**; force-quit
    is the documented boundary where iOS refuses all restoration).
-3. Screens off. Place both phones on one table, ~3 m apart, stationary.
-   Start a wall-clock timer.
-4. Leave them **60 minutes**, undisturbed, in normal room conditions
-   (WiFi on, cellular on).
-5. **Do not open the apps.** Pull the native wake logs via USB:
-   `Documents/bb_wake_log.txt` from each app container
-   (Xcode → Devices & Simulators → downloaded container, or `cfgutil`).
-6. Foreground both apps (buffered sightings drain + upload). Wait 2 min.
-7. Server check: `sightings` rows for both directions,
+3. Screens dark. Record **T0**. Wait 5 minutes (let both processes fully
+   suspend; a sighting in the first minutes after backgrounding is the
+   foreground session draining, not a dark detection).
+4. Without unlocking or touching either phone, carry them into the same
+   room and place them on one table, ~3 m apart. The carry is the SLC
+   trigger — that is intended; a run with NO movement is the CLVisit arm
+   (§4 arms).
+5. Leave them **60 minutes**, undisturbed.
+6. **Do not open the apps.** Pull `Documents/bb_wake_log.txt` from each
+   container (Xcode → Devices & Simulators → downloaded container, or
+   `cfgutil`).
+7. Foreground both apps (buffered sightings drain + upload). Wait 2 min.
+8. Server check, filtered by T0: `sightings` rows for both directions,
    `token_claim_history` coverage for the slots served during the hour,
    `rssi_samples` if the upload flag was on.
 
@@ -72,11 +95,22 @@ the number gets quoted later as "with everything on."
 
 | Field | A→B | B→A |
 |---|---|---|
-| Time to first detection (min) | | |
+| Native capture latency (min, wake-log → first sighting ts ≥ T0) | | |
+| Server-ingestion latency (min, T0 → first sightings row) | | |
 | Total detections in 60 min | | |
 | Native wakes by kind (slc / visit / region / push / bgtask / gatt-read) | | |
 | Sightings reaching server (count) | | |
 | First-detection path (which wake preceded it) | | |
+
+The two latencies measure different failures: native capture is the BLE
+carrier + wake net; server ingestion adds the drain, upload, and
+resolution chain. A fast native capture with slow server ingestion is a
+client-pipeline bug, not a BLE one.
+
+**One run is a smoke test, not a result.** Call it a product result only
+after **≥3 independent trials per arm** (fresh dark interval each, phones
+re-separated between trials), reported as success rate plus median/worst
+latency — never as the best trial.
 
 The wake-log timestamps are what make "nothing happened" diagnosable:
 
@@ -88,7 +122,24 @@ The wake-log timestamps are what make "nothing happened" diagnosable:
 - **Sightings + rows, late** → working but slow; the tier mix decides
   whether tier 4 or tier 2/3 carried it.
 
-## 3. Controls (same session, after the pair test)
+## 3. Arms and controls
+
+**Arms (each needs its own ≥3 trials — different builds, different
+questions):**
+
+- **Arm R-on**: `INRANGE_LOCATION_RESIDENCY=true` on both phones. The
+  residency path is the compliance-sensitive one (continuous-location
+  session); it must PROVE its value or ship off (handoff §16.2 #8).
+- **Arm R-off**: same binary, `INRANGE_LOCATION_RESIDENCY=false`. This is
+  the same-binary A/B the residency review has demanded since 2026-07-24 —
+  R-on is only defensible if it beats R-off by a real margin.
+- **CLVisit arm**: skip step 1.4's carry — place both phones at the venue
+  BEFORE darkening them, so nothing moves during the hour. This isolates
+  the no-motion arrival path. Note: CLVisit is **opportunistic** — Apple
+  delivers visits with power-efficient delay, not as a deterministic
+  arrival alarm — so a slow visit wake is expected behavior, not a bug.
+
+**Controls (same session, after the arms):**
 
 - **Force-quit boundary (expected failure)**: force-quit app A. iOS must
   NOT relaunch it (TN3115). Document what B hears over the next 15 min —
@@ -98,11 +149,16 @@ The wake-log timestamps are what make "nothing happened" diagnosable:
 
 ## 4. Decision rule
 
-- **Detection within ≤10 min of co-location, both directions, on the
-  first trial** → the screen-off gap is closed for the stationary-venue
-  case. Ship the capability commit, move to the persistent-GATT bench
-  (handoff §16.2 #3) for latency, and start drafting the honest number
-  into the product copy.
+- **Detection within ≤10 min of co-location, both directions, ≥3/3 trials
+  of at least one arm** → the screen-off gap is closed for the
+  stationary-venue case. Ship the capability commit, move to the
+  persistent-GATT bench (handoff §16.2 #3) for latency, and start drafting
+  the honest number — success rate + median/worst, per arm — into the
+  product copy.
+- **R-on materially beats R-off** (faster median or higher success) → the
+  residency flag earns its compliance cost; document the margin in the
+  handoff. **R-on ≈ R-off** → residency ships OFF; the continuous-location
+  indicator is not defensible without a measured benefit.
 - **Detection only after 30+ min, or only via BGTask overlap** → tier 4
   is not firing. Debug the APNs chain (token registered? `device_push_tokens`
   row with provider='apns'? Edge Function logs? APNs HTTP status?) before

@@ -113,6 +113,12 @@ class BeaconService {
   /// token rotation) so the UI never shows a green beacon over dead BLE.
   void Function()? onBeaconStopped;
 
+  /// Account-pause probe for the restore path (wired by the provider to the
+  /// session controller). A paused account is "hidden from new encounters" —
+  /// restoring its native beacon would advertise behind the paused UI, so
+  /// restoreNativeSession stops native instead. Null = never paused (tests).
+  bool Function()? isAccountPaused;
+
   /// Drains the calibration RSSI upload queue (see RssiUploader). Rides the
   /// existing 45 s sighting-flush timer rather than adding a second one, and
   /// fires once more on stop so a walk ships its tail without waiting for the
@@ -242,14 +248,17 @@ class BeaconService {
   /// over a live beacon. One canonical state: if native says the beacon is
   /// on, Dart re-runs the full session (fresh claim, timers, wake sources)
   /// and the UI follows; if Dart cannot run a session (signed out, missing
-  /// secrets) the native side is stopped so nothing advertises behind the
+  /// secrets, or a PAUSED account — "hidden from new encounters" must not
+  /// advertise) the native side is stopped so nothing advertises behind the
   /// user's back. Returns true when a session was restored. No-op off iOS
   /// and when the beacon is already on.
   Future<bool> restoreNativeSession() async {
     if (_isOn) return false;
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return false;
     if (!await _bgBeacon.isNativeEnabled()) return false;
-    if (_userId.trim().isEmpty || !AppConfig.hasCryptoSecrets) {
+    if (_userId.trim().isEmpty ||
+        !AppConfig.hasCryptoSecrets ||
+        isAccountPaused?.call() == true) {
       debugPrint('Native beacon active but session not restorable — stopping');
       await _bgBeacon.stop();
       return false;
@@ -1478,17 +1487,19 @@ class BeaconService {
   /// the native iOS carrier can serve resolvable through token_claim_history
   /// while Dart is suspended. Failures are swallowed — the live per-rotation
   /// claim still covers the current slot; the pre-claim is the safety net.
+  /// The backoff timestamp is set only on SUCCESS: a failed attempt must not
+  /// suppress the retry due on the next rotation.
   Future<void> _preclaimBatch() async {
     final now = DateTime.now();
     final last = _lastBatchPreclaim;
     if (last != null && now.difference(last) < const Duration(hours: 6)) {
       return;
     }
-    _lastBatchPreclaim = now;
     try {
       await InRangeSupabase.client.rpc('claim_token_batch', params: {
         'p_range': _mapUiRangeToDb(_claimRangeType ?? 'feet_60'),
       }).timeout(const Duration(seconds: 10));
+      _lastBatchPreclaim = now;
       debugPrint('claim_token_batch OK');
     } catch (e) {
       debugPrint('claim_token_batch failed: $e');

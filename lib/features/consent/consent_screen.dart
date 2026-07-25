@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'package:in_range/features/beacon/beacon_provider.dart';
 import 'package:in_range/shared/services/consent_service.dart';
@@ -340,16 +341,26 @@ class _PolicyLink extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Rendered as visible URLs rather than tap-only links so the destination is
-    // never hidden from the user, and so this works before any in-app browser
-    // dependency is added.
+    // Apple 5.1.1: the privacy policy must be "easily accessible" — a visible
+    // URL (never hidden behind chrome-less link text) that also OPENS. The
+    // tooltip keeps the raw destination visible alongside the tap target.
     return Tooltip(
       message: url,
-      child: Text(
-        label,
-        style: TextStyle(
-          color: Theme.of(context).colorScheme.primary,
-          decoration: TextDecoration.underline,
+      child: InkWell(
+        onTap: () async {
+          final uri = Uri.parse(url);
+          try {
+            await launchUrl(uri, mode: LaunchMode.externalApplication);
+          } catch (e) {
+            debugPrint('Policy link open failed ($url): $e');
+          }
+        },
+        child: Text(
+          label,
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.primary,
+            decoration: TextDecoration.underline,
+          ),
         ),
       ),
     );

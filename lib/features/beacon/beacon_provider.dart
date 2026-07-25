@@ -113,6 +113,10 @@ final beaconServiceProvider = Provider<BeaconService>((ref) {
   // eager read made merely rendering BeaconScreen throw "Override LocalDb in
   // main()".
   service.onFlushUploads = () => ref.read(rssiUploaderProvider).flush();
+  // A paused account must never have its native beacon restored (app_root's
+  // paused screen never builds the beacon UI, so this gate is a backstop to
+  // the cold-start reconcile in main()).
+  service.isAccountPaused = () => ref.read(sessionControllerProvider).paused;
   ref.onDispose(service.turnOffBeacon);
   return service;
 });

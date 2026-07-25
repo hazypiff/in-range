@@ -119,12 +119,17 @@ final class BackgroundBeacon: NSObject {
     // ones die before iOS's coalesced deliveries arrive (2026-07-23 bench).
     restartScanNow()
     reconfigureAdvertising()  // re-assert the advert while we have cycles
-    task.expirationHandler = {
-      task.setTaskCompleted(success: true)
+    // Double-completion is a documented no-op for the OS but muddies crash
+    // logs; complete exactly once from whichever fires first.
+    var completed = false
+    let completeOnce = {
+      if !completed {
+        completed = true
+        task.setTaskCompleted(success: true)
+      }
     }
-    DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
-      task.setTaskCompleted(success: true)
-    }
+    task.expirationHandler = { completeOnce() }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 20) { completeOnce() }
   }
 
   func attach(messenger: FlutterBinaryMessenger) {
@@ -209,15 +214,19 @@ final class BackgroundBeacon: NSObject {
     if !sane.isEmpty { defaults.set(sane, forKey: Self.keySlots) }
   }
 
-  /// The token for the slot covering NOW; falls back to the newest slot that
-  /// has started (serving a slightly-stale token beats serving nothing).
+  /// The token for the slot covering NOW. Returns nil when nothing covers —
+  /// the old fallback served the newest EXPIRED token ("stale beats
+  /// nothing"), but every claim on an expired token is unresolvable
+  /// server-side, so peers burned a connect + read for a token the server
+  /// would reject. With today+tomorrow batches (0060 client side) an
+  /// uncovered "now" only happens after >24 h without Dart, and the honest
+  /// answer then is no token at all.
   private func currentTokenHex() -> String? {
     guard let list = defaults.array(forKey: Self.keySlots) as? [[String: Any]] else {
       return nil
     }
     let nowMs = Date().timeIntervalSince1970 * 1000
     var covering: (hex: String, from: Double)?
-    var started: (hex: String, from: Double)?
     for s in list {
       guard let hex = s["t"] as? String,
             let f = (s["f"] as? NSNumber)?.doubleValue,
@@ -225,11 +234,8 @@ final class BackgroundBeacon: NSObject {
       if f <= nowMs && nowMs < u && (covering == nil || f > covering!.from) {
         covering = (hex, f)
       }
-      if f <= nowMs && (started == nil || f > started!.from) {
-        started = (hex, f)
-      }
     }
-    return covering?.hex ?? started?.hex
+    return covering?.hex
   }
 
   private static func hexToData(_ hex: String) -> Data? {

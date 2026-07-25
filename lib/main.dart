@@ -62,11 +62,16 @@ Future<void> main() async {
   // when this isolate starts. The session-restore path only runs when the
   // beacon UI is built, which onboarding/auth/paused routes never do. The
   // beacon requires sign-in (turnOnBeacon refuses otherwise), so no user
-  // here means the native side must be off — stop it now, before any route.
+  // here means the native side must be off — and a PAUSED account is
+  // "hidden from new encounters", so it must not be advertising either.
+  // Stop native now, before any route.
   if (!kIsWeb && Platform.isIOS) {
     try {
-      if (InRangeSupabase.clientOrNull?.auth.currentUser == null) {
-        debugPrint('No session at cold start — stopping native beacon/wake');
+      final signedOut = InRangeSupabase.clientOrNull?.auth.currentUser == null;
+      final paused = prefs.getBool('paused') ?? false;
+      if (signedOut || paused) {
+        debugPrint('No active session at cold start '
+            '(signedOut=$signedOut paused=$paused) — stopping native beacon/wake');
         await BackgroundBeaconChannel().stop();
         await SubtleWakeService().stop();
       }

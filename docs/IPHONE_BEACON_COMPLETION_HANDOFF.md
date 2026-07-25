@@ -21,7 +21,7 @@ This document is the single source of truth for the next agent. It combines the 
 ### 16.1 What the four agents established
 
 - The six criticals from `e8ad7b9` were independently re-verified at file:line — PASS, with adversarial probes (ack-loss, restore-vs-wake race, batch-growth, cross-user merge).
-- **The iOS CI build is GREEN** (`docs/CI_IOS_BUILD.md`, run 30177777377, unsigned IPA artifact) — the "Swift has never compiled" risk is closed, and every push now compiles the target for free on the public repo.
+- **The iOS CI build is GREEN** (`docs/CI_IOS_BUILD.md`) — the "Swift has never compiled" risk is closed, and every push now compiles the target for free on the public repo. For `f6bf21e` specifically (the CLVisit build): runs `30178447233` (push) and `30178452447` (dispatch), both success. (Run `30177777377`, cited in `CI_IOS_BUILD.md`'s header, built `9bddc86` — before CLVisit.)
 - Four App-Review-visible blockers remained; three were Linux-fixable and are fixed in `f6bf21e`. The fourth (Push Notifications capability / `aps-environment`) is still Mac-only and still the one thing between "wired" and "deterministic" for tier 4.
 
 ### 16.2 Still open (next round, in order)
@@ -33,7 +33,9 @@ This document is the single source of truth for the next agent. It combines the 
 5. **Server-coordinated burst scheduling** — when phone A wakes, the Edge Function skews silent pushes to same-cell peers by 2–5 s so A's burst overlaps B's push window. Pure server logic; gated on the APNs capability.
 6. **BSSID salt rotation** — the venue-hint BSSID hash currently uses the static app HMAC secret; rotate daily to bound venue-fingerprint linkability.
 7. **Region radius vs geohash cell** — the 2 km anchor radius does not cover a ~5 km precision-5 cell; revisit when anchors drive tier-3 wakes.
-8. **INRANGE_LOCATION_RESIDENCY governance** — now `true` in the dev `.env` (gitignored, so the reversal exists in no history). It must not become the shipped default by inertia: its own gate (same-binary A/B on locked hardware) has still not been run.
+8. **INRANGE_LOCATION_RESIDENCY governance** — now `true` in the dev `.env` (gitignored, so the reversal exists in no history). It must not become the shipped default by inertia: its own gate (same-binary A/B on locked hardware) has still not been run — the pair-test protocol now builds that A/B in as arms R-on/R-off.
+9. **CI release lane with the intended test profile** — `ios-build.yml` compiles with the flags unset; add a lane that compiles with `INRANGE_SUBTLE_WAKE=true` / `INRANGE_LOCATION_RESIDENCY=true` so the production-intended configuration is the one CI proves. The static half of the policy shipped in `test/config_policy_test.dart`.
+10. **Durable ID-based outbox** — the drains are serialized (the overlap-ack race is closed), but ack still precedes any durable SQLite/server commit; a crash between ack and upload still loses sightings. Stable native event IDs → transactional outbox → idempotent server upload → delete after server ack is the endgame.
 
 ### 16.3 Confirmed absent (keep absent — this is the compliance edge)
 
