@@ -11,7 +11,22 @@
 set -euo pipefail
 
 DB_NAME="inrange_rehearsal_$(date +%s)"
-PSQL="psql -h localhost -U postgres -d"
+
+# Prefer a local psql; fall back to the Supabase container, which is how the
+# dev box is actually set up — there is no psql binary on the host there, so a
+# hardcoded `psql` meant this script could never run on the machine it was
+# written for.
+if command -v psql >/dev/null 2>&1; then
+  PSQL="psql -h localhost -U postgres -d"
+else
+  CONTAINER="${SUPABASE_DB_CONTAINER:-supabase_db_in-range}"
+  if ! docker exec "$CONTAINER" true 2>/dev/null; then
+    printf 'FAIL: no psql on PATH and container "%s" is not running.\n' "$CONTAINER" >&2
+    printf '      Start the local Supabase stack, or set SUPABASE_DB_CONTAINER.\n' >&2
+    exit 1
+  fi
+  PSQL="docker exec -i $CONTAINER psql -U postgres -d"
+fi
 
 say() { printf '%s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
@@ -71,13 +86,19 @@ CREATE TABLE vault.decrypted_secrets (
   name TEXT PRIMARY KEY,
   decrypted_secret TEXT
 );
-CREATE PUBLICATION supabase_realtime FOR ALL TABLES;
+-- Empty, NOT "FOR ALL TABLES": that is how Supabase actually creates it, and
+-- 0019 does ALTER PUBLICATION ... DROP TABLE, which Postgres rejects outright
+-- on a FOR ALL TABLES publication. With the wrong form the rehearsal dies at
+-- migration 19 of 59.
+CREATE PUBLICATION supabase_realtime;
 SQL
 
 say "Applying migrations"
 for f in supabase/migrations/*.sql; do
   say "  $f"
-  $PSQL "$DB_NAME" -v ON_ERROR_STOP=1 -f "$f" >/dev/null
+  # stdin, not -f: under `docker exec` the path would have to exist INSIDE the
+  # container, so -f silently breaks the container fallback.
+  $PSQL "$DB_NAME" -v ON_ERROR_STOP=1 < "$f" >/dev/null
 done
 
 say "Asserting accumulated clauses"
