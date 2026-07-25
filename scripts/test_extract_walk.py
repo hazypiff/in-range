@@ -424,5 +424,43 @@ class CloudExtractionTest(unittest.TestCase):
         self.assertFalse(ew.is_cloud("walk.threadtime.log.gz"))
         self.assertFalse(ew.is_cloud("iphone.db"))
 
+
+class ThinStationTest(unittest.TestCase):
+    """A locked iPhone samples in sparse wake bursts, so a station can hold one
+    or two adverts. n=0 is already safe (no high_med key -> train.py skips the
+    feature). n=1..4 is the hazard: it produces a real-looking median that
+    ingest.py forwards as a training row."""
+
+    def _side(self, n):
+        adverts = [(30.0 + i, "abcdef01", -70, "H") for i in range(n)]
+        return {"adverts": adverts, "wifi": [], "gps": []}
+
+    def test_single_sample_station_is_flagged_thin(self):
+        p = ew.phone_station(self._side(1), 0.0, 90.0, trim=20)
+        self.assertEqual(p["high_n"], 1)
+        self.assertTrue(p["thin"])
+        # It still yields a median -- which is exactly why the flag exists.
+        self.assertIn("high_med", p)
+
+    def test_well_sampled_station_is_not_thin(self):
+        p = ew.phone_station(self._side(40), 0.0, 90.0, trim=20)
+        self.assertFalse(p["thin"])
+
+    def test_silent_station_is_not_thin(self):
+        """SILENT is already handled: no high_med at all, so nothing to warn
+        about and nothing for the trainer to misread."""
+        p = ew.phone_station(self._side(0), 0.0, 90.0, trim=20)
+        self.assertEqual(p["high_n"], 0)
+        self.assertFalse(p["thin"])
+        self.assertNotIn("high_med", p)
+
+    def test_threshold_matches_the_trainer_baseline(self):
+        """learn/train.py:93 gates its rules baseline on high_n >= 5. One
+        definition of 'enough samples', not two."""
+        self.assertEqual(ew.MIN_HIGH_N, 5)
+        self.assertFalse(ew.phone_station(self._side(5), 0.0, 90.0, trim=20)["thin"])
+        self.assertTrue(ew.phone_station(self._side(4), 0.0, 90.0, trim=20)["thin"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

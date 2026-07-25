@@ -91,6 +91,13 @@ MAX_AP_AGE = 60    # reject cached APs older than this (s) — Android returns
                    # CACHED scan results; stale entries describe where the
                    # phone WAS, not where it is
 GATE = -70         # AP RSSI gate (mirrors venue_matcher.dart fingerprint gate)
+MIN_HIGH_N = 5     # below this a station's median is noise, not a measurement.
+                   # Same bar learn/train.py:93 already applies in the rules
+                   # baseline — one definition of "enough samples", not two.
+                   # This matters most on a LOCKED iPHONE side, where samples
+                   # arrive in sparse wake bursts: n=1 and n=200 produce the
+                   # same-looking median, and ingest.py:39 forwards both as
+                   # training rows with nothing but high_n to tell them apart.
 
 
 def ts(s):
@@ -493,6 +500,10 @@ def phone_station(data, lo, hi, trim=TRIM_S, max_ap_age=MAX_AP_AGE, gate=GATE):
 
     res = {
         "high_n": len(high), "med_n": len(med),
+        # Present but under-sampled. Distinct from SILENT (n=0), which is
+        # already safe: no high_med key at all, so train.py skips the feature.
+        # A thin station is the dangerous case — it looks like a measurement.
+        "thin": 0 < len(high) < MIN_HIGH_N,
         "rate": round(len(high) / dur, 2),
         "fp": fp, "scan_n": len(scans), "stale_dropped": stale_dropped,
         "fix_n": len(fixes),
@@ -686,9 +697,16 @@ def main():
                   f"and that {data['ios']['date']} is the right day "
                   f"(rows by day: {data['ios']['dates']}).")
 
-    print(f"\n{'station':>14} | {'A high med/IQR':>18} {'rate':>5} {'medN':>4} | "
-          f"{'B high med':>10} | {'venue V':>8} {'scans':>5} | {'GPS Δm':>7} {'fixes':>5}")
-    print("-" * 100)
+    def _n(p):
+        # '!' marks a station whose median rests on too few samples to mean
+        # anything. Printed next to the median it qualifies, because the whole
+        # failure mode is that a thin median looks exactly like a solid one.
+        return f"{p['high_n']}{'!' if p['thin'] else ''}"
+
+    print(f"\n{'station':>14} | {'A high med/IQR':>18} {'A n':>5} {'rate':>5} "
+          f"{'medN':>4} | {'B high med':>10} {'B n':>5} | {'venue V':>8} "
+          f"{'scans':>5} | {'GPS Δm':>7} {'fixes':>5}")
+    print("-" * 112)
     for r in rows:
         pa, pb = r["a"], r["b"]
         am = (f"{pa['high_med']}/({pa['high_p25']},{pa['high_p75']})"
@@ -696,12 +714,26 @@ def main():
         bm = pb.get("high_med", "SILENT")
         v = r["venue"]["V"] if r["venue"] else "—"
         gd = r["gps_delta_m"] if r["gps_delta_m"] is not None else "—"
-        print(f"{r['station']:>14} | {am:>18} {pa['rate']:>5} {pa['med_n']:>4} | "
-              f"{str(bm):>10} | {str(v):>8} {pa['scan_n']}+{pb['scan_n']:>3} | "
+        print(f"{r['station']:>14} | {am:>18} {_n(pa):>5} {pa['rate']:>5} "
+              f"{pa['med_n']:>4} | {str(bm):>10} {_n(pb):>5} | "
+              f"{str(v):>8} {pa['scan_n']}+{pb['scan_n']:>3} | "
               f"{str(gd):>7} {pa['fix_n']}+{pb['fix_n']:>3}")
         if pa["stale_dropped"] or pb["stale_dropped"]:
             print(f"{'':>14}   (stale APs dropped: A={pa['stale_dropped']} "
                   f"B={pb['stale_dropped']}, age > {args.max_ap_age}s)")
+
+    # Loud, because the only cheap fix is to re-walk the station TODAY, while
+    # the phones are still on this build and the geometry is still set up.
+    thin = [(r["station"], side.upper(), r[side]["high_n"])
+            for r in rows for side in ("a", "b") if r[side]["thin"]]
+    if thin:
+        print(f"\nWARNING: {len(thin)} station-side(s) below {MIN_HIGH_N} high "
+              "samples — the median is noise, not a measurement:")
+        for (label, side, n) in thin:
+            print(f"  {label} phone {side}: high_n={n}")
+        print("  Re-walk these stations now if you can. Ingesting them trains "
+              "on single samples\n  dressed as medians; nothing downstream "
+              "rejects them (learn/ingest.py:39).")
 
     if args.json:
         meta = {"logA": args.logA, "logB": args.logB,
