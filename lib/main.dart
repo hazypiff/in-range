@@ -10,6 +10,7 @@ import 'package:in_range/app_root.dart';
 import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/core/db/local_db.dart';
 import 'package:in_range/core/network/supabase_client.dart';
+import 'package:in_range/core/notifications/apns_token_service.dart';
 import 'package:in_range/core/notifications/local_notify.dart';
 import 'package:in_range/core/notifications/push_service.dart';
 import 'package:in_range/core/session/app_session.dart';
@@ -58,6 +59,13 @@ Future<void> main() async {
     await PushService().ensureRegistered();
   } catch (e) {
     debugPrint('Push register skipped: $e');
+  }
+
+  // Register the raw APNs token for proximity-wake silent pushes (iOS only).
+  try {
+    await ApnsTokenService().ensureRegistered();
+  } catch (e) {
+    debugPrint('APNs register skipped: $e');
   }
 
   if (AppConfig.enableForegroundService) {

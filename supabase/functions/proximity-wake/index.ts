@@ -162,6 +162,7 @@ interface WakeRow {
   user_id: string;
   peer_hint: Record<string, unknown>;
   attempts: number;
+  recipient_user_id?: string | null;
 }
 
 function minutesAgo(min: number): string {
@@ -248,10 +249,13 @@ async function recentlyWoken(
   supabase: ReturnType<typeof createClient>,
   userId: string,
 ): Promise<boolean> {
+  // Rate limit rows are recorded with recipient_user_id = the woken peer, so
+  // this check actually covers the peer side of the wake (the requester side
+  // is covered by the row's own user_id).
   const { data } = await supabase
     .from("proximity_wake_requests")
     .select("id")
-    .eq("user_id", userId)
+    .or(`user_id.eq.${userId},recipient_user_id.eq.${userId}`)
     .eq("status", "sent")
     .gte("sent_at", minutesAgo(RATE_LIMIT_MIN))
     .limit(1);
@@ -426,7 +430,8 @@ Deno.serve(async (req) => {
         .from("device_push_tokens")
         .select("token,user_id")
         .in("user_id", recipients)
-        .eq("platform", "ios");
+        .eq("platform", "ios")
+        .eq("provider", "apns");
 
       if (!tokens || tokens.length === 0) {
         await finalize(row, { status: "skipped", last_error: "no_device_token" });
@@ -437,6 +442,7 @@ Deno.serve(async (req) => {
 
       let sentCount = 0;
       let lastErr: string | null = null;
+      const sentTo: string[] = [];
 
       for (const t of tokens) {
         try {
@@ -458,6 +464,7 @@ Deno.serve(async (req) => {
           });
           if (res.ok) {
             sentCount++;
+            sentTo.push(t.user_id);
           } else {
             lastErr = `apns_${res.status}`;
             await res.body?.cancel();
@@ -467,12 +474,28 @@ Deno.serve(async (req) => {
         }
       }
 
+      // Record a sent row for each successfully woken peer so the per-peer
+      // rate limit works. The requester's own row is finalized below.
+      const sentAt = new Date().toISOString();
+      for (const peerId of sentTo) {
+        if (peerId === row.user_id) continue;
+        await supabase
+          .from("proximity_wake_requests")
+          .insert({
+            user_id: row.user_id,
+            recipient_user_id: peerId,
+            peer_hint: row.peer_hint,
+            status: "sent",
+            sent_at: sentAt,
+          });
+      }
+
       const allOk = sentCount > 0 && !lastErr;
       const retrying = row.attempts < 5;
       await finalize(row, {
         status: allOk ? "sent" : retrying ? "pending" : "failed",
         last_error: lastErr,
-        sent_at: allOk ? new Date().toISOString() : null,
+        sent_at: allOk ? sentAt : null,
       });
 
       results.push({
@@ -480,6 +503,7 @@ Deno.serve(async (req) => {
         status: allOk ? "sent" : retrying ? "retrying" : "failed",
         peers: peers.length,
         tokens: tokens.length,
+        sent_to: sentTo.length,
         error: lastErr,
       });
       if (allOk) sent++;
@@ -493,7 +517,11 @@ Deno.serve(async (req) => {
         p_decision: allOk ? "sent" : "failed",
         p_status: allOk ? "succeeded" : "failed",
         p_error_public: lastErr,
-        p_metadata: { peer_count: peers.length, token_count: tokens.length },
+        p_metadata: {
+          peer_count: peers.length,
+          token_count: tokens.length,
+          sent_to: sentTo.length,
+        },
       });
     }
 

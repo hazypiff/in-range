@@ -1,56 +1,172 @@
--- 0058_subtle_wake_privacy.sql
+-- 0059_proximity_wake_producer.sql
 --
--- Privacy hygiene for 0057_subtle_wake_support.sql. Closes the three gaps the
--- reviewer found:
+-- Fixes for the proximity-wake pipeline:
 --
---   1. GRANT/REVOKE house style. Every neighbouring table (0002, 0038, 0043,
---      0050, 0054, 0056) does REVOKE ALL FROM PUBLIC, anon and then grants
---      narrowly. 0057 created the tables with default privileges, which is
---      broader than the rest of the schema.
---   2. Deletion and export. venue_anchors and proximity_wake_requests must be
---      covered by scrub_account_pii and export_my_data, or a deleting user's
---      venue hints survive the 30-day grace period and right-of-access export
---      omits them.
---   3. Retention. venue_anchors has updated_at and nothing ever prunes it.
---      That makes it a permanent record of the venues a user frequents — in a
---      schema whose posture is aggressive ephemerality (location_pings 24 h,
---      rssi_samples 30 days). We sweep venue_anchors on a 14-day window and
---      proximity_wake_requests on the same cadence as notification_outbox.
+--   1. Adds a producer. proximity_wake_requests was privacy-plumbed but had no
+--      writer. The client now calls public.enqueue_proximity_wake after
+--      uploading a venue hint, which inserts a pending row with requester
+--      throttling.
+--   2. Fixes peer rate limiting. The original recentlyWoken checked
+--      user_id = peer, but rows were only created with the requester's
+--      user_id. We now record recipient_user_id on each sent row so the
+--      per-peer check actually works.
 --
--- SENSITIVITY: venue_anchors is a hashed-BSSID / coarse-geohash hint table.
--- Joined with sightings it approximates a co-location log. It therefore has no
--- raw coordinates, the BSSID is hashed before upload, and rows expire on the
--- same schedule as the rest of the ephemeral data.
---
--- If a future feature wants stable home/work/gym venue anchors, that is a
--- deliberate profile and needs a consent record (0039), not a longer sweep.
+-- SENSITIVITY: no new raw location data. peer_hint remains the coarse geohash
+-- and hashed BSSID uploaded by the client. recipient_user_id is used only for
+-- rate limiting and is deleted on account scrub.
 
 BEGIN;
 
 -- ---------------------------------------------------------------------------
--- 1. Table privileges (house style)
+-- 1. recipient_user_id on proximity_wake_requests
 -- ---------------------------------------------------------------------------
 
-REVOKE ALL ON TABLE public.venue_anchors FROM PUBLIC, anon;
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.venue_anchors TO authenticated;
-GRANT SELECT ON TABLE public.venue_anchors TO service_role;
+ALTER TABLE public.proximity_wake_requests
+  ADD COLUMN IF NOT EXISTS recipient_user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE;
 
-REVOKE ALL ON TABLE public.proximity_wake_requests FROM PUBLIC, anon;
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.proximity_wake_requests TO service_role;
+CREATE INDEX IF NOT EXISTS idx_proximity_wake_recipient_sent
+  ON public.proximity_wake_requests (recipient_user_id, sent_at DESC)
+  WHERE status = 'sent' AND recipient_user_id IS NOT NULL;
 
-COMMENT ON TABLE public.venue_anchors IS
-  'Coarse venue hints for server-side co-location inference. Geohash is city-level; BSSID is hashed with a rotating device salt before upload. Swept after 14 days — a stable venue profile would need a consent record.';
-COMMENT ON TABLE public.proximity_wake_requests IS
-  'Internal outbox for APNs silent-push wake requests. Drained by the proximity-wake Edge Function. Contains no user data beyond the hint hash.';
+COMMENT ON COLUMN public.proximity_wake_requests.recipient_user_id IS
+  'The peer who was woken. Used for per-peer rate limiting; null on pending rows.';
 
 -- ---------------------------------------------------------------------------
--- 2. Deletion (scrub_account_pii)
+-- 1b. Push-token provider discriminator
 -- ---------------------------------------------------------------------------
--- The FK cascade covers auth.users removal, but the app-level scrub runs long
--- before that (0035: 30-day grace) and must not leave a deleted account's
--- venue hints sitting on the server.
--- Body as of 0056_calibration_rssi_samples.sql:201, plus venue_anchors and
--- proximity_wake_requests.
+-- device_push_tokens currently holds FCM tokens for send-push. APNs tokens for
+-- proximity-wake must not be fed into the FCM HTTP v1 API. A provider column
+-- keeps the two namespaces separate without a second table.
+
+ALTER TABLE public.device_push_tokens
+  ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'fcm'
+    CHECK (provider IN ('fcm', 'apns'));
+
+CREATE INDEX IF NOT EXISTS idx_push_tokens_provider
+  ON public.device_push_tokens (provider, platform);
+
+COMMENT ON COLUMN public.device_push_tokens.provider IS
+  'Push provider namespace. fcm = Firebase Cloud Messaging (send-push); apns = Apple Push Notification service (proximity-wake).';
+
+-- Existing iOS rows are FCM until proven otherwise (the app has not shipped
+-- APNs token registration yet).
+UPDATE public.device_push_tokens SET provider = 'fcm' WHERE provider IS NULL;
+
+-- register_push_token now accepts a provider so APNs tokens do not land in
+-- the FCM namespace. SECURITY DEFINER; same validation as 0009 plus provider.
+CREATE OR REPLACE FUNCTION public.register_push_token(
+  p_token TEXT,
+  p_platform TEXT,
+  p_app_version TEXT DEFAULT NULL,
+  p_provider TEXT DEFAULT 'fcm'
+)
+RETURNS UUID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_id UUID;
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'Not authenticated';
+  END IF;
+  IF p_token IS NULL OR length(trim(p_token)) = 0 THEN
+    RAISE EXCEPTION 'token required';
+  END IF;
+  IF p_platform NOT IN ('android', 'ios', 'web') THEN
+    RAISE EXCEPTION 'platform must be android|ios|web';
+  END IF;
+  IF p_provider NOT IN ('fcm', 'apns') THEN
+    RAISE EXCEPTION 'provider must be fcm|apns';
+  END IF;
+
+  INSERT INTO public.device_push_tokens (user_id, token, platform, app_version, provider, last_seen_at)
+  VALUES (auth.uid(), trim(p_token), p_platform, p_app_version, p_provider, NOW())
+  ON CONFLICT (user_id, token) DO UPDATE
+    SET last_seen_at = NOW(),
+        platform = EXCLUDED.platform,
+        app_version = COALESCE(EXCLUDED.app_version, public.device_push_tokens.app_version),
+        provider = EXCLUDED.provider
+  RETURNING id INTO v_id;
+
+  RETURN v_id;
+END;
+$$;
+
+COMMENT ON FUNCTION public.register_push_token IS
+  'Registers a device push token for the calling user. provider=fcm for send-push, provider=apns for proximity-wake.';
+
+REVOKE ALL ON FUNCTION public.register_push_token(TEXT, TEXT, TEXT, TEXT) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.register_push_token(TEXT, TEXT, TEXT, TEXT) TO authenticated;
+
+-- ---------------------------------------------------------------------------
+-- 2. Producer RPC: enqueue_proximity_wake
+-- ---------------------------------------------------------------------------
+-- Called by the client after a successful venue-hint upload. SECURITY DEFINER
+-- so the batch insert and rate-limit check cannot be bypassed by direct table
+-- access. One pending row per user per 5 minutes — the Edge Function still
+-- does its own 15-minute send-side rate limit.
+
+CREATE OR REPLACE FUNCTION public.enqueue_proximity_wake(
+  p_geohash TEXT,
+  p_hashed_bssid TEXT
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+DECLARE
+  v_uid UUID := auth.uid();
+  v_id BIGINT;
+BEGIN
+  IF v_uid IS NULL THEN
+    RAISE EXCEPTION 'Not authenticated' USING ERRCODE = '42501';
+  END IF;
+
+  IF (p_geohash IS NULL OR p_geohash = '') AND (p_hashed_bssid IS NULL OR p_hashed_bssid = '') THEN
+    RAISE EXCEPTION 'enqueue_proximity_wake requires a geohash or a hashed BSSID';
+  END IF;
+
+  -- Requester throttle: skip if a pending row already exists for this user in
+  -- the last 5 minutes. The Edge Function's 15-minute sent-side limit is the
+  -- real guard; this just keeps the outbox from flooding on a burst of hints.
+  IF EXISTS (
+    SELECT 1 FROM public.proximity_wake_requests
+     WHERE user_id = v_uid
+       AND status = 'pending'
+       AND created_at > NOW() - INTERVAL '5 minutes'
+  ) THEN
+    RETURN NULL;
+  END IF;
+
+  INSERT INTO public.proximity_wake_requests (user_id, peer_hint)
+  VALUES (
+    v_uid,
+    jsonb_strip_nulls(jsonb_build_object(
+      'geohash', NULLIF(p_geohash, ''),
+      'hashed_bssid', NULLIF(p_hashed_bssid, '')
+    ))
+  )
+  RETURNING id INTO v_id;
+
+  RETURN v_id;
+END;
+$$;
+
+COMMENT ON FUNCTION public.enqueue_proximity_wake IS
+  'Enqueues a proximity wake request after a venue-hint upload. Throttled to one pending row per user per 5 minutes. Called by the client; service_role and Edge Function drain the outbox.';
+
+REVOKE ALL ON FUNCTION public.enqueue_proximity_wake(TEXT, TEXT) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.enqueue_proximity_wake(TEXT, TEXT) TO authenticated;
+
+-- ---------------------------------------------------------------------------
+-- 3. Deletion (scrub_account_pii)
+-- ---------------------------------------------------------------------------
+-- recipient_user_id references auth.users, so a deleting user must also have
+-- rows where they were the recipient removed.
+-- Body as of 0058_subtle_wake_privacy.sql:55, plus recipient_user_id handling.
 
 CREATE OR REPLACE FUNCTION public.scrub_account_pii(p_uid UUID)
 RETURNS BOOLEAN
@@ -122,8 +238,10 @@ BEGIN
   DELETE FROM public.notification_outbox     WHERE user_id          = p_uid;
   DELETE FROM public.photo_verifications     WHERE user_id          = p_uid;
   DELETE FROM public.rssi_samples            WHERE user_id          = p_uid;
-  DELETE FROM public.venue_anchors           WHERE user_id          = p_uid;  -- 0058
-  DELETE FROM public.proximity_wake_requests WHERE user_id          = p_uid;  -- 0058
+  DELETE FROM public.venue_anchors           WHERE user_id          = p_uid;
+  DELETE FROM public.proximity_wake_requests WHERE user_id          = p_uid;
+  -- 0059: also remove rows where the user was the woken recipient.
+  DELETE FROM public.proximity_wake_requests WHERE recipient_user_id = p_uid;
 
   INSERT INTO public.storage_deletion_queue (user_id, bucket_id, object_name)
   SELECT p_uid, o.bucket_id, o.name
@@ -147,12 +265,10 @@ END;
 $$;
 
 -- ---------------------------------------------------------------------------
--- 3. Right of access (export_my_data)
+-- 4. Right of access (export_my_data)
 -- ---------------------------------------------------------------------------
--- Omitting these tables would make the export incomplete for exactly the users
--- who have the most sensitive rows on the server.
--- Body as of 0056_calibration_rssi_samples.sql:299, plus venue_anchors and
--- proximity_wake_requests.
+-- Body as of 0058_subtle_wake_privacy.sql:147, plus recipient_user_id in the
+-- proximity_wake_requests export.
 
 CREATE OR REPLACE FUNCTION public.export_my_data()
 RETURNS JSONB
@@ -280,7 +396,7 @@ BEGIN
         FROM public.venue_anchors va WHERE va.user_id = v_uid
     ), '[]'::jsonb),
 
-    -- 0058: silent-push wake requests. No user data beyond the hint.
+    -- 0058/0059: silent-push wake requests. No user data beyond the hint.
     'proximity_wake_requests', COALESCE((
       SELECT jsonb_agg(jsonb_build_object(
                'peer_hint', pwr.peer_hint,
@@ -328,11 +444,11 @@ BEGIN
         FROM public.boosts bo WHERE bo.user_id = v_uid
     ), '[]'::jsonb),
 
-    -- Registered push destinations, by platform only -- the token itself is a
-    -- device credential, not user-facing data.
+    -- Registered push destinations, by platform and provider only -- the token
+    -- itself is a device credential, not user-facing data.
     'push_devices', COALESCE((
       SELECT jsonb_agg(jsonb_build_object(
-               'platform', d.platform, 'created_at', d.created_at))
+               'platform', d.platform, 'provider', d.provider, 'created_at', d.created_at))
         FROM public.device_push_tokens d WHERE d.user_id = v_uid
     ), '[]'::jsonb)
   ) INTO v_out;
@@ -348,14 +464,10 @@ REVOKE ALL ON FUNCTION public.export_my_data() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.export_my_data() TO authenticated;
 
 -- ---------------------------------------------------------------------------
--- 4. Retention (cleanup_ephemeral_data)
+-- 5. Retention (cleanup_ephemeral_data)
 -- ---------------------------------------------------------------------------
--- venue_anchors: 14 days on updated_at. Short because an anchor is only useful
--- while it is current, and consistent with the schema's posture of aggressive
--- ephemerality. proximity_wake_requests: same cadence as notification_outbox
--- (30 days sent/skipped, 7 days failed).
--- Body as of 0056_calibration_rssi_samples.sql:478, plus venue_anchors and
--- proximity_wake_requests.
+-- Body as of 0058_subtle_wake_privacy.sql:334, unchanged. proximity_wake_requests
+-- retention already covers both user_id and recipient_user_id rows.
 
 CREATE OR REPLACE FUNCTION public.cleanup_ephemeral_data()
 RETURNS VOID

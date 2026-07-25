@@ -308,7 +308,8 @@ Deno.serve(async (req) => {
       const { data: tokens } = await supabase
         .from("device_push_tokens")
         .select("token,platform")
-        .eq("user_id", row.user_id);
+        .eq("user_id", row.user_id)
+        .eq("provider", "fcm");
 
       if (!tokens || tokens.length === 0) {
         await supabase

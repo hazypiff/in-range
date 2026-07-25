@@ -5,6 +5,7 @@ import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_ble_peripheral/flutter_ble_peripheral.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/core/network/supabase_client.dart';
 import 'package:in_range/features/beacon/background_beacon_channel.dart';
@@ -42,9 +43,16 @@ class BeaconService {
     Duration rotationWindow = const Duration(minutes: 15),
     this.onSighting,
     this.onAdvertSample,
+    SharedPreferences? sharedPreferences,
   })  : _userId = userId,
         _correlationSalt = hmacSecret,
-        _rotationWindow = rotationWindow {
+        _rotationWindow = rotationWindow,
+        venueAnchors = VenueAnchorService(
+          persistenceKey: () => 'inrange.venue_anchors.v1',
+          readPersisted: (key) async => sharedPreferences?.getString(key),
+          writePersisted: (key, value) async =>
+              await sharedPreferences?.setString(key, value),
+        ) {
     // Feed native/Dart location fixes into the sighting cache. The fix is used
     // for server radius gates and refreshes the cache without a fresh
     // Geolocator call per sighting. GPS is still not a proximity classifier.
@@ -60,6 +68,7 @@ class BeaconService {
       ..onRefreshLocation = _ensureLocationCache
       ..cachedFix = _cachedLocationFix
       ..hashSalt = () => _correlationSalt;
+    subtleWake.onAnchorDerived = _onAnchorDerived;
     venueAnchors.onChanged =
         (descriptors) => unawaited(subtleWake.syncAnchors(descriptors));
   }
@@ -159,8 +168,9 @@ class BeaconService {
   final SubtleWakeService subtleWake = SubtleWakeService();
 
   /// Local venue anchors (tier 3 wakes). Descriptors are pushed to native
-  /// on every change and re-synced on each beacon-on.
-  final VenueAnchorService venueAnchors = VenueAnchorService();
+  /// on every change and re-synced on each beacon-on. Persisted across
+  /// sessions when a SharedPreferences instance is provided.
+  final VenueAnchorService venueAnchors;
 
   /// WiFi venue layer: resolves BLE's core ambiguity (a weak signal is either
   /// "far" or "close but body-blocked" — only a second radio can tell).
@@ -1178,6 +1188,24 @@ class BeaconService {
       lon: lon,
       accuracyM: _cachedAccuracy ?? -1,
       at: at,
+    );
+  }
+
+  /// Derives a local venue anchor from a successfully uploaded hint cell.
+  /// The anchor id is the geohash itself, so revisiting the same cell replaces
+  /// rather than duplicates. Radius is clamped by VenueAnchorService to the
+  /// monitorable band (100–2000 m).
+  void _onAnchorDerived(double lat, double lon, String? hashedBssid) {
+    if (!_isOn) return;
+    final geohash = SubtleWakeService.geohashEncode(lat, lon);
+    venueAnchors.upsert(
+      VenueAnchor(
+        id: geohash,
+        lat: lat,
+        lon: lon,
+        radiusM: 3500,
+        hashedBssid: hashedBssid,
+      ),
     );
   }
 

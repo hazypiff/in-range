@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 /// One venue anchor: a coarse circular region plus, when known, the hashed
 /// BSSID of the network seen there (docs/SUBTLE_TRACKING_ARCHITECTURE.md).
 ///
@@ -43,7 +45,16 @@ class VenueAnchor {
 /// the capacity/eviction and clamping rules, and that is testable without a
 /// method channel. The owner wires [onChanged] to the native push.
 class VenueAnchorService {
-  VenueAnchorService({this.maxAnchors = 20});
+  VenueAnchorService({
+    this.maxAnchors = 20,
+    String Function()? persistenceKey,
+    Future<String?> Function(String key)? readPersisted,
+    Future<void> Function(String key, String value)? writePersisted,
+  })  : _persistenceKey = persistenceKey,
+        _readPersisted = readPersisted,
+        _writePersisted = writePersisted {
+    _load();
+  }
 
   /// iOS hard-caps region monitoring at 20 regions per app; registering a
   /// 21st silently fails. Keep the cap explicit and evict, rather than
@@ -67,9 +78,69 @@ class VenueAnchorService {
   /// registration is a replace-all, not a delta protocol).
   void Function(List<Map<String, Object>> descriptors)? onChanged;
 
+  // Persistence (optional). When all three are provided, anchors survive app
+  // restarts. Kept injectable so tests can use in-memory fakes.
+  final String Function()? _persistenceKey;
+  final Future<String?> Function(String key)? _readPersisted;
+  final Future<void> Function(String key, String value)? _writePersisted;
+
+  bool get _canPersist =>
+      _persistenceKey != null && _readPersisted != null && _writePersisted != null;
+
   List<VenueAnchor> get anchors => List.unmodifiable(_anchors.values);
 
   VenueAnchor? anchorById(String id) => _anchors[id];
+
+  /// Loads persisted anchors on construction. Silently ignores corrupt or
+  /// missing data — anchors are an optimization, not a hard dependency.
+  Future<void> _load() async {
+    if (!_canPersist) return;
+    final readPersisted = _readPersisted!;
+    final persistenceKey = _persistenceKey!;
+    try {
+      final raw = await readPersisted(persistenceKey());
+      if (raw == null || raw.isEmpty) return;
+      final list = jsonDecode(raw) as List<dynamic>;
+      for (final item in list) {
+        if (item is Map<String, dynamic>) {
+          final a = VenueAnchor(
+            id: item['id'] as String? ?? '',
+            lat: (item['lat'] as num?)?.toDouble() ?? 0,
+            lon: (item['lon'] as num?)?.toDouble() ?? 0,
+            radiusM: (item['radiusM'] as num?)?.toDouble() ?? 0,
+            hashedBssid: item['hashedBssid'] as String?,
+          );
+          if (a.id.isNotEmpty && a.lat.abs() <= 90 && a.lon.abs() <= 180) {
+            _anchors[a.id] = a;
+          }
+        }
+      }
+    } catch (_) {
+      // Corrupt JSON or missing key; start empty.
+    }
+  }
+
+  Future<void> _save() async {
+    if (!_canPersist) return;
+    final writePersisted = _writePersisted!;
+    final persistenceKey = _persistenceKey!;
+    try {
+      final list = [
+        for (final a in _anchors.values)
+          {
+            'id': a.id,
+            'lat': a.lat,
+            'lon': a.lon,
+            'radiusM': a.radiusM,
+            'hashedBssid': a.hashedBssid,
+          },
+      ];
+      await writePersisted(persistenceKey(), jsonEncode(list));
+    } catch (_) {
+      // Persistence is best-effort; losing anchors is a latency cost, not a
+      // function loss.
+    }
+  }
 
   /// Adds or replaces an anchor. Returns false when the anchor is rejected
   /// (blank id, non-finite/out-of-range coordinates, non-positive radius).
@@ -98,12 +169,14 @@ class VenueAnchorService {
     }
     _anchors[anchor.id] = clamped;
     _emit();
+    _save();
     return true;
   }
 
   bool remove(String id) {
     if (_anchors.remove(id) == null) return false;
     _emit();
+    _save();
     return true;
   }
 
@@ -111,6 +184,7 @@ class VenueAnchorService {
     if (_anchors.isEmpty) return;
     _anchors.clear();
     _emit();
+    _save();
   }
 
   /// What the native coordinator needs to build one CLCircularRegion per

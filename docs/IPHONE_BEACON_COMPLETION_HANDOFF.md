@@ -2,9 +2,9 @@
 
 **Date:** 2026-07-25  
 **Repo:** `in-range` (Flutter + iOS/Android)  
-**Current HEAD:** `2caa5d5`  
-**Remotes:** `hazypiff/in-range` and `inrangeai/in-range` both at `2caa5d5`  
-**Author of this handoff:** Linux-side agent, after audit + hardening + build fixes + subtle tracking implementation
+**Current HEAD:** `bbc393e`  
+**Remotes:** `hazypiff/in-range` and `inrangeai/in-range` both at `bbc393e`  
+**Author of this handoff:** Linux-side agent, after audit + hardening + build fixes + subtle tracking implementation + audit fixes
 
 This document is the single source of truth for the next agent. It combines the strategic completion plan, the current tactical state, and the exact Mac/Xcode steps required before any further native iOS work can be trusted.
 
@@ -152,6 +152,13 @@ A full low-power wake architecture has been implemented behind `INRANGE_SUBTLE_W
   - Drains the outbox, checks for likely co-located users via venue anchors + recent sightings.
   - Sends APNs silent pushes to likely co-located devices.
   - Rate-limited; fail-closed when APNs secrets are missing.
+- **Audit fixes (2026-07-25)**
+  - `0058_subtle_wake_privacy.sql`: restored stripped rationale comments in `scrub_account_pii`, `export_my_data`, and `cleanup_ephemeral_data`.
+  - `scripts/rehearse_migrations.sh`: replays `0001`→latest and asserts the three re-declared functions still carry every accumulated clause.
+  - `0059_proximity_wake_producer.sql`: adds `recipient_user_id`, `enqueue_proximity_wake` RPC, push-token `provider` discriminator, and updated `register_push_token`.
+  - `proximity-wake`: inserts per-peer rate-limit rows; `send-push` filters `provider='fcm'`; `proximity-wake` filters `provider='apns'`.
+  - `ApnsTokenService`: consumes `io.inrange.app/apns` and registers the raw APNs token with `provider='apns'`.
+  - `VenueAnchorService`: persists anchors across app restarts; `BeaconService` derives anchors from the user's own hint cells.
 
 **What still needs the Mac / Apple Developer account:**
 

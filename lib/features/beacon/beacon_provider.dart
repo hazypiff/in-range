@@ -79,6 +79,7 @@ final beaconServiceProvider = Provider<BeaconService>((ref) {
     userIdSecret: AppConfig.userIdSecret,
     userId: userId ?? '',
     hmacSecret: AppConfig.hmacSecret,
+    sharedPreferences: ref.read(sharedPreferencesProvider),
     onSighting: ({
       required String correlationId,
       required int rssi,

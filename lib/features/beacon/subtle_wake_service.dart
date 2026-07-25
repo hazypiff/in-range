@@ -112,6 +112,11 @@ class SubtleWakeService {
   /// itself carried none. Null return = no hint uploaded.
   LocationAssistFix? Function()? cachedFix;
 
+  /// Called when a venue hint is successfully uploaded and a local anchor
+  /// should be derived from the hint cell. BeaconService wires this to
+  /// VenueAnchorService.upsert.
+  void Function(double lat, double lon, String? hashedBssid)? onAnchorDerived;
+
   /// Salt for the BSSID hash. MUST be the same rotating salt the venue
   /// matcher uses (BeaconService's correlation salt) or client anchors and
   /// server-side fingerprints stop being comparable.
@@ -295,6 +300,16 @@ class SubtleWakeService {
       // next wake free to retry the same cell.
       _lastHintGeohash = geohash;
       _lastHintAt = now;
+
+      // H1: derive a local venue anchor from the hint cell so the user
+      // monitors places they actually visit. The anchor is coarse (cell
+      // center + cell radius), never a precise fix.
+      try {
+        final (lat, lon) = geohashDecode(geohash);
+        onAnchorDerived?.call(lat, lon, hashedBssid);
+      } catch (e) {
+        debugPrint('Subtle wake anchor derivation failed: $e');
+      }
     } catch (e) {
       debugPrint('Subtle wake venue hint upload failed: $e');
     }
@@ -349,6 +364,41 @@ class SubtleWakeService {
     return digest.toString().substring(0, 12);
   }
 
+  /// Decodes a geohash into the center of its cell. Used to derive a venue
+  /// anchor from a hint cell so the user actually monitors places they visit.
+  static (double lat, double lon) geohashDecode(String hash) {
+    const base32 = '0123456789bcdefghjkmnpqrstuvwxyz';
+    var latMin = -90.0, latMax = 90.0;
+    var lonMin = -180.0, lonMax = 180.0;
+    var even = true;
+    for (final c in hash.split('')) {
+      final idx = base32.indexOf(c);
+      if (idx < 0) {
+        throw ArgumentError('invalid geohash char: $c');
+      }
+      for (var bit = 4; bit >= 0; bit--) {
+        final bitVal = (idx >> bit) & 1;
+        if (even) {
+          final mid = (lonMin + lonMax) / 2;
+          if (bitVal == 1) {
+            lonMin = mid;
+          } else {
+            lonMax = mid;
+          }
+        } else {
+          final mid = (latMin + latMax) / 2;
+          if (bitVal == 1) {
+            latMin = mid;
+          } else {
+            latMax = mid;
+          }
+        }
+        even = !even;
+      }
+    }
+    return ((latMin + latMax) / 2, (lonMin + lonMax) / 2);
+  }
+
   /// The flag lives in dotenv directly, not AppConfig (see class doc). Blank
   /// or unreadable = false: the feature is opt-in per build.
   static bool _readSubtleWakeFlag() {
@@ -382,5 +432,17 @@ class SubtleWakeService {
       'radius_m': 3500,
       'hashed_bssid': hashedBssid,
     }).timeout(const Duration(seconds: 10));
+
+    // 0059: enqueue a wake request so the server can check for co-located
+    // peers and push a silent wake to them. Failures are swallowed — the
+    // venue anchor row is already durable and the next hint will retry.
+    try {
+      await client.rpc('enqueue_proximity_wake', params: {
+        'p_geohash': geohash,
+        'p_hashed_bssid': hashedBssid,
+      }).timeout(const Duration(seconds: 10));
+    } catch (e) {
+      debugPrint('Subtle wake enqueue failed: $e');
+    }
   }
 }

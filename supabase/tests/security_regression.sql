@@ -54,6 +54,19 @@ BEGIN
   ASSERT has_table_privilege('service_role', 'public.proximity_wake_requests', 'SELECT')
     AND has_table_privilege('service_role', 'public.proximity_wake_requests', 'UPDATE'),
     'Edge Function service role lacks proximity wake outbox access';
+  ASSERT NOT has_table_privilege('anon', 'public.device_push_tokens', 'SELECT'),
+    'anon can read push tokens';
+  ASSERT has_table_privilege('authenticated', 'public.device_push_tokens', 'SELECT')
+    AND has_table_privilege('authenticated', 'public.device_push_tokens', 'INSERT'),
+    'authenticated cannot manage own push tokens';
+  ASSERT NOT has_function_privilege('anon', 'public.enqueue_proximity_wake(text,text)', 'EXECUTE'),
+    'anon can enqueue proximity wake';
+  ASSERT has_function_privilege('authenticated', 'public.enqueue_proximity_wake(text,text)', 'EXECUTE'),
+    'authenticated cannot enqueue proximity wake';
+  ASSERT NOT has_function_privilege('anon', 'public.register_push_token(text,text,text,text)', 'EXECUTE'),
+    'anon can register push token';
+  ASSERT has_function_privilege('authenticated', 'public.register_push_token(text,text,text,text)', 'EXECUTE'),
+    'authenticated cannot register push token';
 
   ASSERT NOT has_function_privilege('anon', 'public.run_maintenance()', 'EXECUTE'),
     'anon can execute maintenance';

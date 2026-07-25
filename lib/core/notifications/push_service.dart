@@ -57,6 +57,7 @@ class PushService {
     String token, {
     required String platform,
     String? appVersion,
+    String provider = 'fcm',
   }) async {
     _token = token;
     final client = InRangeSupabase.clientOrNull;
@@ -69,9 +70,10 @@ class PushService {
         'p_token': token,
         'p_platform': platform,
         'p_app_version': appVersion,
+        'p_provider': provider,
       });
       _registered = true;
-      debugPrint('Push: token registered ($platform)');
+      debugPrint('Push: token registered ($platform/$provider)');
     } catch (e) {
       debugPrint('Push: register_push_token failed: $e');
     }

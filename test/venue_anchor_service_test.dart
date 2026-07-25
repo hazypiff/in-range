@@ -132,4 +132,50 @@ void main() {
       expect(fired, 0);
     });
   });
+
+  group('persistence', () {
+    test('anchors survive a simulated restart', () async {
+      final store = <String, String>{};
+      String key() => 'test.anchors';
+      Future<String?> read(String k) async => store[k];
+      Future<void> write(String k, String v) async => store[k] = v;
+
+      final first = VenueAnchorService(
+        persistenceKey: key,
+        readPersisted: read,
+        writePersisted: write,
+      );
+      first.upsert(anchor('home', lat: 51.5, lon: -0.12, radiusM: 500));
+      first.upsert(anchor('work', lat: 51.51, lon: -0.13, radiusM: 600));
+      // Let _save complete.
+      await Future<void>.delayed(Duration.zero);
+
+      final second = VenueAnchorService(
+        persistenceKey: key,
+        readPersisted: read,
+        writePersisted: write,
+      );
+      // Let _load complete.
+      await Future<void>.delayed(Duration.zero);
+
+      expect(second.anchors.length, 2);
+      expect(second.anchorById('home')!.lat, closeTo(51.5, 0.001));
+      expect(second.anchorById('work')!.hashedBssid, isNull);
+    });
+
+    test('corrupt persisted data starts empty', () async {
+      final store = <String, String>{'test.anchors': 'not json'};
+      String key() => 'test.anchors';
+      Future<String?> read(String k) async => store[k];
+      Future<void> write(String k, String v) async => store[k] = v;
+
+      final s = VenueAnchorService(
+        persistenceKey: key,
+        readPersisted: read,
+        writePersisted: write,
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(s.anchors, isEmpty);
+    });
+  });
 }
