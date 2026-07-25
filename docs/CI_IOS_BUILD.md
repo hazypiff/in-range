@@ -1,13 +1,32 @@
 # Compiling the iOS side without a Mac — GitHub Actions
 
-**Status 2026-07-25:** the account-level Actions lock is cleared. `ios-build.yml`
-now gets a macOS runner. Before this, six consecutive runs died in ~2 seconds
-with `runner_name: ""` and the annotation *"The job was not started because your
-account is initially locked due to a billing issue"* — so **nothing in `ios/` had
-ever been compiled**, and every claim about that Swift was inference.
+**Status 2026-07-25: GREEN. The iOS side compiles.**
 
-Use this. It is free, it takes ~10 minutes, and it is the only compile check
-available without the Mac.
+```
+run        30177777377   conclusion: success
+artifact   InRange-unsigned-ipa   8.7 MB
+```
+
+That is the **first successful compile of anything under `ios/`, ever**. It
+covers `BackgroundBeacon.swift` plus the ~400 lines across
+`BackgroundLocationCoordinator.swift`, `WifiAssistPlugin.swift` and
+`SubtleWakeCoordinator.swift` that had never met a compiler, and it confirms the
+hand-edited `project.pbxproj` target membership was correct.
+
+Before this, six consecutive runs died in ~2 seconds with `runner_name: ""` and
+the annotation *"The job was not started because your account is locked due to a
+billing issue"* — an **account-level** lock that showed nothing on the repo page
+or the personal billing page ($0 owed, 0/2,000 minutes). Every earlier claim
+about that Swift was inference.
+
+**Two predictions that were wrong, recorded so nobody re-derives them.** A review
+from Linux predicted a hard compile error on `NEHotspotNetwork.fetchCurrent`
+(iOS 14 API, 13.0 deployment target) and a warning on `?? ""` against
+`NEHotspotNetwork`'s non-optional properties. **Neither appeared.** Reading
+Apple's documentation is not the same as compiling against the SDK — which is
+the entire reason this workflow exists.
+
+Use it. Free, ~10 minutes, and the only compile check available without the Mac.
 
 ---
 
