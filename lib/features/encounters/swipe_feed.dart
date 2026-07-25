@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/core/notifications/local_notify.dart';
-import 'package:in_range/core/prefs/app_prefs.dart';
 import 'package:in_range/core/privacy/safety_store.dart';
 import 'package:in_range/features/encounters/encounters_provider.dart';
 import 'package:in_range/features/encounters/local_encounter_store.dart';
@@ -62,7 +61,6 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
   }
 
   List<SwipeCard> _deck(WidgetRef ref) {
-    final band = ref.watch(swipeBandFilterProvider);
     ref.watch(matchStoreProvider);
     final matchStore = ref.watch(matchStoreProvider.notifier);
     final safety = ref.watch(safetyStoreProvider);
@@ -73,7 +71,7 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
       localVisible: local,
       isDismissed: matchStore.isDismissed,
       blocked: safety.blocked,
-    ).where((c) => c.matchesBandFilter(band)).toList();
+    ).toList(); // single-tier: no band filter — detected = In Range
   }
 
   String _fmt(Duration d) {
@@ -192,7 +190,6 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
 
   @override
   Widget build(BuildContext context) {
-    final band = ref.watch(swipeBandFilterProvider);
     final pending = ref.watch(pendingRevealCountProvider);
     final newCount = ref.watch(newEncounterCountProvider);
     // Keep server encounters warm
@@ -226,29 +223,8 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
               ),
             ),
           ),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-          child: Row(
-            children: [
-              for (final e in const [
-                ('any', 'Any'),
-                ('feet_10', 'Close By'),
-                ('feet_30', 'Near By'),
-                ('feet_60', 'In Range'),
-              ])
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: FilterChip(
-                    label: Text(e.$2),
-                    selected: band == e.$1,
-                    onSelected: (_) =>
-                        ref.read(swipeBandFilterProvider.notifier).set(e.$1),
-                  ),
-                ),
-            ],
-          ),
-        ),
+        // Single-tier product (2026-07-24): the Close By/Near By/In Range
+        // filter chips are gone — every detected peer IS "In Range".
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Row(
@@ -268,7 +244,6 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
               ? _Empty(
                   pending: pending,
                   delayHours: AppConfig.encounterRevealDelayHours,
-                  band: band,
                 )
               : Dismissible(
                   key: ValueKey(cards.first.id),
@@ -510,11 +485,9 @@ class _Empty extends StatelessWidget {
   const _Empty({
     required this.pending,
     required this.delayHours,
-    required this.band,
   });
   final int pending;
   final double delayHours;
-  final String band;
 
   @override
   Widget build(BuildContext context) {
@@ -529,9 +502,7 @@ class _Empty extends StatelessWidget {
             Text(
               pending > 0
                   ? 'Run-in logged — not revealed yet'
-                  : band == 'any'
-                      ? 'No one to swipe'
-                      : 'No one in this band yet',
+                  : 'No one In Range yet',
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 8),

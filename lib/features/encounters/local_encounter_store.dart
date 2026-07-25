@@ -2,7 +2,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/core/db/local_db.dart';
-import 'package:in_range/core/prefs/app_prefs.dart';
 import 'package:in_range/features/beacon/range_estimator.dart';
 import 'package:in_range/features/matches/match_store.dart';
 
@@ -96,9 +95,9 @@ class LocalEncounter {
 
   String get neighborhoodLabel {
     if (rangeType.startsWith('feet')) {
-      // "Closest:" — this is the best moment ever observed, not a live
-      // distance; qualitative until the mid tier is field-calibrated.
-      return 'Closest: ${rangeBandLabel(bestBand)} · RSSI $bestRssi';
+      // Single-tier product: detected = In Range, no distance claim. The
+      // band machinery stays underneath for when granular tiers return.
+      return 'In Range · RSSI $bestRssi';
     }
     return 'Nearby area';
   }
@@ -354,12 +353,12 @@ final pendingRevealCountProvider = Provider<int>((ref) {
 final newEncounterCountProvider = Provider<int>((ref) {
   ref.watch(localEncounterStoreProvider);
   final matchStore = ref.watch(matchStoreProvider.notifier);
-  final band = ref.watch(swipeBandFilterProvider);
   final store = ref.read(localEncounterStoreProvider.notifier);
+  // Single-tier product (2026-07-24): every visible detection IS "In Range" —
+  // no band filter on alerts.
   return store.visible.where((e) {
     if (!e.rangeType.startsWith('feet')) return false;
     if (matchStore.isDismissed(e.correlationId)) return false;
-    if (!e.matchesBandFilter(band)) return false;
     return true;
   }).length;
 });

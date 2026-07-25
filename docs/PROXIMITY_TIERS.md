@@ -1,5 +1,17 @@
 # Proximity Tiers — Close By / Near By / In Range
 
+> **PRODUCT PIVOT (owner decision 2026-07-24): the app LAUNCHES with ONE
+> user-facing tier — IN RANGE (detected nearby, beacons on).** Rationale:
+> a single co-presence promise is deliverable even for two locked iPhones
+> (wake-window server rendezvous — see issue #4), while granular
+> distance tiers demand RSSI resolution that the 2026-07-23 cross-platform
+> walk showed is per-pair fragile (bilateral fusion needed, marginal
+> pocketed gaps). EVERYTHING below stays as the dormant granularity layer:
+> calibration keeps accumulating (rssi_log, learn/ pipeline), thresholds
+> stay in RulesClassifier, and Close By returns as the flagship precision
+> feature when the radio stack (W5 persistent connections) matures. The
+> tier picker was removed from the UI in the same change.
+
 Product decision (2026-07-15): proximity is surfaced as three buckets, not
 feet, and **the customer picks which tier triggers their alerts** (Close By
 = only the closest contacts; Near By = that tier or closer; In Range = any
