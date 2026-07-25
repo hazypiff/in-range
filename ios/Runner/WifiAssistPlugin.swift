@@ -15,15 +15,23 @@ struct WifiAssistPlugin {
     channel.setMethodCallHandler { call, result in
       switch call.method {
       case "currentBSSID":
-        NEHotspotNetwork.fetchCurrent { network in
-          guard let net = network else {
-            result(nil)
-            return
+        if #available(iOS 14.0, *) {
+          NEHotspotNetwork.fetchCurrent { network in
+            // FlutterResult must be invoked on the platform (main) thread.
+            DispatchQueue.main.async {
+              guard let net = network else {
+                result(nil)
+                return
+              }
+              result([
+                "bssid": net.bssid,
+                "ssid": net.ssid,
+              ])
+            }
           }
-          result([
-            "bssid": net.bssid ?? "",
-            "ssid": net.ssid ?? "",
-          ])
+        } else {
+          // NEHotspotNetwork.fetchCurrent requires iOS 14+.
+          result(nil)
         }
       default:
         result(FlutterMethodNotImplemented)

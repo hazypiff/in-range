@@ -260,6 +260,10 @@ class LocationKeepalive {
             _emitFix(_mapToFix(raw.cast<String, dynamic>()));
           }
         }
+        // Acknowledge receipt so the native coordinator can clear its buffer.
+        // The foreground push path peeks instead of draining, so delivery is
+        // confirmed before the fixes are destroyed.
+        unawaited(_channel.invokeMethod('clear'));
         return null;
     }
     return null;

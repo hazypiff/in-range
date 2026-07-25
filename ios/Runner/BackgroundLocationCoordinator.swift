@@ -42,6 +42,9 @@ final class BackgroundLocationCoordinator: NSObject {
         self.stop(result: result)
       case "flush":
         result(self.drainBuffer())
+      case "clear":
+        self.clearBuffer()
+        result(nil)
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -61,10 +64,9 @@ final class BackgroundLocationCoordinator: NSObject {
       result(true)
       return
     }
-    guard CLLocationManager.locationServicesEnabled() else {
-      result(false)
-      return
-    }
+
+    // Do NOT call CLLocationManager.locationServicesEnabled() here: it can block
+    // the main thread and the authorization switch below covers the disabled case.
 
     let manager = CLLocationManager()
     manager.delegate = self
@@ -77,8 +79,6 @@ final class BackgroundLocationCoordinator: NSObject {
     manager.pausesLocationUpdatesAutomatically = false
     manager.allowsBackgroundLocationUpdates = true
     manager.showsBackgroundLocationIndicator = true
-    locationManager = manager
-    isRunning = true
 
     let auth: CLAuthorizationStatus
     if #available(iOS 14.0, *) {
@@ -86,19 +86,23 @@ final class BackgroundLocationCoordinator: NSObject {
     } else {
       auth = CLLocationManager.authorizationStatus()
     }
-    switch auth {
-    case .notDetermined:
-      manager.requestAlwaysAuthorization()
-    case .authorizedAlways, .authorizedWhenInUse:
-      manager.startUpdatingLocation()
-    default:
-      isRunning = false
-      self.locationManager = nil
-      result(false)
-      return
-    }
 
-    result(true)
+    switch auth {
+    case .authorizedAlways, .authorizedWhenInUse:
+      locationManager = manager
+      isRunning = true
+      manager.startUpdatingLocation()
+      result(true)
+    case .notDetermined:
+      // Do NOT request authorization natively. Dart's PermissionService owns the
+      // disclosure-gated request flow; returning false lets Dart fall back to the
+      // geolocator stream, which triggers the proper permission prompt.
+      result(false)
+    case .denied, .restricted:
+      result(false)
+    @unknown default:
+      result(false)
+    }
   }
 
   private func stop(result: FlutterResult?) {
@@ -111,7 +115,7 @@ final class BackgroundLocationCoordinator: NSObject {
 
   @objc private func appDidBecomeActive() {
     guard let ch = channel else { return }
-    let fixes = drainBuffer()
+    let fixes = peekBuffer()
     guard !fixes.isEmpty else { return }
     ch.invokeMethod("onLocationFixes", arguments: fixes)
   }
@@ -134,7 +138,7 @@ final class BackgroundLocationCoordinator: NSObject {
       "lon": location.coordinate.longitude,
       "acc": location.horizontalAccuracy,
       "ts": Int(location.timestamp.timeIntervalSince1970 * 1000),
-      "moving": moving ?? false,
+      "moving": moving ?? NSNull(),
     ])
     if buffer.count > Self.bufferCap {
       buffer.removeFirst(buffer.count - Self.bufferCap)
@@ -142,9 +146,17 @@ final class BackgroundLocationCoordinator: NSObject {
     saveBuffer(buffer)
   }
 
+  private func peekBuffer() -> [[String: Any]] {
+    loadBuffer()
+  }
+
+  private func clearBuffer() {
+    UserDefaults.standard.removeObject(forKey: Self.bufferKey)
+  }
+
   private func drainBuffer() -> [[String: Any]] {
     let buffer = loadBuffer()
-    UserDefaults.standard.removeObject(forKey: Self.bufferKey)
+    clearBuffer()
     return buffer
   }
 }
@@ -175,8 +187,18 @@ extension BackgroundLocationCoordinator: CLLocationManagerDelegate {
       // Updates may pause in deep background without Always, but this still
       // gives us foreground + transition fixes and keeps the indicator honest.
       manager.startUpdatingLocation()
-    default:
+    case .denied, .restricted:
+      // Authorization was revoked while running. Tear the session down so a
+      // later start() can retry after the user re-enables permission.
       manager.stopUpdatingLocation()
+      manager.delegate = nil
+      locationManager = nil
+      isRunning = false
+    @unknown default:
+      manager.stopUpdatingLocation()
+      manager.delegate = nil
+      locationManager = nil
+      isRunning = false
     }
   }
 

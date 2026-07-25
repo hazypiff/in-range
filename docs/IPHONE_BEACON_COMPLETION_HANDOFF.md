@@ -2,11 +2,13 @@
 
 **Date:** 2026-07-25  
 **Repo:** `in-range` (Flutter + iOS/Android)  
-**Current HEAD:** `7e327e2`  
-**Remotes:** `hazypiff/in-range` and `inrangeai/in-range` both at `7e327e2`  
-**Author of this handoff:** Linux-side agent, after audit + hardening
+**Current HEAD:** `348f97e`  
+**Remotes:** `hazypiff/in-range` and `inrangeai/in-range` both at `348f97e`  
+**Author of this handoff:** Linux-side agent, after audit + hardening + build fixes
 
 This document is the single source of truth for the next agent. It combines the strategic completion plan, the current tactical state, and the exact Mac/Xcode steps required before any further native iOS work can be trusted.
+
+> **2026-07-25 update:** A code review found that `BackgroundLocationCoordinator.swift` and `WifiAssistPlugin.swift` were not in the Xcode target, and `NEHotspotNetwork.fetchCurrent` lacked the required iOS 14+ guard. Both files are now added to `project.pbxproj`, the availability guard is in place, and several logic bugs in the location coordinator are fixed. See §3.6.
 
 ---
 
@@ -92,6 +94,30 @@ Both are clean as of this handoff.
 - `BackgroundLocationCoordinator` implements both `locationManager(_:didChangeAuthorization:)` (iOS 13) and `locationManagerDidChangeAuthorization(_:)` (iOS 14+) so authorization grants actually start fixes on modern OS versions.
 - `BeaconService` feeds every fix into the sighting cache via `locationKeepalive.onFix`.
 - Entire path is gated by `INRANGE_LOCATION_RESIDENCY` (default off).
+
+### 3.5 Build fixes from code review (2026-07-25)
+
+A subsequent review found that the new Swift files were not actually in the Xcode target, and the location coordinator had several logic bugs that would strand or silently disable the feature.
+
+**Xcode target membership**
+
+- `BackgroundLocationCoordinator.swift` and `WifiAssistPlugin.swift` are now added to `ios/Runner.xcodeproj/project.pbxproj` in the `PBXBuildFile`, `PBXFileReference`, `PBXGroup`, and `PBXSourcesBuildPhase` sections.
+- Without this, dropping the files into `ios/Runner/` did nothing — Xcode compiles only what is in the Sources build phase, and `AppDelegate.swift:23-27` would fail with `cannot find 'WifiAssistPlugin' in scope`.
+
+**`WifiAssistPlugin.swift` fixes**
+
+- `NEHotspotNetwork.fetchCurrent` requires iOS 14.0+; added `if #available(iOS 14.0, *)` guard with a `result(nil)` fallback for iOS 13.
+- Removed invalid `?? ""` on non-optional `net.bssid` / `net.ssid`.
+- Hopped to `DispatchQueue.main.async` before invoking `FlutterResult`, because the completion queue for `fetchCurrent` is undocumented.
+
+**`BackgroundLocationCoordinator.swift` fixes**
+
+- **Denied authorization no longer strands the session.** `start()` returns `false` for `.notDetermined` so Dart falls back to the gated permission flow; on `.denied` / `.restricted` it returns `false` immediately. `applyAuthorizationStatus` now tears the session down (`isRunning = false`, `locationManager = nil`) if authorization is revoked while running.
+- **Buffered fixes are no longer destroyed before delivery is confirmed.** `appDidBecomeActive` now uses `peekBuffer()` and Dart acknowledges receipt by calling a new `clear` method. `drainBuffer()` is reserved for the Dart-initiated `flush` pull.
+- **Removed the disclosure bypass.** `requestAlwaysAuthorization()` is no longer called from native code. Dart's `PermissionService.requestBackgroundLocation` owns the disclosure-gated request flow.
+- **Removed the main-thread-blocking `CLLocationManager.locationServicesEnabled()` guard.** The authorization switch already covers the disabled case.
+- **Fixed `moving` nil flattening.** `location.speed < 0` now yields `NSNull()` instead of `false`, so Dart sees `isMoving == null` as documented.
+- Added `stop` / `clear` methods to the channel handler for full lifecycle control.
 
 ---
 
@@ -355,4 +381,5 @@ git push origin main
   flutter analyze       → no issues
   Swift compile (Xcode) → NOT RUN (no Mac available)
   Device test           → NOT RUN
+  project.pbxproj       → BackgroundLocationCoordinator.swift and WifiAssistPlugin.swift added to Runner target
 ```
