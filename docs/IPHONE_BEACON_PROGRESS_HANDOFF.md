@@ -4,8 +4,8 @@
 
 - **Repo**: `in-range` (Flutter + iOS/Android)
 - **Branch**: `main`
-- **Current HEAD**: `3faec05` (`ios: harden BackgroundLocationCoordinator for release/profile builds`)
-- **Remotes**: both `hazypiff/in-range` and `inrangeai/in-range` are at `3faec05`
+- **Current HEAD**: `f91588f` (`docs: update MAC_SETUP for WifiAssist + BackgroundLocationCoordinator capabilities`)
+- **Remotes**: both `hazypiff/in-range` and `inrangeai/in-range` are at `f91588f`
 - **Test status**: `flutter test` passes 125/125; `flutter analyze --no-fatal-infos` clean
 
 This handoff covers what landed after the audit and the completion-plan commit, what is still open, and the recommended order for the next agent.
@@ -120,7 +120,7 @@ The Swift side has **not** been built in Xcode on this machine. Both `WifiAssist
 
 ## If you continue from here
 
-- [ ] `git pull` on `main`; confirm HEAD is `3faec05`.
+- [ ] `git pull` on `main`; confirm HEAD is `f91588f`.
 - [ ] On a Mac, open `ios/Runner.xcworkspace` and run a device/archive build to validate:
   - **Access WiFi Information** entitlement for `WifiAssistPlugin`,
   - background location mode / usage strings for `BackgroundLocationCoordinator`.
