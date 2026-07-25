@@ -16,9 +16,13 @@ void main() {
     captured = null;
   });
 
-  LocationKeepalive build({TargetPlatform platform = TargetPlatform.iOS}) =>
+  LocationKeepalive build({
+    TargetPlatform platform = TargetPlatform.iOS,
+    bool enabled = true,
+  }) =>
       LocationKeepalive(
         platform: platform,
+        enabled: () => enabled,
         openStream: (settings) {
           opens++;
           captured = settings;
@@ -74,6 +78,17 @@ void main() {
       expect(k.isRunning, isFalse);
     });
 
+    // Default-off is the contract, not a preference: enabling this couples
+    // location to the beacon toggle, which contradicts a recorded owner
+    // decision, and its BLE benefit is still unmeasured.
+    test('opens nothing while the flag is off', () async {
+      final k = build(enabled: false);
+      await k.start();
+
+      expect(opens, 0);
+      expect(k.isRunning, isFalse);
+    });
+
     test('double start does not open a second session', () async {
       final k = build();
       await k.start();
@@ -91,6 +106,20 @@ void main() {
 
       expect(k.isRunning, isFalse);
       expect(controllers.single.hasListener, isFalse);
+    });
+
+    // start() is called from BeaconService's turn-on path and is documented to
+    // never throw. Reading the flag touches dotenv, which throws when it has
+    // not been loaded — so the config read must sit inside the guard too.
+    test('a config read that throws does not escape start', () async {
+      final k = LocationKeepalive(
+        platform: TargetPlatform.iOS,
+        enabled: () => throw StateError('dotenv not initialized'),
+        openStream: (_) => const Stream<Position>.empty(),
+      );
+
+      await expectLater(k.start(), completes);
+      expect(k.isRunning, isFalse);
     });
 
     test('stop before start is harmless', () async {
@@ -124,6 +153,7 @@ void main() {
     test('a throwing plugin does not propagate', () async {
       final k = LocationKeepalive(
         platform: TargetPlatform.iOS,
+        enabled: () => true,
         openStream: (_) => throw StateError('plugin missing'),
       );
 

@@ -2,50 +2,80 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:in_range/core/config/app_config.dart';
 
-/// Keeps the app process RESIDENT while the beacon is on, so CoreBluetooth
-/// keeps scanning with the screen locked instead of waking in ~15-30 minute
-/// BGAppRefresh bursts.
+/// Holds a foreground-started location session while the beacon is on, so the
+/// process is not suspended and app-owned timers keep firing with the screen
+/// dark.
 ///
-/// This is the single largest iOS discoverability lever available without a
-/// paid developer account, and the app already declared everything it needs
-/// for it — `location` in UIBackgroundModes and the Always usage string were
-/// in Info.plist all along, but nothing ever started a session, so the
-/// entitlement sat unused and every fix was a one-shot poll on a Dart timer
-/// that cannot fire while suspended.
+/// **OFF by default** (`AppConfig.locationResidency`). Unproven and governance-
+/// blocked; see below. Do not enable it outside a bench.
 ///
-/// **The location data is not the point — the session is.** iOS keeps an app
-/// running while it holds an active location session, and a running app scans
-/// continuously. So this deliberately asks for the WORST accuracy that still
-/// sustains a session, and throws the fixes away. Coordinates are a by-product
-/// we neither need nor keep; the beacon's own GPS path (`_ensureLocationCache`)
-/// is unchanged and remains the only thing that records a position.
+/// ## What this does NOT do
 ///
-/// Scoped strictly to beacon-ON. That is both the honest design — the user
-/// asked to be discoverable, and this is what discoverable costs — and the
-/// version that survives App Review, because the permission is legible to the
-/// person who turned it on.
+/// It does not make Bluetooth foreground-like. Background scanning stays
+/// duty-cycled and duplicate discoveries stay coalesced whether or not the
+/// process is suspended — those rules key off app STATE, not liveness, and
+/// Apple engineering has said directly that background-location does not
+/// change background BLE scanning. An earlier version of this file claimed
+/// residency makes CoreBluetooth "scan continuously". That was wrong.
 ///
-/// iOS only. Android already scans in the background acceptably, and adding a
-/// second foreground-service notification there would cost battery complaints
-/// for no gain.
+/// ## The narrower thing that might be true
+///
+/// Duplicates are suppressed WITHIN a scan session, so restarting the session
+/// is how repeated samples from one peer are obtained at all
+/// (BackgroundBeacon.swift:296). Those restarts are timer-driven, and timers do
+/// not fire while suspended. So the testable hypothesis is: residency raises
+/// sample CADENCE by letting the restart machinery run — not that it unlocks a
+/// better scan mode.
+///
+/// Even that is not obvious. The 2026-07-23 bench found short restart bursts
+/// produced ZERO samples because background deliveries are coalesced for
+/// seconds and every session died before its delivery arrived
+/// (BackgroundBeacon.swift:395). Longer sessions won. So residency may help,
+/// may do nothing, and could plausibly hurt if it encourages churn.
+///
+/// **Gate: a same-binary A/B with this flag off/on, measuring didDiscover,
+/// GATT reads and connected-RSSI counts on locked hardware.** The unit tests
+/// beside this file exercise a fake Dart stream and prove nothing about radios.
+///
+/// ## Two open problems
+///
+/// 1. **Governance.** This couples location to the beacon toggle, contradicting
+///    "the beacon is a pure BLE switch" (owner decision 2026-07-21, issue #2,
+///    recorded at beacon_screen.dart:26). Owner call, not an engineering one.
+/// 2. **App Review.** Guideline 2.5.4 requires background modes serve their
+///    stated purpose. Discarding every fix — which reads as a privacy virtue —
+///    is evidence AGAINST us here: an app that never uses location has no
+///    business holding the location background mode. The defensible version
+///    feeds a genuinely location-dependent feature (coarse presence matching),
+///    which would also make the session honestly location-purposed rather than
+///    a BLE keepalive wearing a location costume.
+///
+/// iOS only. Android already scans in the background acceptably, and a second
+/// foreground-service notification there would cost battery for no gain.
 class LocationKeepalive {
   LocationKeepalive({
     Stream<Position> Function(LocationSettings)? openStream,
     TargetPlatform? platform,
+    bool Function()? enabled,
   })  : _openStream = openStream ??
             ((s) => Geolocator.getPositionStream(locationSettings: s)),
-        _platform = platform ?? defaultTargetPlatform;
+        _platform = platform ?? defaultTargetPlatform,
+        _enabled = enabled ?? (() => AppConfig.locationResidency);
 
   final Stream<Position> Function(LocationSettings) _openStream;
   final TargetPlatform _platform;
+  final bool Function() _enabled;
 
   StreamSubscription<Position>? _sub;
 
   bool get isRunning => _sub != null;
 
-  /// True when a keepalive session is worth attempting on this platform.
-  bool get isSupported => _platform == TargetPlatform.iOS;
+  /// True when a session is both permitted by the flag and useful on this
+  /// platform. The flag is checked at every start, not cached, so a bench can
+  /// flip it between runs of the same binary.
+  bool get isSupported => _platform == TargetPlatform.iOS && _enabled();
 
   /// Settings tuned for residency rather than precision.
   ///
@@ -74,8 +104,11 @@ class LocationKeepalive {
   /// degrades detection latency, but a beacon that refuses to start because
   /// location was denied would be a worse product than a foreground-only one.
   Future<void> start() async {
-    if (!isSupported || _sub != null) return;
+    if (_sub != null) return;
     try {
+      // Inside the try: isSupported reads config, and config can throw when
+      // dotenv has not been loaded. start() promises never to throw.
+      if (!isSupported) return;
       _sub = _openStream(settingsForResidency()).listen(
         // Deliberately empty. See the class doc: the session is the product,
         // the coordinates are not. Do not start recording these without a

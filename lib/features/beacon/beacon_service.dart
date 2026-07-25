@@ -220,9 +220,10 @@ class BeaconService {
       await _startScanning();
       if (gen != _sessionGeneration) throw StateError('beacon turned off');
       _isOn = true;
-      // Last, and only once the session is really up: holding a location
-      // session is what keeps the process resident with the screen locked, so
-      // CoreBluetooth scans continuously instead of in BGAppRefresh bursts.
+      // Last, and only once the session is really up. OFF by default and a
+      // no-op unless INRANGE_LOCATION_RESIDENCY is set: it keeps the process
+      // from suspending so app-owned timers keep firing, which is NOT the same
+      // as foreground BLE and is still unmeasured. See LocationKeepalive.
       // Never blocks the beacon — a denied grant costs latency, not function.
       unawaited(locationKeepalive.start());
     } catch (e) {

@@ -110,6 +110,30 @@ class AppConfig {
     return raw == 'true' || raw == '1' || raw == 'yes';
   }
 
+  /// iOS location residency: hold a foreground-started location session while
+  /// the beacon is on, so the process is not suspended and app-owned timers
+  /// (scan restarts, flushes, advert cycling) keep firing with the screen dark.
+  ///
+  /// OFF by default, and it must stay that way until measured. Two open items:
+  ///
+  ///  1. It does NOT give foreground BLE semantics. Background scanning stays
+  ///     duty-cycled and duplicate discoveries stay coalesced regardless of
+  ///     suspension state. The hypothesis worth benching is narrower — that
+  ///     restarting scan sessions is what defeats coalescing, and those
+  ///     restarts are timer-driven, so residency raises sample cadence. Prove
+  ///     it with a same-binary A/B on didDiscover / GATT / connected-RSSI
+  ///     counts, not Dart heartbeats. See docs/IOS_LOCATION_RESIDENCY_REVIEW.
+  ///  2. It couples location to the beacon toggle, which contradicts the
+  ///     "beacon is a pure BLE switch" owner decision (beacon_screen.dart:26).
+  ///     That is an owner call, not an engineering one.
+  static bool get locationResidency {
+    final raw = (_env('INRANGE_LOCATION_RESIDENCY').isEmpty
+            ? 'false'
+            : _env('INRANGE_LOCATION_RESIDENCY'))
+        .toLowerCase();
+    return raw == 'true' || raw == '1' || raw == 'yes';
+  }
+
   /// Calibration scan mode: low-latency scanning for dense per-advert RSSI
   /// during range walks. Battery-heavy — leave off outside field tests.
   static bool get calibScanMode {
