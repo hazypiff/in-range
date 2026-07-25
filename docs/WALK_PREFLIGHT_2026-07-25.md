@@ -41,6 +41,41 @@ on current `main` for capture/extract scripts; only the **phone apps** must
 remain on `07-24b`. Do not reset the host to `9ced273`: that commit surfaces
 thin counts but predates the exact-window checker and ingest protections.
 
+## What this walk does NOT measure
+
+Read this before quoting the results. All three were verified against the
+freeze build itself (`1a41d59`), not against `main`.
+
+**No connected-RSSI / GATT link quality.** `git grep -E "readRSSI|connected_rssi"`
+returns nothing in `lib`, `ios` or `android` at the freeze, and
+`extract_walk.py` parses no GATT line. This walk measures the **advert
+detection envelope** — scan RSSI plus token recovery — i.e. the distance at
+which the S22 stops being able to see and identify a locked iPhone. It is NOT
+the distance at which a persistent GATT link dies; W5 (the persistent
+GATT + `readRSSI()` loop) is still unbuilt. A curve from this walk must never
+be described as connected-link quality.
+
+**No `med_n` from the locked iPhone.** `beacon_service.dart:60` hardcodes
+`AdvertPower.high` for every background sighting, because the native channel
+signature is `onSighting(String tokenHex, int rssi, DateTime at)` — the
+medium/high slot is discarded before Dart sees it. So `med_n` reads **0 at
+every station** on the iPhone side, meaning *unknown*, not *no medium packets
+arrived*. Do not read it as evidence, and do not let a model lean on it: it
+would learn "iPhone ⇒ far". (Same class of trap as the thin medians fixed in
+`9ced273`, but this one needs a client change, so it cannot be fixed for this
+walk.)
+
+**No WiFi and no GPS from the iPhone.** `rssi_log` is BLE-only, so `venue_v`
+and `gps_delta` come out `None` for every iPhone-side station. That is correct
+and safe — `train.py:73-74` skips a `None` feature rather than imputing zero —
+but it means the iPhone contributes BLE features only.
+
+What the walk DOES produce: a trainable advert-detection curve for
+S22 ↔ locked iPhone across six distances and two body positions, in both
+directions. That is the most valuable iPhone dataset collected so far. It is
+just narrower than "the GATT range envelope", which is how it has been
+described in conversation.
+
 ## Exact scope
 
 This checklist assumes “the full ladder” means the documented far-envelope
