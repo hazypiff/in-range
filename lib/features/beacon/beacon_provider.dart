@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:in_range/core/config/app_config.dart';
@@ -153,6 +155,20 @@ class BeaconController extends StateNotifier<BeaconState> {
     _service.onBeaconStopped = () {
       if (mounted && state.isOn) state = const BeaconState();
     };
+    // iOS: adopt a native session that survived process eviction (audit
+    // 2026-07-25, critical #1) so the UI shows — and can stop — the beacon
+    // that is actually running, instead of defaulting off while CoreBluetooth
+    // keeps advertising.
+    unawaited(_service.restoreNativeSession().then((restored) {
+      if (restored && mounted) {
+        state = BeaconState(
+          isOn: true,
+          tokenExpiresAt: _service.currentToken?.expiresAt,
+          cloudSynced: AppConfig.hasRealSupabase ? _service.cloudClaimed : null,
+          discoverable: _service.discoverable,
+        );
+      }
+    }));
     // Every claim attempt / rotation republishes token expiry + cloud state,
     // so the UI can't show the first token's stale values (reviewer #11).
     _service.onClaimStateChanged = (expiresAt, cloudSynced) {

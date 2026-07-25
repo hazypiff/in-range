@@ -93,6 +93,9 @@ class BeaconService {
     })
     ..onAdvertisingState = ((advertising) {
       _discoverable = advertising;
+    })
+    ..onBufferedSightingsReady = (() {
+      unawaited(_drainNativeBuffer());
     });
   final Duration _rotationWindow;
   final String _userId;
@@ -232,6 +235,57 @@ class BeaconService {
   final Map<String, SightingRecord> _pendingByCorr = {};
   static const int _maxPendingSightings = 500;
 
+  /// iOS session restore (audit 2026-07-25, critical #1): after a process
+  /// eviction the native carrier kept advertising/scanning off its persisted
+  /// state, but a fresh Dart isolate starts with `_isOn = false` — restored
+  /// sightings were rejected by the onSighting guard and the UI showed off
+  /// over a live beacon. One canonical state: if native says the beacon is
+  /// on, Dart re-runs the full session (fresh claim, timers, wake sources)
+  /// and the UI follows; if Dart cannot run a session (signed out, missing
+  /// secrets) the native side is stopped so nothing advertises behind the
+  /// user's back. Returns true when a session was restored. No-op off iOS
+  /// and when the beacon is already on.
+  Future<bool> restoreNativeSession() async {
+    if (_isOn) return false;
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return false;
+    if (!await _bgBeacon.isNativeEnabled()) return false;
+    if (_userId.trim().isEmpty || !AppConfig.hasCryptoSecrets) {
+      debugPrint('Native beacon active but session not restorable — stopping');
+      await _bgBeacon.stop();
+      return false;
+    }
+    debugPrint('Restoring beacon session from native state');
+    try {
+      // Range is a fixed product constant (SelectedRangeController), so no
+      // persisted choice is needed to resume.
+      await turnOnBeacon(rangeType: 'feet_60');
+      return true;
+    } catch (e) {
+      debugPrint('Native session restore failed: $e');
+      return false;
+    }
+  }
+
+  /// Pull-and-ack drain of the native background buffer: sightings are
+  /// ingested with their original capture timestamps (migration 0053's
+  /// late-evidence window covers them server-side) and only then acked, so
+  /// a crash mid-drain re-delivers instead of losing them.
+  Future<void> _drainNativeBuffer() async {
+    if (!_isOn) return;
+    final items = await _bgBeacon.drainBufferedSightings();
+    if (items.isEmpty || !_isOn) return;
+    for (final s in items) {
+      final token = s['token'], rssi = s['rssi'], ts = s['ts'];
+      if (token is String && token.length == 32 && rssi is int) {
+        final at = ts is int
+            ? DateTime.fromMillisecondsSinceEpoch(ts)
+            : DateTime.now();
+        _ingestForeignSample(token, rssi, AdvertPower.high, at: at);
+      }
+    }
+    await _bgBeacon.ackBufferedSightings(items.length);
+  }
+
   Future<void> turnOnBeacon({required String rangeType}) async {
     if (_isOn) return;
     if (!AppConfig.hasCryptoSecrets) {
@@ -271,6 +325,9 @@ class BeaconService {
       // keepalive: gated, iOS-only, and never blocks the beacon.
       unawaited(subtleWake.start());
       unawaited(subtleWake.syncAnchors(venueAnchors.regionDescriptors()));
+      // Pick up anything the native carrier buffered while this isolate was
+      // dead (eviction restore) or suspended.
+      unawaited(_drainNativeBuffer());
     } catch (e) {
       if (gen == _sessionGeneration) {
         _advertisingWanted = false;
@@ -1385,9 +1442,39 @@ class BeaconService {
       return;
     }
 
+    // Pre-claim the whole issued batch (0060) so tokens the native carrier
+    // serves while Dart is suspended or evicted still resolve server-side.
+    // Self-throttled — fires at session start and day rollover, not per
+    // rotation. Runs before the single claim so its 1-minute throttle never
+    // trips on a fresh single-claim row.
+    unawaited(_preclaimBatch());
+
     // Retries the SAME live token with bounded backoff; ClaimManager fires
     // onState (→ onClaimStateChanged) after every attempt.
     await _claimMgr.attempt(gen);
+  }
+
+  DateTime? _lastBatchPreclaim;
+
+  /// One claim_token_batch RPC per 6 h (migration 0060): makes every slot
+  /// the native iOS carrier can serve resolvable through token_claim_history
+  /// while Dart is suspended. Failures are swallowed — the live per-rotation
+  /// claim still covers the current slot; the pre-claim is the safety net.
+  Future<void> _preclaimBatch() async {
+    final now = DateTime.now();
+    final last = _lastBatchPreclaim;
+    if (last != null && now.difference(last) < const Duration(hours: 6)) {
+      return;
+    }
+    _lastBatchPreclaim = now;
+    try {
+      await InRangeSupabase.client.rpc('claim_token_batch', params: {
+        'p_range': _mapUiRangeToDb(_claimRangeType ?? 'feet_60'),
+      }).timeout(const Duration(seconds: 10));
+      debugPrint('claim_token_batch OK');
+    } catch (e) {
+      debugPrint('claim_token_batch failed: $e');
+    }
   }
 
   /// One claim_token RPC for the current token/location. Throws on failure so

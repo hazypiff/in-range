@@ -24,6 +24,13 @@ class BackgroundBeaconChannel {
   /// Native advertising state — feeds the fail-closed `_discoverable` rule.
   void Function(bool advertising)? onAdvertisingState;
 
+  /// Native reports a non-empty background buffer. The consumer MUST pull
+  /// via [drainBufferedSightings] and confirm via [ackBufferedSightings] —
+  /// native never deletes a buffered sighting before that ack (audit
+  /// 2026-07-25: the old push-flush destroyed buffers before delivery was
+  /// confirmed, losing sightings on cold launches).
+  void Function()? onBufferedSightingsReady;
+
   Future<dynamic> _onCall(MethodCall call) async {
     switch (call.method) {
       case 'onSighting':
@@ -40,8 +47,49 @@ class BackgroundBeaconChannel {
       case 'onAdvertisingState':
         final args = call.arguments;
         if (args is bool) onAdvertisingState?.call(args);
+      case 'onBufferedSightingsReady':
+        onBufferedSightingsReady?.call();
     }
     return null;
+  }
+
+  /// Whether the native carrier is enabled — i.e. it survived a process
+  /// eviction and is advertising/scanning RIGHT NOW regardless of what this
+  /// fresh Dart isolate believes. The session-restore path keys off this so
+  /// native, Dart, and UI converge on one beacon state.
+  Future<bool> isNativeEnabled() async {
+    try {
+      return await _channel.invokeMethod<bool>('isEnabled') ?? false;
+    } catch (_) {
+      return false; // no native module (Android, tests) — nothing to restore
+    }
+  }
+
+  /// Reads the native background-sighting buffer WITHOUT clearing it. Pair
+  /// with [ackBufferedSightings] once the sightings are ingested.
+  Future<List<Map<String, Object>>> drainBufferedSightings() async {
+    try {
+      final list =
+          await _channel.invokeMethod<List<dynamic>>('drainBufferedSightings');
+      return [
+        for (final e in list ?? const <dynamic>[])
+          if (e is Map) Map<String, Object>.from(e),
+      ];
+    } catch (e) {
+      debugPrint('BackgroundBeacon drain failed: $e');
+      return const [];
+    }
+  }
+
+  /// Confirms ingestion of the first [count] drained sightings; only then
+  /// does native drop them (at-least-once delivery — a crash between drain
+  /// and ack re-delivers, it never loses).
+  Future<void> ackBufferedSightings(int count) async {
+    try {
+      await _channel.invokeMethod<void>('ackBufferedSightings', count);
+    } catch (e) {
+      debugPrint('BackgroundBeacon ack failed: $e');
+    }
   }
 
   static List<Map<String, Object>> slotsPayload(

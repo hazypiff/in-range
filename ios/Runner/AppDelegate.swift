@@ -15,6 +15,11 @@ import UIKit
     // on when the process died — the persisted flag brings CoreBluetooth back
     // up immediately, before (and without) the Flutter engine.
     BackgroundBeacon.shared.bootFromPersistence()
+    // Tier 2-3 (SUBTLE_TRACKING_ARCHITECTURE.md): an SLC/region relaunch
+    // delivers its event only to a CLLocationManager recreated DURING launch
+    // with monitoring restarted — rebuild from the persisted session before
+    // the engine, and before super returns, exactly like the Bluetooth boot.
+    SubtleWakeCoordinator.shared.bootFromPersistence()
     // Tier 4 (SUBTLE_TRACKING_ARCHITECTURE.md): APNs registration shows no
     // prompt — the permission alert belongs to UNUserNotificationCenter,
     // whose flow Dart owns. Fails harmlessly until the Mac build adds the

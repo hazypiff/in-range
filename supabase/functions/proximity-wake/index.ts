@@ -456,10 +456,12 @@ Deno.serve(async (req) => {
               "apns-expiration": `${Math.floor(Date.now() / 1000) + 3600}`,
               "Content-Type": "application/json",
             },
-            // Silent push: wake hint + nonce only, no user data.
+            // Silent push: wake hint + nonce only, no user data. The key is
+            // `nonce` — the client's SubtleWakeService reads it under that
+            // name (it also tolerates `wake` for older deployments).
             body: JSON.stringify({
               aps: { "content-available": 1 },
-              wake: crypto.randomUUID(),
+              nonce: crypto.randomUUID(),
             }),
           });
           if (res.ok) {

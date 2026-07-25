@@ -99,16 +99,30 @@ class BatchTokenSource {
 
   Future<void> _ensureBatch(DateTime now) async {
     final utc = now.toUtc();
-    final dayUtc = DateTime.utc(utc.year, utc.month, utc.day);
-    try {
-      final slots = await _fetch(dayUtc, _window.inMinutes);
-      if (slots.isNotEmpty) {
-        _slots
-          ..clear()
-          ..addAll(slots);
+    final today = DateTime.utc(utc.year, utc.month, utc.day);
+    // An uninterrupted dark session crosses midnight UTC: with only today's
+    // slots the native carrier falls back to a stale token at 00:00 and peers
+    // stop resolving us (audit 2026-07-25). issue_token_batch permits today
+    // AND tomorrow and stays under its 3-active-days abuse cap, so fetch both.
+    // Each fetch fails soft independently — a tomorrow-fetch failure must
+    // never cost today's batch.
+    Future<List<BatchSlot>> fetchTolerant(DateTime day) async {
+      try {
+        return await _fetch(day, _window.inMinutes);
+      } catch (_) {
+        return <BatchSlot>[];
       }
-    } catch (_) {
-      // Keep any prior batch; nextToken falls back to random if none covers now.
+    }
+
+    final results = await Future.wait([
+      fetchTolerant(today),
+      fetchTolerant(today.add(const Duration(days: 1))),
+    ]);
+    final combined = <BatchSlot>[...results[0], ...results[1]];
+    if (combined.isNotEmpty) {
+      _slots
+        ..clear()
+        ..addAll(combined);
     }
   }
 

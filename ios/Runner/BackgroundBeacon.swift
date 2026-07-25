@@ -39,6 +39,11 @@ final class BackgroundBeacon: NSObject {
   private var centralMgr: CBCentralManager?
   private var channel: FlutterMethodChannel?
   private var serviceAdded = false
+  /// Set by peripheralManager(_:willRestoreState:) — which fires BEFORE
+  /// peripheralManagerDidUpdateState on a restoration relaunch — so the state
+  /// callback does not clobber the restored service registration (audit
+  /// 2026-07-25, critical #3).
+  private var didRestorePeripheral = false
 
   // peripheral.identifier → (tokenHex, cachedAt)
   private var tokenCache: [UUID: (hex: String, at: Date)] = [:]
@@ -58,13 +63,14 @@ final class BackgroundBeacon: NSObject {
   /// persisted enabled flag brings both managers straight back up — no
   /// Flutter engine required to serve GATT reads or buffer sightings.
   func bootFromPersistence() {
-    // Flush the background buffer whenever the app returns to foreground —
-    // the engine is only trustworthy while active.
+    // Tell Dart a non-empty buffer is waiting whenever the app returns to
+    // foreground — the engine is only trustworthy while active. Delivery is
+    // pull-and-ack (see drainBuffer/ackBuffer): nothing is deleted here.
     NotificationCenter.default.addObserver(
       forName: UIApplication.didBecomeActiveNotification, object: nil,
       queue: .main
     ) { [weak self] _ in
-      self?.flushBuffered()
+      self?.notifyBufferReady()
     }
     // Scheduled background wakes: the free-account path to both-iPhones-
     // asleep discovery. iOS grants opportunistic ~30 s windows (min 15 min
@@ -134,7 +140,7 @@ final class BackgroundBeacon: NSObject {
         self.ensureManagers()
         self.reconfigureAdvertising()
         self.ensureScanning()
-        self.flushBuffered()
+        self.notifyBufferReady()
         result(self.peripheralMgr?.state == .poweredOn)
       case "updateBatch":
         self.storeSlots(call.arguments)
@@ -144,14 +150,24 @@ final class BackgroundBeacon: NSObject {
         self.defaults.set(false, forKey: Self.keyEnabled)
         self.stopEverything()
         result(nil)
-      case "flushBufferedSightings":
-        self.flushBuffered()
+      case "isEnabled":
+        // Dart's session-restore path keys off this: after an eviction the
+        // native side is the ONLY component that knows the beacon is on.
+        result(self.enabled)
+      case "drainBufferedSightings":
+        // Pull-and-ack: return the buffer WITHOUT clearing it; Dart acks via
+        // ackBufferedSightings once the sightings are ingested. A crash
+        // between drain and ack re-delivers — it never loses (audit
+        // 2026-07-25, critical #6).
+        result(self.defaults.array(forKey: Self.keyBuffer) as? [[String: Any]] ?? [])
+      case "ackBufferedSightings":
+        let count = (call.arguments as? Int) ?? 0
+        self.ackBuffer(count)
         result(nil)
       default:
         result(FlutterMethodNotImplemented)
       }
     }
-    flushBuffered()
   }
 
   private var enabled: Bool { defaults.bool(forKey: Self.keyEnabled) }
@@ -309,7 +325,7 @@ final class BackgroundBeacon: NSObject {
     // NEVER hand a background sighting to the Flutter engine: a suspended
     // engine's channel accepts the call and silently drops it (dark-bench
     // 2026-07-23 — native discoveries happened, Dart never saw them).
-    // Background → persist natively, flush on foreground.
+    // Background → persist natively; Dart pulls and acks when it is ready.
     if UIApplication.shared.applicationState == .active, let ch = channel {
       ch.invokeMethod(
         "onSighting", arguments: ["token": tokenHex, "rssi": rssi, "ts": ts])
@@ -321,12 +337,41 @@ final class BackgroundBeacon: NSObject {
     }
   }
 
-  private func flushBuffered() {
+  /// Tells Dart the buffer is non-empty so it can pull (drain) and ack.
+  /// Never delivers the sightings itself — a pushed batch whose delivery is
+  /// not confirmed can be lost on a cold launch, which is exactly the bug
+  /// pull-and-ack exists to close.
+  private func notifyBufferReady() {
     guard let ch = channel,
+          UIApplication.shared.applicationState == .active,
           let buf = defaults.array(forKey: Self.keyBuffer) as? [[String: Any]],
           !buf.isEmpty else { return }
-    defaults.removeObject(forKey: Self.keyBuffer)
-    for s in buf { ch.invokeMethod("onSighting", arguments: s) }
+    ch.invokeMethod("onBufferedSightingsReady", arguments: nil)
+  }
+
+  /// Drops the first [count] buffered sightings — called only after Dart
+  /// confirms ingestion of that many drained entries.
+  private func ackBuffer(_ count: Int) {
+    guard count > 0,
+          var buf = defaults.array(forKey: Self.keyBuffer) as? [[String: Any]],
+          !buf.isEmpty else { return }
+    buf.removeFirst(min(count, buf.count))
+    if buf.isEmpty {
+      defaults.removeObject(forKey: Self.keyBuffer)
+    } else {
+      defaults.set(buf, forKey: Self.keyBuffer)
+    }
+  }
+
+  /// Direct native wake path for the subtle-wake tiers (audit 2026-07-25,
+  /// critical #5): an SLC/region/silent-push wake nudges the BLE carrier
+  /// immediately — a fresh scan session plus a re-asserted advert — instead
+  /// of waiting for the async Dart burst to spin up. Cheap and idempotent.
+  func nudge(reason: String) {
+    guard enabled else { return }
+    logWake(reason)
+    restartScanNow()
+    reconfigureAdvertising()
   }
 
   private func notifyAdvertisingState(_ ok: Bool) {
@@ -358,7 +403,15 @@ final class BackgroundBeacon: NSObject {
 extension BackgroundBeacon: CBPeripheralManagerDelegate {
   func peripheralManagerDidUpdateState(_ peripheral: CBPeripheralManager) {
     if peripheral.state == .poweredOn {
-      serviceAdded = false  // services don't survive a power cycle
+      if didRestorePeripheral {
+        // Restoration relaunch: willRestoreState already recovered the
+        // registered service (characteristics and subscriptions intact).
+        // Resetting serviceAdded here would re-add it → .alreadyRegistered
+        // and a briefly orphaned read characteristic.
+        didRestorePeripheral = false
+      } else {
+        serviceAdded = false  // genuine fresh start / power cycle
+      }
       reconfigureAdvertising()
     } else {
       notifyAdvertisingState(false)
@@ -368,18 +421,18 @@ extension BackgroundBeacon: CBPeripheralManagerDelegate {
   func peripheralManager(
     _ peripheral: CBPeripheralManager, willRestoreState dict: [String: Any]
   ) {
-    // iOS relaunched us to service a GATT read or advert event. Rebuild the
-    // service and advertising state from the persisted batch so a peer can
-    // still read the current token before Dart attaches.
+    // iOS relaunched us to service a GATT read or advert event. The restored
+    // services are the SAME CBMutableService objects we registered, still
+    // holding their characteristics — mark registration recovered and let
+    // didUpdateState re-assert the advert without re-adding the service.
+    didRestorePeripheral = true
     if let services = dict[CBPeripheralManagerRestoredStateServicesKey] as? [CBMutableService] {
       for svc in services where svc.uuid == Self.serviceUUID {
-        serviceAdded = true
+        if (svc.characteristics ?? []).contains(where: { $0.uuid == Self.tokenCharUUID }) {
+          serviceAdded = true
+        }
       }
     }
-    if !serviceAdded {
-      reconfigureAdvertising()
-    }
-    // didUpdateState follows and re-advertises if powered on.
   }
 
   func peripheralManagerDidStartAdvertising(
@@ -439,12 +492,21 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
   func centralManager(_ central: CBCentralManager, willRestoreState dict: [String: Any]) {
     // iOS relaunched us for a central event. Re-attach any restored
     // peripherals and resume the filtered scan so discoveries keep flowing
-    // before Dart attaches.
+    // before Dart attaches. Apple requires resuming operations from their
+    // preserved point: a restored CONNECTED peripheral picks its token read
+    // back up (the whole reason we connected), and a CONNECTING one is kept
+    // strongly so its didConnect/didFail has somewhere to land.
     if let peripherals = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral] {
       for p in peripherals {
         p.delegate = self
-        if p.state == .connected {
+        switch p.state {
+        case .connected:
           inflight[p.identifier] = p
+          resumeTokenRead(on: p)
+        case .connecting:
+          inflight[p.identifier] = p
+        default:
+          break
         }
       }
     }
@@ -452,6 +514,21 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
       ensureScanning()
     }
     // didUpdateState follows and restarts the filtered scan.
+  }
+
+  /// Continues a token read on a restored connection from whatever stage the
+  /// peripheral already reached — discovery results survive restoration, so
+  /// re-running them blindly would just add latency to a borrowed-time wake.
+  private func resumeTokenRead(on p: CBPeripheral) {
+    if let svc = p.services?.first(where: { $0.uuid == Self.serviceUUID }) {
+      if let ch = svc.characteristics?.first(where: { $0.uuid == Self.tokenCharUUID }) {
+        p.readValue(for: ch)
+      } else {
+        p.discoverCharacteristics([Self.tokenCharUUID], for: svc)
+      }
+    } else {
+      p.discoverServices([Self.serviceUUID])
+    }
   }
 
   func centralManager(

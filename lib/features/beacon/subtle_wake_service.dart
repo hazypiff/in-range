@@ -152,7 +152,12 @@ class SubtleWakeService {
     try {
       final ok = await _channel.invokeMethod<bool>('start');
       _running = ok ?? false;
-      if (_running) debugPrint('Subtle wake coordinator started');
+      if (_running) {
+        debugPrint('Subtle wake coordinator started');
+        // Wakes that fired while the engine was dead (SLC/region relaunch,
+        // silent push) wait in the native buffer — collect them now.
+        unawaited(drainBufferedWakes());
+      }
     } on MissingPluginException {
       // Native SubtleWakeCoordinator is not in this build. Not an error worth
       // retrying; the flag stays available for builds that ship it.
@@ -225,14 +230,27 @@ class SubtleWakeService {
   }
 
   Future<dynamic> _handleNativeCall(MethodCall call) async {
+    if (call.method == 'onWakeBuffered') {
+      // Native persisted wakes while the engine was unreachable and now
+      // reports a non-empty buffer. Pull-and-ack: nothing is deleted natively
+      // until the ack lands (audit 2026-07-25, critical #6).
+      unawaited(drainBufferedWakes());
+      return null;
+    }
     if (call.method != 'onWake') return null;
     final args = call.arguments;
     if (args is! Map) return null;
-    final m = args.cast<String, dynamic>();
+    final wake = _parseWake(args.cast<String, dynamic>());
+    if (wake == null) return null;
+    unawaited(handleWake(wake));
+    return null;
+  }
 
-    // Vocabulary of SubtleWakeCoordinator.swift: both region directions are
-    // the same wake tier, and a silent push's custom keys ride along (the
-    // `aps` dict never leaves native).
+  /// Parses one native wake event (live or drained). Vocabulary of
+  /// SubtleWakeCoordinator.swift: both region directions are the same wake
+  /// tier, and a silent push's custom keys ride along (the `aps` dict never
+  /// leaves native).
+  SubtleWake? _parseWake(Map<String, dynamic> m) {
     final source = switch (m['kind']) {
       'slc' => SubtleWakeSource.slc,
       'regionEnter' || 'regionExit' => SubtleWakeSource.region,
@@ -259,13 +277,46 @@ class SubtleWakeService {
       );
     }
 
-    unawaited(handleWake(SubtleWake(
+    return SubtleWake(
       source: source,
       fix: fix,
       regionId: m['id'] as String?,
-      nonce: m['nonce'] as String?,
-    )));
-    return null;
+      // `wake` is the legacy key from early proximity-wake deployments.
+      nonce: (m['nonce'] ?? m['wake']) as String?,
+    );
+  }
+
+  /// Pull-and-ack drain of the natively-buffered wakes (SLC/region/push
+  /// events that fired while the engine was suspended or dead). Each wake
+  /// runs the normal [handleWake] path — burst + hint — and only then is the
+  /// buffer acked, so a crash mid-drain re-delivers instead of losing them.
+  Future<void> drainBufferedWakes() async {
+    if (_platform != TargetPlatform.iOS) return;
+    List<dynamic>? raw;
+    try {
+      raw = await _channel.invokeMethod<List<dynamic>>('drainBufferedWakes');
+    } on MissingPluginException {
+      return; // older build without the coordinator
+    } catch (e) {
+      debugPrint('Subtle wake drain failed: $e');
+      return;
+    }
+    if (raw == null || raw.isEmpty) return;
+    var handled = 0;
+    for (final e in raw) {
+      if (e is! Map) {
+        handled++; // malformed — ack it so it is not re-delivered forever
+        continue;
+      }
+      final wake = _parseWake(e.cast<String, dynamic>());
+      if (wake != null) await handleWake(wake);
+      handled++;
+    }
+    try {
+      await _channel.invokeMethod('ackBufferedWakes', handled);
+    } catch (e) {
+      debugPrint('Subtle wake ack failed: $e');
+    }
   }
 
   /// Uploads the coarse venue hint for this wake. Fails soft at every step:

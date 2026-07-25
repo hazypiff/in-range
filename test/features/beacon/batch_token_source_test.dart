@@ -36,7 +36,7 @@ void main() {
     final t = await src.nextToken();
     expect(t.token, _dayBatch(day, 15)[1].token);
     expect(t.expiresAt, day.add(const Duration(minutes: 32)));
-    expect(fetches, 1);
+    expect(fetches, 2, reason: 'today AND tomorrow are fetched together');
   });
 
   test('advancing across slots reuses the cached batch (no refetch)', () async {
@@ -57,10 +57,11 @@ void main() {
     expect(a.token, _dayBatch(day, 15)[0].token);
     expect(b.token, _dayBatch(day, 15)[2].token);
     expect(c.token, _dayBatch(day, 15)[13].token);
-    expect(fetches, 1, reason: 'a full day of slots is cached from one fetch');
+    expect(fetches, 2, reason: 'today + tomorrow are cached from one paired fetch');
   });
 
-  test('refetches when now falls outside the cached day', () async {
+  test('tomorrow is preloaded; refetches only when now falls outside both days',
+      () async {
     var now = day.add(const Duration(minutes: 20));
     final days = <DateTime>[];
     final src = BatchTokenSource(
@@ -71,10 +72,22 @@ void main() {
       now: () => now,
     );
     await src.nextToken();
+    // Day+1 needs NO refetch — it was preloaded with today's batch, which is
+    // exactly what keeps a dark session alive across midnight UTC.
     now = day.add(const Duration(days: 1, minutes: 20)); // next UTC day
     final t = await src.nextToken();
     expect(days, [day, day.add(const Duration(days: 1))]);
     expect(t.token, _dayBatch(day.add(const Duration(days: 1)), 15)[1].token);
+    // Day+2 falls outside both cached days → a fresh paired fetch.
+    now = day.add(const Duration(days: 2, minutes: 20));
+    final t2 = await src.nextToken();
+    expect(days, [
+      day,
+      day.add(const Duration(days: 1)),
+      day.add(const Duration(days: 2)),
+      day.add(const Duration(days: 3)),
+    ]);
+    expect(t2.token, _dayBatch(day.add(const Duration(days: 2)), 15)[1].token);
   });
 
   test('falls back to a random opaque token when the batch is empty', () async {

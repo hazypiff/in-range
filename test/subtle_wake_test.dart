@@ -70,7 +70,9 @@ void main() {
       expect(s.isRunning, isTrue);
       await s.stop();
       expect(s.isRunning, isFalse);
-      expect(calls, ['start', 'stop']);
+      // drainBufferedWakes rides every successful start: wakes that fired
+      // while the engine was dead are pulled (and acked) via the same channel.
+      expect(calls, ['start', 'drainBufferedWakes', 'stop']);
     });
 
     test('start is a no-op while the flag is off', () async {
