@@ -1,11 +1,13 @@
 # iPhone beacon progress handoff
 
+> **Successor document:** `docs/IPHONE_BEACON_COMPLETION_HANDOFF.md` — the most recent comprehensive handoff with Mac readiness checklist and validation plan. This file is kept as a concise progress summary.
+
 ## Snapshot
 
 - **Repo**: `in-range` (Flutter + iOS/Android)
 - **Branch**: `main`
-- **Current HEAD**: `605b121` (`docs: bump handoff HEAD`)
-- **Remotes**: both `hazypiff/in-range` and `inrangeai/in-range` are at `605b121`
+- **Current HEAD**: `7e327e2` (`docs: sync handoff HEAD to current commit`)
+- **Remotes**: both `hazypiff/in-range` and `inrangeai/in-range` are at `7e327e2`
 - **Test status**: `flutter test` passes 125/125; `flutter analyze --no-fatal-infos` clean
 
 This handoff covers what landed after the audit and the completion-plan commit, what is still open, and the recommended order for the next agent.
