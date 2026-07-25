@@ -2,9 +2,9 @@
 
 **Date:** 2026-07-25  
 **Repo:** `in-range` (Flutter + iOS/Android)  
-**Current HEAD:** `348f97e`  
-**Remotes:** `hazypiff/in-range` and `inrangeai/in-range` both at `348f97e`  
-**Author of this handoff:** Linux-side agent, after audit + hardening + build fixes
+**Current HEAD:** `2caa5d5`  
+**Remotes:** `hazypiff/in-range` and `inrangeai/in-range` both at `2caa5d5`  
+**Author of this handoff:** Linux-side agent, after audit + hardening + build fixes + subtle tracking implementation
 
 This document is the single source of truth for the next agent. It combines the strategic completion plan, the current tactical state, and the exact Mac/Xcode steps required before any further native iOS work can be trusted.
 
@@ -118,6 +118,49 @@ A subsequent review found that the new Swift files were not actually in the Xcod
 - **Removed the main-thread-blocking `CLLocationManager.locationServicesEnabled()` guard.** The authorization switch already covers the disabled case.
 - **Fixed `moving` nil flattening.** `location.speed < 0` now yields `NSNull()` instead of `false`, so Dart sees `isMoving == null` as documented.
 - Added `stop` / `clear` methods to the channel handler for full lifecycle control.
+
+### 3.6 Subtle multi-radio tracking (tiers 2–4)
+
+A full low-power wake architecture has been implemented behind `INRANGE_SUBTLE_WAKE` (default off). See `docs/SUBTLE_TRACKING_ARCHITECTURE.md` for the strategy.
+
+**What is now wired:**
+
+- **iOS native `SubtleWakeCoordinator.swift`**
+  - Significant Location Change (SLC) monitoring.
+  - `CLCircularRegion` monitoring for venue anchors (20-region iOS cap enforced).
+  - Silent push handling via `AppDelegate` → `SubtleWakeCoordinator`.
+  - Buffers wakes in a `UserDefaults` ring buffer when the engine is suspended; flushes on foreground.
+  - Returns `false` for `.notDetermined` / `.denied` / `.restricted` — Dart owns the permission flow.
+- **Dart `SubtleWakeService`**
+  - Receives SLC / region / push wakes over `io.inrange.app/subtle_wake`.
+  - Feeds the wake's fix into the location cache.
+  - Triggers a bounded BLE burst via `BeaconService.burst()`.
+  - Uploads a coarse (city-level) geohash + hashed BSSID to `public.venue_anchors`.
+- **Dart `VenueAnchorService`**
+  - Maintains up to 20 venue anchors (id, lat/lon, radius, hashed BSSID).
+  - Emits `updateRegions`-ready descriptors for the native coordinator.
+- **Server migration `0057_subtle_wake_support.sql`**
+  - `public.venue_anchors` with RLS.
+  - `public.proximity_wake_requests` outbox with RLS.
+  - `public.claim_proximity_wake_batch` RPC.
+- **Server Edge Function `proximity-wake/index.ts`**
+  - Drains the outbox, checks for likely co-located users via venue anchors + recent sightings.
+  - Sends APNs silent pushes to likely co-located devices.
+  - Rate-limited; fail-closed when APNs secrets are missing.
+
+**What still needs the Mac / Apple Developer account:**
+
+- Push Notifications capability in Xcode.
+- APNs Auth Key (.p8) added to Supabase secrets (`APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_AUTH_KEY_P8`, `APNS_BUNDLE_ID`).
+- Cron schedule for `proximity-wake`.
+- Real-device validation of SLC, region wakes, and silent push delivery.
+
+**Privacy posture:**
+
+- No continuous raw GPS upload.
+- Geohash is city-level (~5 km).
+- BSSID is hashed with the rotating device salt before leaving the device.
+- Silent pushes contain no user data — only a wake hint and a nonce.
 
 ---
 
@@ -377,9 +420,11 @@ git push origin main
 
 ```
 2026-07-25 Linux agent:
-  flutter test          → +125 passed
+  flutter test          → +154 passed
   flutter analyze       → no issues
   Swift compile (Xcode) → NOT RUN (no Mac available)
   Device test           → NOT RUN
-  project.pbxproj       → BackgroundLocationCoordinator.swift and WifiAssistPlugin.swift added to Runner target
+  project.pbxproj       → BackgroundLocationCoordinator.swift, WifiAssistPlugin.swift, SubtleWakeCoordinator.swift added to Runner target
+  Supabase migration    → 0057_subtle_wake_support.sql created
+  Edge Function         → proximity-wake/index.ts created
 ```

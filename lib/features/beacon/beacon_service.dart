@@ -15,6 +15,8 @@ import 'package:in_range/features/beacon/ephemeral_token_generator.dart';
 import 'package:in_range/features/beacon/location_keepalive.dart';
 import 'package:in_range/features/beacon/proximity_observation.dart';
 import 'package:in_range/features/beacon/range_estimator.dart';
+import 'package:in_range/features/beacon/subtle_wake_service.dart';
+import 'package:in_range/features/beacon/venue_anchor_service.dart';
 import 'package:in_range/features/beacon/wifi_scanner.dart';
 
 /// Called when we observe another In Range beacon (throttled).
@@ -47,6 +49,19 @@ class BeaconService {
     // for server radius gates and refreshes the cache without a fresh
     // Geolocator call per sighting. GPS is still not a proximity classifier.
     locationKeepalive.onFix = _onLocationFix;
+
+    // Subtle-wake path (docs/SUBTLE_TRACKING_ARCHITECTURE.md): each wake turns
+    // into a cache refresh + a bounded BLE burst; anchor edits propagate to
+    // the native coordinator as region descriptors. The BSSID salt MUST be
+    // the correlation salt so hints match the venue matcher's fingerprints.
+    subtleWake
+      ..onBurst = burst
+      ..onFix = _onLocationFix
+      ..onRefreshLocation = _ensureLocationCache
+      ..cachedFix = _cachedLocationFix
+      ..hashSalt = () => _correlationSalt;
+    venueAnchors.onChanged =
+        (descriptors) => unawaited(subtleWake.syncAnchors(descriptors));
   }
 
   // #6 step 2: opaque beacon tokens now come from the server
@@ -137,6 +152,15 @@ class BeaconService {
   /// Holds the process alive while the beacon is on (iOS). Scoped to the
   /// beacon session on both ends — see LocationKeepalive.
   final LocationKeepalive locationKeepalive = LocationKeepalive();
+
+  /// Subtle-wake path: receives SLC/region/push wakes from the iOS native
+  /// coordinator and turns each into a bounded BLE burst + venue hint upload.
+  /// OFF unless INRANGE_SUBTLE_WAKE is set; no-op on Android.
+  final SubtleWakeService subtleWake = SubtleWakeService();
+
+  /// Local venue anchors (tier 3 wakes). Descriptors are pushed to native
+  /// on every change and re-synced on each beacon-on.
+  final VenueAnchorService venueAnchors = VenueAnchorService();
 
   /// WiFi venue layer: resolves BLE's core ambiguity (a weak signal is either
   /// "far" or "close but body-blocked" — only a second radio can tell).
@@ -232,11 +256,16 @@ class BeaconService {
       // as foreground BLE and is still unmeasured. See LocationKeepalive.
       // Never blocks the beacon — a denied grant costs latency, not function.
       unawaited(locationKeepalive.start());
+      // Tier 2-4 wakes (SLC, region, silent push). Same contract as the
+      // keepalive: gated, iOS-only, and never blocks the beacon.
+      unawaited(subtleWake.start());
+      unawaited(subtleWake.syncAnchors(venueAnchors.regionDescriptors()));
     } catch (e) {
       if (gen == _sessionGeneration) {
         _advertisingWanted = false;
         _scanningWanted = false;
         await locationKeepalive.stop();
+        await subtleWake.stop();
         await _stopBle();
         _currentToken = null;
         _currentCorrelationId = null;
@@ -366,6 +395,10 @@ class BeaconService {
     // after the user explicitly opted out, which is the exact behavior that
     // gets an app pulled.
     await locationKeepalive.stop();
+    // Same for wake sources: SLC/region monitoring must not keep waking the
+    // app — and firing BLE bursts — after discoverability is off. The anchor
+    // set itself stays client-side; the next session re-syncs it.
+    await subtleWake.stop();
     _wifiFingerprint = null;
     // Estimator state must not leak across beacon sessions: after off/on, a
     // single fresh weak sample could otherwise classify Close By from the
@@ -428,6 +461,20 @@ class BeaconService {
     } catch (e) {
       debugPrint('BLE scan restart failed: $e');
     }
+  }
+
+  /// Bounded BLE burst for the subtle-wake path
+  /// (docs/SUBTLE_TRACKING_ARCHITECTURE.md): restarts the scan session so a
+  /// fresh discovery window opens. Restarting the session is the only way
+  /// repeated samples from one peer defeat duplicate coalescing (see
+  /// LocationKeepalive). The bound is the platform's, not a timer's: a
+  /// backgrounded app's wake window ends in seconds and iOS returns to the
+  /// duty-cycled filtered carrier (BackgroundBeacon), so there is nothing to
+  /// stop afterwards. Never throws and never starts a scan while off.
+  Future<void> burst() async {
+    if (!_isOn) return;
+    debugPrint('BLE burst (subtle wake)');
+    await _restartScanning();
   }
 
   Future<void> _stopBle() async {
@@ -1119,6 +1166,19 @@ class BeaconService {
     _cachedLon = fix.lon;
     _cachedAccuracy = fix.accuracyM;
     _cachedLocAt = fix.at;
+  }
+
+  /// The sighting cache as a fix, for subtle-wake venue hints that arrived
+  /// without one of their own. Null until the first fix of the session.
+  LocationAssistFix? _cachedLocationFix() {
+    final lat = _cachedLat, lon = _cachedLon, at = _cachedLocAt;
+    if (lat == null || lon == null || at == null) return null;
+    return LocationAssistFix(
+      lat: lat,
+      lon: lon,
+      accuracyM: _cachedAccuracy ?? -1,
+      at: at,
+    );
   }
 
   void _ensureLocationCache() {
