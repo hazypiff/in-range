@@ -540,6 +540,16 @@ git push origin main
 ```
 
 ```
+2026-07-25 CI tally (verified against the Actions API, agent-checked):
+  30179288436  e9e0bd7  success   (url_launcher_ios 6.3.6 resolved on 13.0)
+  30178452447  f6bf21e  success   (dispatch)
+  30178447233  f6bf21e  success   (push trigger)
+  30177777377  9bddc86  success
+  30176911873  65349dd  failure   ← streak boundary: FOUR consecutive greens,
+                                    not five; two are the same commit.
+```
+
+```
 2026-07-25 Linux agent (audit-criticals round, HEAD e8ad7b9):
   flutter test          → +156 passed
   flutter analyze       → no issues

@@ -40,6 +40,12 @@ mechanically; record everything; the decision rule is at the bottom.
 8. Both iPhones: Bluetooth on, **Location Always** granted through the
    in-app disclosure flow, notifications allowed.
 
+**While a device is in hand (15 seconds, not part of the timed run):** open
+the consent screen and tap the Privacy Policy and Terms links once. The
+links are compiled-but-unexercised — CI has never launched the app — and
+tapping them closes Apple 5.1.1 with an observation instead of an
+inference. Note the result in the run log.
+
 ## 1. The pair test (two stationary dark phones, one venue)
 
 **Contamination rules — violations produce a false pass, which is worse
