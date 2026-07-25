@@ -39,6 +39,27 @@ This document is the single source of truth for the next agent. It combines the 
 
 No silent-audio keepalive, no PushKit/VoIP abuse, no Find My usage, no IDFA, no advertising SDK, ATT genuinely not required (`NSPrivacyTracking=false`), silent push is `content-available: 1` only with no fake alert. The three techniques that get apps pulled now have a written refusal in `docs/APP_STORE_COMPLIANCE_2026-07-25.md` so the next "keep the app alive" proposal gets a citation, not a relitigation.
 
+### 16.4 Standing rules (twice is a pattern)
+
+1. **Any value that decides whether a production code path runs must resolve
+   identically in debug, profile, and release.** In this codebase that means
+   `AppConfig._env()` (dart-define first, dotenv second) — never
+   `dotenv.maybeGet` directly (release loads only `.env.example`), and never
+   an assert-stripped API (`BindingBase.debugBindingType()` cost us a
+   release-dead coordinator once; direct-dotenv `INRANGE_SUBTLE_WAKE` cost us
+   a release-dead wake stack the second time). The rule is durable in
+   `app_config.dart`'s `subtleWake` doc comment; this is its promotion to
+   policy.
+2. **No `ios/` change is "verified" without a compiler.** `flutter analyze`
+   and `flutter test` never touch Swift or the Xcode target graph. CI
+   (`ios-build.yml` on `hazypiff/in-range`) compiles on every push — cite
+   the run ID, per `docs/CI_IOS_BUILD.md`.
+3. **The pair test is the gate for claims.** Two stationary dark iPhones at
+   one venue, run mechanically per
+   `docs/IPHONE_DARK_PAIR_TEST_2026-07-26.md`. "Wired" and "measured" are
+   different states; no product copy may assert the screen-off gap is closed
+   until that table has numbers in it.
+
 ---
 
 ## 15. Audit-criticals round (2026-07-25, HEAD `e8ad7b9`)
