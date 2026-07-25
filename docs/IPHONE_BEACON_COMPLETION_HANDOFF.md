@@ -2,9 +2,9 @@
 
 **Date:** 2026-07-25  
 **Repo:** `in-range` (Flutter + iOS/Android)  
-**Current HEAD:** `bbc393e`  
-**Remotes:** `hazypiff/in-range` and `inrangeai/in-range` both at `bbc393e`  
-**Author of this handoff:** Linux-side agent, after audit + hardening + build fixes + subtle tracking implementation + audit fixes
+**Current HEAD:** `7e231ad`  
+**Remotes:** `hazypiff/in-range` and `inrangeai/in-range` both at `7e231ad`  
+**Author of this handoff:** Linux-side agent, after audit + hardening + build fixes + subtle tracking implementation + audit fixes + migration rehearsal
 
 This document is the single source of truth for the next agent. It combines the strategic completion plan, the current tactical state, and the exact Mac/Xcode steps required before any further native iOS work can be trusted.
 
@@ -159,6 +159,10 @@ A full low-power wake architecture has been implemented behind `INRANGE_SUBTLE_W
   - `proximity-wake`: inserts per-peer rate-limit rows; `send-push` filters `provider='fcm'`; `proximity-wake` filters `provider='apns'`.
   - `ApnsTokenService`: consumes `io.inrange.app/apns` and registers the raw APNs token with `provider='apns'`.
   - `VenueAnchorService`: persists anchors across app restarts; `BeaconService` derives anchors from the user's own hint cells.
+- **Migration rehearsal (2026-07-25)**
+  - `scripts/rehearse_migrations.sh` fixed to run against the Supabase container (docker exec + stdin, empty `supabase_realtime` publication).
+  - First working run caught a deploy blocker in `0059`: `register_push_token` 3-arg overload conflict. Fixed by `DROP FUNCTION IF EXISTS` plus explicit `(TEXT, TEXT, TEXT, TEXT)` on the `COMMENT`.
+  - Full chain `0001`→`0059` now applies cleanly and the accumulated-clause assertion passes.
 
 **What still needs the Mac / Apple Developer account:**
 

@@ -54,6 +54,11 @@ UPDATE public.device_push_tokens SET provider = 'fcm' WHERE provider IS NULL;
 
 -- register_push_token now accepts a provider so APNs tokens do not land in
 -- the FCM namespace. SECURITY DEFINER; same validation as 0009 plus provider.
+-- DROP the 0009 3-arg version first: without this the CREATE makes a 4-arg
+-- overload, the old 3-arg function stays live, and PostgREST's existing
+-- 3-arg .rpc('register_push_token', ...) becomes ambiguous at call time.
+DROP FUNCTION IF EXISTS public.register_push_token(TEXT, TEXT, TEXT);
+
 CREATE OR REPLACE FUNCTION public.register_push_token(
   p_token TEXT,
   p_platform TEXT,
@@ -94,7 +99,7 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION public.register_push_token IS
+COMMENT ON FUNCTION public.register_push_token(TEXT, TEXT, TEXT, TEXT) IS
   'Registers a device push token for the calling user. provider=fcm for send-push, provider=apns for proximity-wake.';
 
 REVOKE ALL ON FUNCTION public.register_push_token(TEXT, TEXT, TEXT, TEXT) FROM PUBLIC, anon;
