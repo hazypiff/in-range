@@ -10,6 +10,7 @@ Related repository context:
 
 - [`IOS_BACKGROUND_BLE_WIRING.md`](IOS_BACKGROUND_BLE_WIRING.md) — existing W1–W5 wiring/bench record; retain its measurements, but use this document's corrected carrier and lifecycle model.
 - [`IOS_SCREEN_OFF_FUSION_2026-07-24.md`](IOS_SCREEN_OFF_FUSION_2026-07-24.md) — active-session design using background Core Location and server-brokered NI tokens, plus venue-anchor options.
+- [`IOS_LOCATION_RESIDENCY_REVIEW_2026-07-24.md`](IOS_LOCATION_RESIDENCY_REVIEW_2026-07-24.md) — audit of commit `3d98316`; background location may keep app work runnable but does not remove Core Bluetooth background scan rules.
 - [`PROXIMITY_ALGORITHM.md`](PROXIMITY_ALGORITHM.md) — existing fusion direction.
 - [`PROXIMITY_TIERS.md`](PROXIMITY_TIERS.md) — provisional thresholds, not physical truth.
 - [`CALIBRATION_FREEZE_2026-07-23.md`](CALIBRATION_FREEZE_2026-07-23.md) — current walk freeze and device-build preflight.

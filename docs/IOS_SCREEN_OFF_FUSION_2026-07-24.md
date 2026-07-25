@@ -6,6 +6,11 @@ Status: research/design; not implemented
 
 Scope: getting useful iPhone proximity evidence after a user starts an explicit session and turns the screen off
 
+Related implementation audit:
+[`IOS_LOCATION_RESIDENCY_REVIEW_2026-07-24.md`](IOS_LOCATION_RESIDENCY_REVIEW_2026-07-24.md)
+explains why a background location stream may provide app runtime but does not
+turn Core Bluetooth scanning into foreground scanning.
+
 This document answers a narrower question than the general BLE research:
 
 > Can In Range combine several supported iPhone mechanisms to match nearby people while their screens are mostly off?
