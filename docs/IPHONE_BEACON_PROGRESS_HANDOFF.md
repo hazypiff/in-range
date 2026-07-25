@@ -4,9 +4,9 @@
 
 - **Repo**: `in-range` (Flutter + iOS/Android)
 - **Branch**: `main`
-- **Current HEAD**: `5715018` (`beacon: add iOS connected-BSSID assist (WifiAssist)`)
-- **Remotes**: both `hazypiff/in-range` and `inrangeai/in-range` are at `5715018`
-- **Test status**: `flutter test` passes 121/121; `flutter analyze --no-fatal-infos` clean
+- **Current HEAD**: `92a22e3` (`beacon: add native iOS background-location coordinator spike (P1.4)`)
+- **Remotes**: both `hazypiff/in-range` and `inrangeai/in-range` are at `92a22e3`
+- **Test status**: `flutter test` passes 124/124; `flutter analyze --no-fatal-infos` clean
 
 This handoff covers what landed after the audit and the completion-plan commit, what is still open, and the recommended order for the next agent.
 
@@ -55,17 +55,31 @@ This handoff covers what landed after the audit and the completion-plan commit, 
 - Plugin is registered in `AppDelegate.didInitializeImplicitFlutterEngine`.
 - Returns `null` when the Access WiFi Information entitlement or precise location auth is absent.
 
+### 5. Native iOS background-location coordinator (P1.4)
+
+- **Commit**: `92a22e3`
+- **Files**:
+  - `ios/Runner/BackgroundLocationCoordinator.swift` (new)
+  - `ios/Runner/AppDelegate.swift`
+  - `lib/features/beacon/location_keepalive.dart`
+  - `lib/features/beacon/beacon_service.dart`
+  - `test/location_coordinator_test.dart` (new)
+- Swift coordinator starts/stops a coarse `CLLocationManager` session while the beacon is on, persists fixes to a UserDefaults ring buffer, and exposes `start` / `stop` / `flush` on `io.inrange.app/location_coordinator`.
+- `LocationKeepalive` prefers the native coordinator when the channel is registered; falls back to the Dart `geolocator` stream in tests or older builds.
+- `BeaconService` feeds every fix into the sighting cache via `locationKeepalive.onFix`, so `_ensureLocationCache()` has fresh coordinates without a per-sighting Geolocator call.
+- Live product behavior is unchanged; the entire path is still gated by `INRANGE_LOCATION_RESIDENCY` (default off).
+
 ---
 
 ## Verification run
 
 ```bash
 cd /home/hazypiff/in-range
-flutter test          # +121, all passed
+flutter test          # +124, all passed
 flutter analyze --no-fatal-infos   # no issues
 ```
 
-The Swift side has **not** been built in Xcode on this machine. `NEHotspotNetwork.fetchCurrent` and the `Access WiFi Information` entitlement must be validated with a real iOS archive/TestFlight build.
+The Swift side has **not** been built in Xcode on this machine. Both `WifiAssistPlugin` (`NEHotspotNetwork.fetchCurrent`) and `BackgroundLocationCoordinator` (`CLLocationManager`) need a real iOS archive/TestFlight build to confirm entitlements and background behavior.
 
 ---
 
@@ -89,12 +103,6 @@ The Swift side has **not** been built in Xcode on this machine. `NEHotspotNetwor
 3. Produce a `ProximityObservation(source: ProximitySource.bssidMatch)` only when the peer's hashed BSSID matches the local one.
 4. Add a fusion rule: BSSID match can corroborate "same venue" but should not override BLE band decisions until calibrated.
 
-### P2 — Native background-location coordinator spike
-
-- Goal: keep CoreBluetooth alive on a locked iPhone without a foreground service.
-- Files to touch: `ios/Runner/BackgroundBeacon.swift` (empty `willRestoreState` callbacks at :369 and :428), `LocationKeepalive`.
-- This is the next big iOS-specific piece after BSSID assist is wired.
-
 ### W5 — Persistent-GATT warm links + `readRSSI()`
 
 - The estimator envelope is ready for `ProximitySource.connectedRssi`.
@@ -111,9 +119,12 @@ The Swift side has **not** been built in Xcode on this machine. `NEHotspotNetwor
 
 ## If you continue from here
 
-- [ ] `git pull` on `main`; confirm HEAD is `5715018`.
-- [ ] On a Mac, open `ios/Runner.xcworkspace`, enable the **Access WiFi Information** entitlement in the provisioning profile, and run a device/archive build.
+- [ ] `git pull` on `main`; confirm HEAD is `92a22e3`.
+- [ ] On a Mac, open `ios/Runner.xcworkspace` and run a device/archive build to validate:
+  - **Access WiFi Information** entitlement for `WifiAssistPlugin`,
+  - background location mode / usage strings for `BackgroundLocationCoordinator`.
 - [ ] Verify `WifiAssist.currentBSSID()` returns real data when WiFi is on and precise location is granted.
+- [ ] Verify `BackgroundLocationCoordinator` starts, persists fixes, and flushes them on foreground.
 - [ ] Wire BSSID sampling into `VenueMatcher`/fusion (see open work P1b).
 - [ ] Run `flutter test` and `flutter analyze` before committing.
 - [ ] Do **not** rebuild the freeze phone build or change advert power handling until after the calibration walk data is captured.
@@ -123,5 +134,6 @@ The Swift side has **not** been built in Xcode on this machine. `NEHotspotNetwor
 ## Known caveats
 
 - `WifiAssistPlugin` reports the **raw** BSSID/SSID. The Dart class returns them raw; do not upload or log them without hashing.
-- The Swift plugin does not wake the app; it only works when Dart already has runtime.
+- The Swift WiFi plugin does not wake the app; it only works when Dart already has runtime.
+- `BackgroundLocationCoordinator` has not been run on a real device; validate background location authorization and that fixes survive a suspend/foreground cycle.
 - No iOS build or entitlement verification has been done from this machine.
