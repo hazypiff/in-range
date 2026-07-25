@@ -143,6 +143,11 @@ A full low-power wake architecture has been implemented behind `INRANGE_SUBTLE_W
   - `public.venue_anchors` with RLS.
   - `public.proximity_wake_requests` outbox with RLS.
   - `public.claim_proximity_wake_batch` RPC.
+- **Server migration `0058_subtle_wake_privacy.sql`**
+  - House-style `REVOKE`/`GRANT` for both new tables.
+  - `scrub_account_pii` now deletes venue anchors and wake requests.
+  - `export_my_data` now includes both tables.
+  - `cleanup_ephemeral_data` sweeps venue anchors after 14 days and wake requests on the notification_outbox cadence.
 - **Server Edge Function `proximity-wake/index.ts`**
   - Drains the outbox, checks for likely co-located users via venue anchors + recent sightings.
   - Sends APNs silent pushes to likely co-located devices.

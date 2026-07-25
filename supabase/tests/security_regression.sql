@@ -23,7 +23,7 @@ BEGIN
       'encounter_actions', 'matches', 'messages', 'photo_verifications',
       'blocks', 'reports', 'subscriptions', 'boosts', 'ad_impressions',
       'device_push_tokens', 'notification_outbox', 'ai_runs', 'ai_events',
-      'ai_feedback', 'app_settings'
+      'ai_feedback', 'app_settings', 'venue_anchors', 'proximity_wake_requests'
     ])
     AND NOT c.relrowsecurity
   LIMIT 1;
@@ -40,6 +40,20 @@ BEGIN
   ASSERT has_table_privilege('service_role', 'public.notification_outbox', 'SELECT')
     AND has_table_privilege('service_role', 'public.notification_outbox', 'UPDATE'),
     'Edge Function service role lacks outbox access';
+  ASSERT NOT has_table_privilege('anon', 'public.venue_anchors', 'SELECT'),
+    'anon can read venue anchors';
+  ASSERT has_table_privilege('authenticated', 'public.venue_anchors', 'SELECT')
+    AND has_table_privilege('authenticated', 'public.venue_anchors', 'INSERT'),
+    'authenticated cannot manage own venue anchors';
+  ASSERT has_table_privilege('service_role', 'public.venue_anchors', 'SELECT'),
+    'service role cannot read venue anchors for co-location matching';
+  ASSERT NOT has_table_privilege('anon', 'public.proximity_wake_requests', 'SELECT'),
+    'anon can read proximity wake requests';
+  ASSERT NOT has_table_privilege('authenticated', 'public.proximity_wake_requests', 'SELECT'),
+    'authenticated can read proximity wake requests';
+  ASSERT has_table_privilege('service_role', 'public.proximity_wake_requests', 'SELECT')
+    AND has_table_privilege('service_role', 'public.proximity_wake_requests', 'UPDATE'),
+    'Edge Function service role lacks proximity wake outbox access';
 
   ASSERT NOT has_function_privilege('anon', 'public.run_maintenance()', 'EXECUTE'),
     'anon can execute maintenance';
