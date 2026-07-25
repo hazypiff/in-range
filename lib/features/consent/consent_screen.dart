@@ -5,24 +5,29 @@ import 'package:in_range/features/beacon/beacon_provider.dart';
 import 'package:in_range/shared/services/consent_service.dart';
 import 'package:in_range/shared/services/photo_url_service.dart';
 
-/// Where the policy documents live.
+/// Where the policy documents live. The marketing/waitlist site
+/// (supabase/migrations/0054_waitlist.sql) is inrange.life — inrange.app is
+/// an unrelated product and its /privacy is a dead 502.
 ///
-/// TODO(counsel): these are placeholders. The documents do not exist yet, and
-/// Washington MHMDA requires the consumer-health-data policy to be a SEPARATE,
-/// separately-linked document rather than a section of the main policy — hence
-/// three URLs, not one.
+/// TODO(counsel): /privacy, /terms, and /privacy/health-data currently
+/// return the landing page (soft-404, verified 2026-07-25). The links below
+/// are the right domain, but the policy CONTENT must be published before App
+/// Store submission — Apple 5.1.1 rejects apps whose privacy policy is not
+/// "easily accessible" and substantive. Washington MHMDA also requires the
+/// consumer-health-data policy to be a SEPARATE, separately-linked document
+/// rather than a section of the main policy — hence three URLs, not one.
 class PolicyLinks {
   PolicyLinks._();
-  static const privacyPolicy = 'https://inrange.app/privacy';
-  static const healthDataPolicy = 'https://inrange.app/privacy/health-data';
-  static const termsOfUse = 'https://inrange.app/terms';
+  static const privacyPolicy = 'https://inrange.life/privacy';
+  static const healthDataPolicy = 'https://inrange.life/privacy/health-data';
+  static const termsOfUse = 'https://inrange.life/terms';
 
   /// TAKE IT DOWN Act intake (web/report.html). Must stay reachable from
   /// inside the app as well as publicly — Apple 1.2 requires UGC apps to
   /// publish a reporting mechanism and contact information.
-  static const reportIntimateImages = 'https://inrange.app/report';
-  static const accountDeletion = 'https://inrange.app/delete-account';
-  static const supportEmail = 'privacy@inrange.app';
+  static const reportIntimateImages = 'https://inrange.life/report';
+  static const accountDeletion = 'https://inrange.life/delete-account';
+  static const supportEmail = 'privacy@inrange.life';
 }
 
 /// One consent the user is asked for.
@@ -86,10 +91,22 @@ const _items = <_Item>[
         'from every photo before it leaves your phone.',
     required_: true,
   ),
-  // background_location is deliberately NOT offered: no shipped feature
-  // collects location in the background yet, and asking consent for
-  // processing that does not exist is over-collection by another name.
-  // Re-add the card when (if) the feature ships.
+  // Background location is a REAL, shipped feature: the subtle-wake path
+  // (iOS) monitors significant location changes and venue regions while the
+  // app is closed, so a dark phone can still notice encounters. Offering no
+  // card while shipping the feature would misstate the data flow. Optional
+  // because the beacon works without it — it improves dark-screen latency,
+  // it is not the core detector.
+  _Item(
+    purpose: ConsentPurpose.backgroundLocation,
+    title: 'Background location',
+    body: 'Occasional location checks while the app is closed, so your '
+        'phone can wake up to detect people nearby and recognize venues. '
+        'Only a coarse area (about a 3-mile cell) is stored — never a '
+        'continuous trail — and the checks stop the moment you turn the '
+        'beacon off.',
+    required_: false,
+  ),
 ];
 
 /// Unbundled, purpose-scoped consent.

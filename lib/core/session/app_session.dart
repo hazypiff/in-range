@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/core/network/supabase_client.dart';
+import 'package:in_range/core/notifications/apns_token_service.dart';
+import 'package:in_range/core/notifications/push_service.dart';
 import 'package:in_range/core/session/age_gate.dart';
 import 'package:in_range/shared/services/auth_service.dart';
 import 'package:in_range/shared/services/profile_sync_service.dart';
@@ -520,17 +522,36 @@ class SessionController extends StateNotifier<AppSession> {
         InRangeSupabase.clientOrNull?.auth.currentUser != null) {
       await _profileSync.requestDeletion();
     }
+    await _unregisterPushTokens();
     await _auth.signOut();
     await _clearAccountState(clearOnboarding: true);
   }
 
   Future<void> signOut() async {
+    await _unregisterPushTokens();
     try {
       await _auth.signOut();
     } catch (e) {
       debugPrint('Cloud sign-out failed; clearing this device session: $e');
     }
     await _clearAccountState();
+  }
+
+  /// Drop this device's push tokens BEFORE the auth session goes away (the
+  /// RPC needs it): a signed-out device must not stay reachable — or get
+  /// associated with the next account that signs in on it (audit 2026-07-25
+  /// round 3). Best-effort; a failure must not block sign-out.
+  Future<void> _unregisterPushTokens() async {
+    try {
+      await ApnsTokenService().unregister();
+    } catch (e) {
+      debugPrint('APNs unregister skipped: $e');
+    }
+    try {
+      await PushService().unregister();
+    } catch (e) {
+      debugPrint('Push unregister skipped: $e');
+    }
   }
 
   Future<void> _clearAccountState({bool clearOnboarding = false}) async {

@@ -32,6 +32,21 @@ fi
 MODE="--debug"
 for a in "$@"; do [[ "$a" == "--release" ]] && MODE="--release"; done
 
+# Calibration mode logs GPS fixes and the whole advert stream to the device
+# console — correct for a field walk, a privacy defect in anything that
+# ships. .env rides --dart-define-from-file straight into the release build,
+# so refuse to build one while the flag is on unless the caller explicitly
+# confirms this is a walk build (INRANGE_FIELD_WALK=1).
+if [[ "$MODE" == "--release" ]] \
+  && grep -qiE '^INRANGE_CALIB_SCAN[[:space:]]*=[[:space:]]*(true|1|yes)' .env \
+  && [[ "${INRANGE_FIELD_WALK:-}" != "1" ]]; then
+  echo "ERROR: INRANGE_CALIB_SCAN=true in .env." >&2
+  echo "Release builds log GPS + the advert stream to the device console." >&2
+  echo "  - Calibration walk: re-run with INRANGE_FIELD_WALK=1 to confirm." >&2
+  echo "  - Anything else:    set INRANGE_CALIB_SCAN=false in .env first." >&2
+  exit 1
+fi
+
 echo "=== flutter pub get (runs pod install on first iOS build) ==="
 flutter pub get
 

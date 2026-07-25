@@ -121,6 +121,7 @@ final class SubtleWakeCoordinator: NSObject {
     wantsToRun = true
     isRunning = true
     manager.startMonitoringSignificantLocationChanges()
+    manager.startMonitoringVisits()
     applyRegions(to: manager)
   }
 
@@ -152,6 +153,7 @@ final class SubtleWakeCoordinator: NSObject {
       locationManager = manager
       isRunning = true
       manager.startMonitoringSignificantLocationChanges()
+      manager.startMonitoringVisits()
       applyRegions(to: manager)
       result(true)
     case .notDetermined, .authorizedWhenInUse, .denied, .restricted:
@@ -175,6 +177,7 @@ final class SubtleWakeCoordinator: NSObject {
     pendingAuthManager = nil
     if let manager = locationManager {
       manager.stopMonitoringSignificantLocationChanges()
+      manager.stopMonitoringVisits()
       for region in manager.monitoredRegions {
         manager.stopMonitoring(for: region)
       }
@@ -376,6 +379,7 @@ extension SubtleWakeCoordinator: CLLocationManagerDelegate {
       // Anything below Always means no background wakes. Tear down so a
       // later start() — after Dart's permission flow — can re-arm cleanly.
       manager.stopMonitoringSignificantLocationChanges()
+      manager.stopMonitoringVisits()
       for region in manager.monitoredRegions {
         manager.stopMonitoring(for: region)
       }
@@ -424,6 +428,21 @@ extension SubtleWakeCoordinator: CLLocationManagerDelegate {
       "kind": "regionExit",
       "id": region.identifier,
       "ts": Int(Date().timeIntervalSince1970 * 1000),
+    ])
+  }
+
+  func locationManager(_ manager: CLLocationManager, didVisit visit: CLVisit) {
+    // CLVisit fires on ARRIVAL with no motion requirement — the exact case
+    // SLC misses: two phones that both arrive and then sit stationary at the
+    // same venue. iOS delivers visits in the background like SLC.
+    BackgroundBeacon.shared.nudge(reason: "visit")
+    let arrivalKnown = visit.arrivalDate.timeIntervalSince1970 > 0
+    emitWake([
+      "kind": "visit",
+      "lat": visit.coordinate.latitude,
+      "lon": visit.coordinate.longitude,
+      "acc": visit.horizontalAccuracy,
+      "ts": Int((arrivalKnown ? visit.arrivalDate : Date()).timeIntervalSince1970 * 1000),
     ])
   }
 

@@ -38,6 +38,40 @@
       </array>
     </dict>
 
+    <!-- Coarse venue cell (~4.9 km geohash) uploaded by the subtle-wake path
+         so the server can infer co-location without continuous GPS
+         (public.venue_anchors, migration 0057). Retention-swept. -->
+    <dict>
+      <key>NSPrivacyCollectedDataType</key>
+      <string>NSPrivacyCollectedDataTypeCoarseLocation</string>
+      <key>NSPrivacyCollectedDataTypeLinked</key>
+      <true/>
+      <key>NSPrivacyCollectedDataTypeTracking</key>
+      <false/>
+      <key>NSPrivacyCollectedDataTypePurposes</key>
+      <array>
+        <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+      </array>
+    </dict>
+
+    <!-- BLE proximity evidence that fits no listed category: advert RSSI and
+         rotating correlation ids (public.rssi_samples, migration 0056) and
+         the HMAC-hashed BSSID of the connected WiFi router (uploaded with
+         venue hints — keyed hash, never the raw MAC). Apple's taxonomy has
+         no proximity-sensor type, so both are declared here. -->
+    <dict>
+      <key>NSPrivacyCollectedDataType</key>
+      <string>NSPrivacyCollectedDataTypeOtherDataTypes</string>
+      <key>NSPrivacyCollectedDataTypeLinked</key>
+      <true/>
+      <key>NSPrivacyCollectedDataTypeTracking</key>
+      <false/>
+      <key>NSPrivacyCollectedDataTypePurposes</key>
+      <array>
+        <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+      </array>
+    </dict>
+
     <!-- Sexual orientation (profile "interested in"). Special-category data;
          collected solely to produce matches. -->
     <dict>

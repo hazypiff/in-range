@@ -27,6 +27,10 @@ class AppConfig {
           const String.fromEnvironment('INRANGE_PREFER_SERVER'),
         'INRANGE_CALIB_SCAN' =>
           const String.fromEnvironment('INRANGE_CALIB_SCAN'),
+        'INRANGE_SUBTLE_WAKE' =>
+          const String.fromEnvironment('INRANGE_SUBTLE_WAKE'),
+        'INRANGE_LOCATION_RESIDENCY' =>
+          const String.fromEnvironment('INRANGE_LOCATION_RESIDENCY'),
         'AUTH_REDIRECT_URL' =>
           const String.fromEnvironment('AUTH_REDIRECT_URL'),
         'GOOGLE_WEB_CLIENT_ID' =>
@@ -106,6 +110,22 @@ class AppConfig {
     final raw = (_env('INRANGE_ENABLE_FGS').isEmpty
             ? 'false'
             : _env('INRANGE_ENABLE_FGS'))
+        .toLowerCase();
+    return raw == 'true' || raw == '1' || raw == 'yes';
+  }
+
+  /// iOS subtle-wake tiers (SLC, venue regions, silent push): the low-power
+  /// wake net that turns co-location hints into bounded BLE bursts while the
+  /// phone is dark. Off by default.
+  ///
+  /// Must be read here — NOT via dotenv directly. Release builds load only
+  /// `.env.example` (both flags false) into dotenv; the real values arrive by
+  /// `--dart-define`, which this getter honors first. A direct dotenv read is
+  /// silently false in every release build (audit 2026-07-25 round 3).
+  static bool get subtleWake {
+    final raw = (_env('INRANGE_SUBTLE_WAKE').isEmpty
+            ? 'false'
+            : _env('INRANGE_SUBTLE_WAKE'))
         .toLowerCase();
     return raw == 'true' || raw == '1' || raw == 'yes';
   }

@@ -63,10 +63,11 @@ INRANGE_HMAC_SECRET=
       (tester) async {
     await pump(tester);
 
-    // Four OFFERED purposes -> four independent toggles. background_location
-    // is deliberately not offered: no shipped feature collects it, and asking
-    // consent for non-existent processing is over-collection by another name.
-    expect(find.byType(SwitchListTile), findsNWidgets(4));
+    // Five OFFERED purposes -> five independent toggles. background_location
+    // rejoined the list when the subtle-wake path (SLC/region monitoring)
+    // shipped — it is optional, and withholding the card while shipping the
+    // feature would misstate the data flow.
+    expect(find.byType(SwitchListTile), findsNWidgets(5));
 
     for (final label in const ['accept all', 'agree to all', 'allow all']) {
       expect(
@@ -135,7 +136,7 @@ INRANGE_HMAC_SECRET=
       'granting', (tester) async {
     await pump(tester, manage: true);
 
-    expect(find.byType(SwitchListTile), findsNWidgets(4));
+    expect(find.byType(SwitchListTile), findsNWidgets(5));
     expect(
       find.widgetWithText(FilledButton, 'Continue'),
       findsNothing,

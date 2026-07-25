@@ -53,7 +53,12 @@ class PushService {
     await registerToken(token, platform: _platform());
   }
 
-  Future<void> registerToken(
+  /// Registers [token] server-side. Returns true only when the row actually
+  /// landed — callers must not mark themselves registered on a skipped (no
+  /// session) or failed attempt (audit 2026-07-25 round 3: the APNs service
+  /// reported success on both, leaving the device associated with an account
+  /// that had signed out).
+  Future<bool> registerToken(
     String token, {
     required String platform,
     String? appVersion,
@@ -63,7 +68,7 @@ class PushService {
     final client = InRangeSupabase.clientOrNull;
     if (client == null || client.auth.currentUser == null) {
       debugPrint('Push: cannot register token — no session');
-      return;
+      return false;
     }
     try {
       await client.rpc('register_push_token', params: {
@@ -74,22 +79,30 @@ class PushService {
       });
       _registered = true;
       debugPrint('Push: token registered ($platform/$provider)');
+      return true;
     } catch (e) {
       debugPrint('Push: register_push_token failed: $e');
+      return false;
     }
   }
 
-  Future<void> unregister() async {
+  /// Unregisters [token] (or the in-memory token when omitted). Accepts an
+  /// explicit token so a caller that pulled the APNs token natively can
+  /// unregister it without sharing this instance's memory (sign-out runs on
+  /// a fresh instance).
+  Future<void> unregister([String? token]) async {
     final client = InRangeSupabase.clientOrNull;
-    final t = _token;
+    final t = token ?? _token;
     if (client == null || t == null) return;
     try {
       await client.rpc('unregister_push_token', params: {'p_token': t});
     } catch (e) {
       debugPrint('Push: unregister failed: $e');
     }
-    _token = null;
-    _registered = false;
+    if (t == _token) {
+      _token = null;
+      _registered = false;
+    }
   }
 
   /// Handle a remote message data payload (FCM / APNs).

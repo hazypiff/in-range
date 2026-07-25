@@ -63,13 +63,35 @@ class ApnsTokenService {
   Future<void> _register(String token) async {
     if (_token == token && _registered) return;
     _token = token;
-    await PushService().registerToken(
+    // registerToken returns false when there is no session or the RPC
+    // failed — only a real server row marks us registered, so a later
+    // ensureRegistered (after sign-in) retries instead of trusting the flag.
+    _registered = await PushService().registerToken(
       token,
       platform: 'ios',
       provider: 'apns',
     );
-    _registered = true;
-    debugPrint('APNs token registered');
+    if (_registered) debugPrint('APNs token registered');
+  }
+
+  /// Removes this device's APNs token from the server (sign-out, account
+  /// deletion). The token is pulled from the native side if necessary so a
+  /// fresh instance can unregister without having registered first.
+  Future<void> unregister() async {
+    if (!Platform.isIOS) return;
+    try {
+      final token = _token ??
+          await _channel.invokeMethod<String>('getDeviceToken');
+      if (token != null && token.isNotEmpty) {
+        await PushService().unregister(token);
+      }
+    } on MissingPluginException {
+      // Older build without the APNs channel; nothing to do.
+    } catch (e) {
+      debugPrint('APNs unregister failed: $e');
+    }
+    _token = null;
+    _registered = false;
   }
 }
 

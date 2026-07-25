@@ -266,24 +266,42 @@ class BeaconService {
     }
   }
 
+  bool _nativeDrainInFlight = false;
+  bool _nativeDrainPending = false;
+
   /// Pull-and-ack drain of the native background buffer: sightings are
   /// ingested with their original capture timestamps (migration 0053's
   /// late-evidence window covers them server-side) and only then acked, so
-  /// a crash mid-drain re-delivers instead of losing them.
+  /// a crash mid-drain re-delivers instead of losing them. Serialized: two
+  /// concurrent drains would ack overlapping counts and delete sightings
+  /// neither ingested (audit 2026-07-25 round 3); a drain requested while
+  /// one runs is folded into a follow-up pass.
   Future<void> _drainNativeBuffer() async {
     if (!_isOn) return;
-    final items = await _bgBeacon.drainBufferedSightings();
-    if (items.isEmpty || !_isOn) return;
-    for (final s in items) {
-      final token = s['token'], rssi = s['rssi'], ts = s['ts'];
-      if (token is String && token.length == 32 && rssi is int) {
-        final at = ts is int
-            ? DateTime.fromMillisecondsSinceEpoch(ts)
-            : DateTime.now();
-        _ingestForeignSample(token, rssi, AdvertPower.high, at: at);
-      }
+    if (_nativeDrainInFlight) {
+      _nativeDrainPending = true;
+      return;
     }
-    await _bgBeacon.ackBufferedSightings(items.length);
+    _nativeDrainInFlight = true;
+    try {
+      do {
+        _nativeDrainPending = false;
+        final items = await _bgBeacon.drainBufferedSightings();
+        if (items.isEmpty || !_isOn) return;
+        for (final s in items) {
+          final token = s['token'], rssi = s['rssi'], ts = s['ts'];
+          if (token is String && token.length == 32 && rssi is int) {
+            final at = ts is int
+                ? DateTime.fromMillisecondsSinceEpoch(ts)
+                : DateTime.now();
+            _ingestForeignSample(token, rssi, AdvertPower.high, at: at);
+          }
+        }
+        await _bgBeacon.ackBufferedSightings(items.length);
+      } while (_nativeDrainPending && _isOn);
+    } finally {
+      _nativeDrainInFlight = false;
+    }
   }
 
   Future<void> turnOnBeacon({required String rangeType}) async {

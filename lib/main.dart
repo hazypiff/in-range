@@ -14,6 +14,8 @@ import 'package:in_range/core/notifications/apns_token_service.dart';
 import 'package:in_range/core/notifications/local_notify.dart';
 import 'package:in_range/core/notifications/push_service.dart';
 import 'package:in_range/core/session/app_session.dart';
+import 'package:in_range/features/beacon/background_beacon_channel.dart';
+import 'package:in_range/features/beacon/subtle_wake_service.dart';
 import 'package:in_range/features/encounters/local_encounter_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -52,6 +54,25 @@ Future<void> main() async {
 
   if (!AppConfig.hasRealSupabase) {
     debugPrint('Supabase placeholder — local/guest mode + SQLite sightings');
+  }
+
+  // Fail-closed native reconcile (audit 2026-07-25 round 3): the iOS native
+  // carrier boots BEFORE Dart (AppDelegate), so after a process eviction the
+  // beacon may already be advertising — and SLC/region monitoring running —
+  // when this isolate starts. The session-restore path only runs when the
+  // beacon UI is built, which onboarding/auth/paused routes never do. The
+  // beacon requires sign-in (turnOnBeacon refuses otherwise), so no user
+  // here means the native side must be off — stop it now, before any route.
+  if (!kIsWeb && Platform.isIOS) {
+    try {
+      if (InRangeSupabase.clientOrNull?.auth.currentUser == null) {
+        debugPrint('No session at cold start — stopping native beacon/wake');
+        await BackgroundBeaconChannel().stop();
+        await SubtleWakeService().stop();
+      }
+    } catch (e) {
+      debugPrint('Native reconcile skipped: $e');
+    }
   }
 
   // Register push token path (mock token or future FCM).

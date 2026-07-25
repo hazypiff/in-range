@@ -4,7 +4,6 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/core/network/supabase_client.dart';
 import 'package:in_range/features/beacon/location_keepalive.dart';
@@ -12,8 +11,9 @@ import 'package:in_range/features/beacon/wifi_assist.dart';
 
 /// The low-power wake sources iOS provides (tiers 2-4 of
 /// docs/SUBTLE_TRACKING_ARCHITECTURE.md): significant location change,
-/// venue-anchor region events, and silent push.
-enum SubtleWakeSource { slc, region, push }
+/// venue-anchor region events, CLVisit arrival events (no motion required —
+/// the two-phones-stationary-at-one-venue case SLC misses), and silent push.
+enum SubtleWakeSource { slc, region, visit, push }
 
 /// One wake event from the native SubtleWakeCoordinator.
 class SubtleWake {
@@ -49,8 +49,8 @@ class SubtleWake {
 ///     the server can infer co-location WITHOUT continuous raw GPS
 ///     (migration 0057, `public.venue_anchors`).
 ///
-/// **OFF by default** (`INRANGE_SUBTLE_WAKE`, read from dotenv directly —
-/// AppConfig is not extended for this flag). iOS only; every wake source is
+/// **OFF by default** (`INRANGE_SUBTLE_WAKE`, read via AppConfig so
+/// `--dart-define` wins in release). iOS only; every wake source is
 /// an iOS API, and Android already scans acceptably in the background.
 ///
 /// The BLE burst is what a wake is FOR. GPS and WiFi are wake triggers and
@@ -171,11 +171,18 @@ class SubtleWakeService {
   /// monitoring keep waking the app — and firing BLE bursts — after the user
   /// turned discoverability off, which is exactly the behavior that gets an
   /// app pulled.
+  ///
+  /// ALWAYS calls the native stop, even when [_running] is false: native may
+  /// have persisted wantsToRun=true without arming (start returned false for
+  /// lack of Location Always), and skipping this call is how location wakes
+  /// re-armed after the user turned the beacon off (audit 2026-07-25 round
+  /// 3). Native stop is idempotent.
   Future<void> stop() async {
-    if (!_running) return;
     _running = false;
     try {
       await _channel.invokeMethod('stop');
+    } on MissingPluginException {
+      // Older build without the coordinator — nothing native to stop.
     } catch (e) {
       debugPrint('Subtle wake stop failed: $e');
     }
@@ -254,6 +261,7 @@ class SubtleWakeService {
     final source = switch (m['kind']) {
       'slc' => SubtleWakeSource.slc,
       'regionEnter' || 'regionExit' => SubtleWakeSource.region,
+      'visit' => SubtleWakeSource.visit,
       'silentPush' => SubtleWakeSource.push,
       _ => null,
     };
@@ -286,36 +294,54 @@ class SubtleWakeService {
     );
   }
 
+  bool _drainInFlight = false;
+  bool _drainPending = false;
+
   /// Pull-and-ack drain of the natively-buffered wakes (SLC/region/push
   /// events that fired while the engine was suspended or dead). Each wake
   /// runs the normal [handleWake] path — burst + hint — and only then is the
   /// buffer acked, so a crash mid-drain re-delivers instead of losing them.
+  /// Serialized like the sighting drain: overlapping count-acks would delete
+  /// wakes neither drain handled.
   Future<void> drainBufferedWakes() async {
     if (_platform != TargetPlatform.iOS) return;
-    List<dynamic>? raw;
-    try {
-      raw = await _channel.invokeMethod<List<dynamic>>('drainBufferedWakes');
-    } on MissingPluginException {
-      return; // older build without the coordinator
-    } catch (e) {
-      debugPrint('Subtle wake drain failed: $e');
+    if (_drainInFlight) {
+      _drainPending = true;
       return;
     }
-    if (raw == null || raw.isEmpty) return;
-    var handled = 0;
-    for (final e in raw) {
-      if (e is! Map) {
-        handled++; // malformed — ack it so it is not re-delivered forever
-        continue;
-      }
-      final wake = _parseWake(e.cast<String, dynamic>());
-      if (wake != null) await handleWake(wake);
-      handled++;
-    }
+    _drainInFlight = true;
     try {
-      await _channel.invokeMethod('ackBufferedWakes', handled);
-    } catch (e) {
-      debugPrint('Subtle wake ack failed: $e');
+      do {
+        _drainPending = false;
+        List<dynamic>? raw;
+        try {
+          raw =
+              await _channel.invokeMethod<List<dynamic>>('drainBufferedWakes');
+        } on MissingPluginException {
+          return; // older build without the coordinator
+        } catch (e) {
+          debugPrint('Subtle wake drain failed: $e');
+          return;
+        }
+        if (raw == null || raw.isEmpty) return;
+        var handled = 0;
+        for (final e in raw) {
+          if (e is! Map) {
+            handled++; // malformed — ack it so it is not re-delivered forever
+            continue;
+          }
+          final wake = _parseWake(e.cast<String, dynamic>());
+          if (wake != null) await handleWake(wake);
+          handled++;
+        }
+        try {
+          await _channel.invokeMethod('ackBufferedWakes', handled);
+        } catch (e) {
+          debugPrint('Subtle wake ack failed: $e');
+        }
+      } while (_drainPending);
+    } finally {
+      _drainInFlight = false;
     }
   }
 
@@ -463,13 +489,12 @@ class SubtleWakeService {
     return ((latMin + latMax) / 2, (lonMin + lonMax) / 2);
   }
 
-  /// The flag lives in dotenv directly, not AppConfig (see class doc). Blank
-  /// or unreadable = false: the feature is opt-in per build.
+  /// The flag lives in AppConfig so `--dart-define` wins in release builds
+  /// (a direct dotenv read is silently false there — audit 2026-07-25).
+  /// Blank or unreadable = false: the feature is opt-in per build.
   static bool _readSubtleWakeFlag() {
     try {
-      final raw =
-          (dotenv.maybeGet('INRANGE_SUBTLE_WAKE') ?? '').trim().toLowerCase();
-      return raw == 'true' || raw == '1' || raw == 'yes';
+      return AppConfig.subtleWake;
     } catch (_) {
       return false;
     }
