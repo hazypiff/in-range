@@ -23,5 +23,8 @@ import UIKit
     if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "WifiAssistPlugin") {
       WifiAssistPlugin.register(with: registrar)
     }
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "BackgroundLocationCoordinator") {
+      BackgroundLocationCoordinator.shared.register(with: registrar)
+    }
   }
 }

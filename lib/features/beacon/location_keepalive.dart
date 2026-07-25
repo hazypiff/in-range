@@ -1,8 +1,29 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:in_range/core/config/app_config.dart';
+
+/// One location fix from the native coordinator or the Dart geolocator stream.
+class LocationAssistFix {
+  const LocationAssistFix({
+    required this.lat,
+    required this.lon,
+    required this.accuracyM,
+    required this.at,
+    this.isMoving,
+  });
+
+  final double lat;
+  final double lon;
+  final double accuracyM;
+  final DateTime at;
+
+  /// True when the device appears to be moving; null if the source does not
+  /// report speed. This is a coarse hint, not a classification feature.
+  final bool? isMoving;
+}
 
 /// Holds a foreground-started location session while the beacon is on, so the
 /// process is not suspended and app-owned timers keep firing with the screen
@@ -10,6 +31,12 @@ import 'package:in_range/core/config/app_config.dart';
 ///
 /// **OFF by default** (`AppConfig.locationResidency`). Unproven and governance-
 /// blocked; see below. Do not enable it outside a bench.
+///
+/// iOS now prefers a native coordinator (`BackgroundLocationCoordinator.swift`)
+/// that buffers fixes in UserDefaults and bridges them on foreground. If that
+/// coordinator is missing (older build, simulator without plugin registration),
+/// this class falls back to the Dart `geolocator` stream. Either way the beacon
+/// keeps working.
 ///
 /// ## What this does NOT do
 ///
@@ -45,12 +72,12 @@ import 'package:in_range/core/config/app_config.dart';
 ///    "the beacon is a pure BLE switch" (owner decision 2026-07-21, issue #2,
 ///    recorded at beacon_screen.dart:26). Owner call, not an engineering one.
 /// 2. **App Review.** Guideline 2.5.4 requires background modes serve their
-///    stated purpose. Discarding every fix — which reads as a privacy virtue —
-///    is evidence AGAINST us here: an app that never uses location has no
-///    business holding the location background mode. The defensible version
-///    feeds a genuinely location-dependent feature (coarse presence matching),
-///    which would also make the session honestly location-purposed rather than
-///    a BLE keepalive wearing a location costume.
+///   stated purpose. Discarding every fix — which reads as a privacy virtue —
+///   is evidence AGAINST us here: an app that never uses location has no
+///   business holding the location background mode. The defensible version
+///   feeds a genuinely location-dependent feature (coarse presence matching),
+///   which would also make the session honestly location-purposed rather than
+///   a BLE keepalive wearing a location costume.
 ///
 /// iOS only. Android already scans in the background acceptably, and a second
 /// foreground-service notification there would cost battery for no gain.
@@ -59,23 +86,38 @@ class LocationKeepalive {
     Stream<Position> Function(LocationSettings)? openStream,
     TargetPlatform? platform,
     bool Function()? enabled,
+    MethodChannel? coordinatorChannel,
   })  : _openStream = openStream ??
             ((s) => Geolocator.getPositionStream(locationSettings: s)),
         _platform = platform ?? defaultTargetPlatform,
-        _enabled = enabled ?? (() => AppConfig.locationResidency);
+        _enabled = enabled ?? (() => AppConfig.locationResidency),
+        _channel = coordinatorChannel ??
+            const MethodChannel('io.inrange.app/location_coordinator') {
+    // In unit tests the binding is not initialized; the handler is only needed
+    // in a real app context, so skip it rather than assert.
+    if (BindingBase.debugBindingType() != null) {
+      _channel.setMethodCallHandler(_handleNativeCall);
+    }
+  }
 
   final Stream<Position> Function(LocationSettings) _openStream;
   final TargetPlatform _platform;
   final bool Function() _enabled;
+  final MethodChannel _channel;
 
   StreamSubscription<Position>? _sub;
+  bool _nativeRunning = false;
 
-  bool get isRunning => _sub != null;
+  bool get isRunning => _sub != null || _nativeRunning;
 
   /// True when a session is both permitted by the flag and useful on this
   /// platform. The flag is checked at every start, not cached, so a bench can
   /// flip it between runs of the same binary.
   bool get isSupported => _platform == TargetPlatform.iOS && _enabled();
+
+  /// Consumer hook for every fresh or buffered location fix. Called for both
+  /// the native coordinator path and the Dart-stream fallback.
+  void Function(LocationAssistFix)? onFix;
 
   /// Settings tuned for residency rather than precision.
   ///
@@ -104,23 +146,57 @@ class LocationKeepalive {
   /// degrades detection latency, but a beacon that refuses to start because
   /// location was denied would be a worse product than a foreground-only one.
   Future<void> start() async {
-    if (_sub != null) return;
+    if (isRunning) return;
     try {
-      // Inside the try: isSupported reads config, and config can throw when
-      // dotenv has not been loaded. start() promises never to throw.
+      // isSupported reads config, and config can throw when dotenv has not
+      // been loaded. If we cannot even read the flag, degrade silently.
       if (!isSupported) return;
+    } catch (e) {
+      debugPrint('Location keepalive flag read failed: $e');
+      return;
+    }
+
+    try {
+      // Prefer the native coordinator when it is registered. It buffers fixes
+      // while the app is suspended and bridges them on foreground. Skip the
+      // channel entirely in contexts with no binding (e.g. unit tests).
+      if (BindingBase.debugBindingType() != null) {
+        final ok = await _channel.invokeMethod<bool>('start', {
+          'accuracy': 'lowest',
+          'distanceFilter': 100,
+          'pauseAutomatically': false,
+          'background': true,
+        });
+        if (ok == true) {
+          _nativeRunning = true;
+          debugPrint('Location coordinator started (native)');
+          await _pullBufferedFixes();
+          return;
+        }
+      }
+    } on MissingPluginException {
+      // Native coordinator not available on this build; fall through to the
+      // Dart geolocator stream.
+    } catch (e) {
+      debugPrint('Location coordinator native start failed: $e');
+      // Fall through to Dart stream so a partial native failure doesn't kill
+      // the beacon.
+    }
+
+    _startDartStream();
+  }
+
+  void _startDartStream() {
+    try {
       _sub = _openStream(settingsForResidency()).listen(
-        // Deliberately empty. See the class doc: the session is the product,
-        // the coordinates are not. Do not start recording these without a
-        // consent decision — that is a different feature.
-        (_) {},
+        (pos) => _emitFix(_positionToFix(pos)),
         onError: (Object e) {
           debugPrint('Location keepalive ended: $e');
           unawaited(stop());
         },
         cancelOnError: true,
       );
-      debugPrint('Location keepalive started (residency mode)');
+      debugPrint('Location keepalive started (Dart stream)');
     } catch (e) {
       _sub = null;
       debugPrint('Location keepalive failed to start: $e');
@@ -131,6 +207,15 @@ class LocationKeepalive {
   /// itself alive — and keeps showing the location indicator — after the user
   /// turned discoverability off.
   Future<void> stop() async {
+    if (_nativeRunning) {
+      _nativeRunning = false;
+      try {
+        await _channel.invokeMethod('stop');
+      } catch (e) {
+        debugPrint('Location coordinator stop failed: $e');
+      }
+    }
+
     final sub = _sub;
     _sub = null;
     if (sub == null) return;
@@ -139,6 +224,68 @@ class LocationKeepalive {
       debugPrint('Location keepalive stopped');
     } catch (e) {
       debugPrint('Location keepalive stop failed: $e');
+    }
+  }
+
+  Future<void> _pullBufferedFixes() async {
+    try {
+      final raw = await _channel.invokeMethod<List<dynamic>>('flush');
+      if (raw == null || raw.isEmpty) return;
+      for (final m in raw) {
+        if (m is Map) {
+          _emitFix(_mapToFix(m.cast<String, dynamic>()));
+        }
+      }
+    } catch (e) {
+      debugPrint('Location coordinator flush failed: $e');
+    }
+  }
+
+  Future<dynamic> _handleNativeCall(MethodCall call) async {
+    switch (call.method) {
+      case 'onLocationFixes':
+        final list = call.arguments as List<dynamic>? ?? [];
+        for (final raw in list) {
+          if (raw is Map) {
+            _emitFix(_mapToFix(raw.cast<String, dynamic>()));
+          }
+        }
+        return null;
+    }
+    return null;
+  }
+
+  LocationAssistFix _positionToFix(Position p) => LocationAssistFix(
+        lat: p.latitude,
+        lon: p.longitude,
+        accuracyM: p.accuracy,
+        at: p.timestamp,
+        isMoving: null,
+      );
+
+  LocationAssistFix _mapToFix(Map<String, dynamic> m) => LocationAssistFix(
+        lat: (m['lat'] as num).toDouble(),
+        lon: (m['lon'] as num).toDouble(),
+        accuracyM: (m['acc'] as num).toDouble(),
+        at: DateTime.fromMillisecondsSinceEpoch(m['ts'] as int),
+        isMoving: m['moving'] as bool?,
+      );
+
+  void _emitFix(LocationAssistFix fix) {
+    onFix?.call(fix);
+    // calibScanMode touches dotenv, which is not loaded in every unit-test
+    // context. Treat an unreadable flag as "off" rather than crashing the fix.
+    var logFix = false;
+    try {
+      logFix = AppConfig.calibScanMode;
+    } catch (_) {}
+    if (logFix) {
+      debugPrint(
+        'LocationAssist lat=${fix.lat.toStringAsFixed(6)} '
+        'lon=${fix.lon.toStringAsFixed(6)} '
+        'acc=${fix.accuracyM.toStringAsFixed(1)} '
+        'moving=${fix.isMoving}',
+      );
     }
   }
 }

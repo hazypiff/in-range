@@ -42,7 +42,12 @@ class BeaconService {
     this.onAdvertSample,
   })  : _userId = userId,
         _correlationSalt = hmacSecret,
-        _rotationWindow = rotationWindow;
+        _rotationWindow = rotationWindow {
+    // Feed native/Dart location fixes into the sighting cache. The fix is used
+    // for server radius gates and refreshes the cache without a fresh
+    // Geolocator call per sighting. GPS is still not a proximity classifier.
+    locationKeepalive.onFix = _onLocationFix;
+  }
 
   // #6 step 2: opaque beacon tokens now come from the server
   // (issue_token_batch), not a client-side HMAC keyed by a secret shipped in the
@@ -1106,6 +1111,14 @@ class BeaconService {
     } else {
       debugPrint('GpsFix acc=${p.accuracy.toStringAsFixed(1)}m$suffix');
     }
+  }
+
+  void _onLocationFix(LocationAssistFix fix) {
+    if (!_isOn) return;
+    _cachedLat = fix.lat;
+    _cachedLon = fix.lon;
+    _cachedAccuracy = fix.accuracyM;
+    _cachedLocAt = fix.at;
   }
 
   void _ensureLocationCache() {
