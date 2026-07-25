@@ -4,9 +4,9 @@
 
 - **Repo**: `in-range` (Flutter + iOS/Android)
 - **Branch**: `main`
-- **Current HEAD**: `92a22e3` (`beacon: add native iOS background-location coordinator spike (P1.4)`)
-- **Remotes**: both `hazypiff/in-range` and `inrangeai/in-range` are at `92a22e3`
-- **Test status**: `flutter test` passes 124/124; `flutter analyze --no-fatal-infos` clean
+- **Current HEAD**: `3faec05` (`ios: harden BackgroundLocationCoordinator for release/profile builds`)
+- **Remotes**: both `hazypiff/in-range` and `inrangeai/in-range` are at `3faec05`
+- **Test status**: `flutter test` passes 125/125; `flutter analyze --no-fatal-infos` clean
 
 This handoff covers what landed after the audit and the completion-plan commit, what is still open, and the recommended order for the next agent.
 
@@ -57,7 +57,7 @@ This handoff covers what landed after the audit and the completion-plan commit, 
 
 ### 5. Native iOS background-location coordinator (P1.4)
 
-- **Commit**: `92a22e3`
+- **Commits**: `92a22e3` (spike), `106a619` (release-build bug fix), plus Swift delegate hardening on `main`.
 - **Files**:
   - `ios/Runner/BackgroundLocationCoordinator.swift` (new)
   - `ios/Runner/AppDelegate.swift`
@@ -65,7 +65,8 @@ This handoff covers what landed after the audit and the completion-plan commit, 
   - `lib/features/beacon/beacon_service.dart`
   - `test/location_coordinator_test.dart` (new)
 - Swift coordinator starts/stops a coarse `CLLocationManager` session while the beacon is on, persists fixes to a UserDefaults ring buffer, and exposes `start` / `stop` / `flush` on `io.inrange.app/location_coordinator`.
-- `LocationKeepalive` prefers the native coordinator when the channel is registered; falls back to the Dart `geolocator` stream in tests or older builds.
+- `LocationKeepalive` prefers the native coordinator unconditionally; a missing binding/plugin is caught and it falls back to the Dart `geolocator` stream. The previous `BindingBase.debugBindingType()` guard was removed in `106a619` because its backing field is assigned inside an assert block and is therefore `null` in release/profile builds — it silently disabled the coordinator on real devices.
+- `BackgroundLocationCoordinator` implements both the iOS 13 `locationManager(_:didChangeAuthorization:)` and the iOS 14+ `locationManagerDidChangeAuthorization(_:)` delegate methods so authorization grants actually start fixes on modern OS versions.
 - `BeaconService` feeds every fix into the sighting cache via `locationKeepalive.onFix`, so `_ensureLocationCache()` has fresh coordinates without a per-sighting Geolocator call.
 - Live product behavior is unchanged; the entire path is still gated by `INRANGE_LOCATION_RESIDENCY` (default off).
 
@@ -75,7 +76,7 @@ This handoff covers what landed after the audit and the completion-plan commit, 
 
 ```bash
 cd /home/hazypiff/in-range
-flutter test          # +124, all passed
+flutter test          # +125, all passed
 flutter analyze --no-fatal-infos   # no issues
 ```
 
@@ -119,7 +120,7 @@ The Swift side has **not** been built in Xcode on this machine. Both `WifiAssist
 
 ## If you continue from here
 
-- [ ] `git pull` on `main`; confirm HEAD is `92a22e3`.
+- [ ] `git pull` on `main`; confirm HEAD is `3faec05`.
 - [ ] On a Mac, open `ios/Runner.xcworkspace` and run a device/archive build to validate:
   - **Access WiFi Information** entitlement for `WifiAssistPlugin`,
   - background location mode / usage strings for `BackgroundLocationCoordinator`.
