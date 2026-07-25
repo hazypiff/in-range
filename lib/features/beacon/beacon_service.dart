@@ -12,6 +12,7 @@ import 'package:in_range/features/beacon/batch_token_source.dart';
 import 'package:in_range/features/beacon/gatt_token_reader.dart';
 import 'package:in_range/features/beacon/claim_manager.dart';
 import 'package:in_range/features/beacon/ephemeral_token_generator.dart';
+import 'package:in_range/features/beacon/location_keepalive.dart';
 import 'package:in_range/features/beacon/range_estimator.dart';
 import 'package:in_range/features/beacon/wifi_scanner.dart';
 
@@ -127,6 +128,10 @@ class BeaconService {
   /// Calibrated 10/30/60 ft classifier fed by every fresh foreign advert.
   final RangeEstimator rangeEstimator = RangeEstimator();
 
+  /// Holds the process alive while the beacon is on (iOS). Scoped to the
+  /// beacon session on both ends — see LocationKeepalive.
+  final LocationKeepalive locationKeepalive = LocationKeepalive();
+
   /// WiFi venue layer: resolves BLE's core ambiguity (a weak signal is either
   /// "far" or "close but body-blocked" — only a second radio can tell).
   ///
@@ -215,10 +220,16 @@ class BeaconService {
       await _startScanning();
       if (gen != _sessionGeneration) throw StateError('beacon turned off');
       _isOn = true;
+      // Last, and only once the session is really up: holding a location
+      // session is what keeps the process resident with the screen locked, so
+      // CoreBluetooth scans continuously instead of in BGAppRefresh bursts.
+      // Never blocks the beacon — a denied grant costs latency, not function.
+      unawaited(locationKeepalive.start());
     } catch (e) {
       if (gen == _sessionGeneration) {
         _advertisingWanted = false;
         _scanningWanted = false;
+        await locationKeepalive.stop();
         await _stopBle();
         _currentToken = null;
         _currentCorrelationId = null;
@@ -343,6 +354,11 @@ class BeaconService {
     _locationRefreshTimer?.cancel();
     _locationRefreshTimer = null;
     wifiScanner.stop();
+    // Release residency the moment discoverability is off. Leaving this
+    // running would keep the app alive — and keep the location indicator lit —
+    // after the user explicitly opted out, which is the exact behavior that
+    // gets an app pulled.
+    await locationKeepalive.stop();
     _wifiFingerprint = null;
     // Estimator state must not leak across beacon sessions: after off/on, a
     // single fresh weak sample could otherwise classify Close By from the
