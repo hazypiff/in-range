@@ -92,12 +92,12 @@ MAX_AP_AGE = 60    # reject cached APs older than this (s) — Android returns
                    # phone WAS, not where it is
 GATE = -70         # AP RSSI gate (mirrors venue_matcher.dart fingerprint gate)
 MIN_HIGH_N = 5     # below this a station's median is noise, not a measurement.
-                   # Same bar learn/train.py:93 already applies in the rules
-                   # baseline — one definition of "enough samples", not two.
+                   # Same conservative bar used by learn/ingest.py and the S9
+                   # rules baseline: one practical definition of "enough".
                    # This matters most on a LOCKED iPHONE side, where samples
                    # arrive in sparse wake bursts: n=1 and n=200 produce the
-                   # same-looking median, and ingest.py:39 forwards both as
-                   # training rows with nothing but high_n to tell them apart.
+                   # same-looking median. Ingest preserves thin count/rate but
+                   # now discards its median and IQR as training features.
 
 
 def ts(s):
@@ -731,15 +731,16 @@ def main():
               "samples — the median is noise, not a measurement:")
         for (label, side, n) in thin:
             print(f"  {label} phone {side}: high_n={n}")
-        print("  Re-walk these stations now if you can. Ingesting them trains "
-              "on single samples\n  dressed as medians; nothing downstream "
-              "rejects them (learn/ingest.py:39).")
+        print("  Re-walk these stations once now if you can. Ingest will "
+              "preserve their count/rate\n  but reject their median and IQR "
+              "as training features.")
 
     if args.json:
         meta = {"logA": args.logA, "logB": args.logB,
                 "offset_a": args.offset_a, "offset_b": args.offset_b,
                 "trim_s": args.trim, "max_ap_age_s": args.max_ap_age,
-                "gate_dbm": GATE, "trainable": args.trainable == "yes",
+                "gate_dbm": GATE, "min_high_n": MIN_HIGH_N,
+                "trainable": args.trainable == "yes",
                 "manifest": build_manifest(
                     args.logA, args.logB, args.pair, args.capture_meta,
                     args.freeze,

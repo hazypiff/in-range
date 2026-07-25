@@ -65,12 +65,61 @@ class IngestTest(unittest.TestCase):
         self.assertTrue(all(r["blocked"] for r in rows))
         self.assertEqual(rows[0]["distance_ft"], 10)
 
+    def test_product_dataset_keeps_pocket_and_excludes_hand(self):
+        walk = {
+            "stations": [
+                {"station": "25ft-pocket", "a": phone(-75, high_n=20),
+                 "b": phone(-76, high_n=20), "venue": None,
+                 "gps_delta_m": None},
+                {"station": "25ft-hand", "a": phone(-60, high_n=20),
+                 "b": phone(-61, high_n=20), "venue": None,
+                 "gps_delta_m": None},
+            ]
+        }
+        product = ingest.rows_from_walk(walk, "w", "p")
+        reference = ingest.rows_from_walk(
+            walk, "w", "p", body_position="hand"
+        )
+        all_rows = ingest.rows_from_walk(
+            walk, "w", "p", body_position="all"
+        )
+        self.assertEqual({row["station"] for row in product}, {"25ft-pocket"})
+        self.assertEqual({row["station"] for row in reference}, {"25ft-hand"})
+        self.assertEqual(len(all_rows), 4)
+        self.assertTrue(
+            all(row["body_position"] == "pocket" for row in product)
+        )
+
+    def test_product_dataset_keeps_legacy_untagged_station(self):
+        rows = ingest.rows_from_walk(synth_walk(random.Random(1)), "w", "p")
+        self.assertTrue(rows)
+        self.assertTrue(all(row["body_position"] is None for row in rows))
+
     def test_silence_is_missing_not_zero(self):
         rows = ingest.rows_from_walk(synth_walk(random.Random(1)), "w", "p")
         silent = [r for r in rows if r["station"] == "250ft"]
         self.assertEqual(len(silent), 2)
         self.assertIsNone(silent[0]["features"]["high_med"])
         self.assertEqual(silent[0]["features"]["rate"], 0.0)
+
+    def test_thin_median_is_not_a_training_feature(self):
+        p = phone(-61, p25=-62, p75=-60, rate=0.03, high_n=1)
+        p["thin"] = True
+        features = ingest.phone_features(p, venue_v=None, gps_delta=None)
+        self.assertIsNone(features["high_med"])
+        self.assertIsNone(features["iqr_w"])
+        self.assertEqual(features["high_n"], 1)
+        self.assertEqual(features["rate"], 0.03)
+
+    def test_pre_flag_archive_gets_same_thin_safety(self):
+        thin = ingest.phone_features(
+            phone(-61, high_n=4), venue_v=None, gps_delta=None
+        )
+        enough = ingest.phone_features(
+            phone(-61, high_n=5), venue_v=None, gps_delta=None
+        )
+        self.assertIsNone(thin["high_med"])
+        self.assertEqual(enough["high_med"], -61)
 
     def test_untrainable_walk_skipped(self):
         walk = synth_walk(random.Random(1))

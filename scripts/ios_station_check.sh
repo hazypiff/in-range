@@ -1,59 +1,45 @@
 #!/usr/bin/env bash
-# Per-station field check for the iPhone feet tests (2026-07-22 protocol).
+# Pull an iPhone calibration DB over USB and summarize one operator-recorded
+# station. Windowing is anchored to the recorded wall-clock start, never to
+# the first received advert: a locked iPhone may not deliver its first row
+# until the hand half of the station.
 #
-# Run after plugging a phone in between stations:
-#   bash scripts/ios_station_check.sh 14        # walker origin phone
-#   bash scripts/ios_station_check.sh 15p       # walking phone
+# Measured 90 s pocket -> hand station:
+#   bash scripts/ios_station_check.sh 15p \
+#     --date 2026-07-25 --start 10:00:00
 #
-# Pulls Documents/in_range_local.db over USB and summarizes the LATEST burst
-# (bursts = rssi_log rows separated by >60 s gaps, i.e. beacon-off walks).
-# The 90 s dwell is pocket-first then hand, so the burst splits at +45 s.
+# Foreground 60 s desk smoke:
+#   bash scripts/ios_station_check.sh 15p \
+#     --date 2026-07-25 --start 09:15:00 \
+#     --window smoke:0:60 --trim 0
 set -euo pipefail
 
 IPHONE14="27A0976C-78DD-5D1D-926E-0CE635E5C23A"
 IPHONE15P="67B16DBC-964F-592E-986C-281FED5AE8B8"
 
 case "${1:-}" in
-  14)  DEV=$IPHONE14 ;;
-  15p) DEV=$IPHONE15P ;;
-  *) echo "usage: $0 14|15p"; exit 1 ;;
+  14)  IOS_DEVICE=$IPHONE14 ;;
+  15p) IOS_DEVICE=$IPHONE15P ;;
+  *)
+    echo "usage: $0 14|15p --date YYYY-MM-DD --start HH:MM:SS [summary options]"
+    exit 1
+    ;;
 esac
+IOS_LABEL=$1
+shift
 
-OUT="${TMPDIR:-/tmp}/station_${1}_$(date +%H%M%S).db"
-xcrun devicectl device copy from --device "$DEV" --user mobile \
+if (( $# == 0 )); then
+  echo "usage: $0 14|15p --date YYYY-MM-DD --start HH:MM:SS [summary options]"
+  exit 1
+fi
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+STATION_TMP="$(mktemp -d "${TMPDIR:-/tmp}/inrange_station_${IOS_LABEL}_XXXXXX")"
+DB_COPY="$STATION_TMP/in_range_local.db"
+
+xcrun devicectl device copy from --device "$IOS_DEVICE" --user mobile \
   --domain-type appDataContainer --domain-identifier io.inrange.inRange \
-  --source Documents/in_range_local.db --destination "$OUT" >/dev/null
+  --source Documents/in_range_local.db --destination "$DB_COPY" >/dev/null
 
-python3 - "$OUT" <<'PY'
-import sqlite3, sys, statistics as st
-
-rows = sqlite3.connect(sys.argv[1]).execute(
-    "SELECT at_ms, rssi FROM rssi_log WHERE rssi < 0 ORDER BY at_ms").fetchall()
-if not rows:
-    sys.exit("no valid rssi_log rows at all")
-
-# Split into bursts on >60 s gaps; report the latest one.
-bursts, cur = [], [rows[0]]
-for prev, row in zip(rows, rows[1:]):
-    if row[0] - prev[0] > 60_000:
-        bursts.append(cur); cur = []
-    cur.append(row)
-bursts.append(cur)
-
-b = bursts[-1]
-t0, t1 = b[0][0], b[-1][0]
-dur = (t1 - t0) / 1000
-pocket = [r for t, r in b if t - t0 < 45_000]
-hand   = [r for t, r in b if t - t0 >= 45_000]
-
-def s(xs):
-    if not xs: return "NO SAMPLES"
-    q = st.quantiles(xs, n=4)
-    return f"median {st.median(xs):.0f} dBm  IQR {q[0]:.0f}..{q[2]:.0f}  n={len(xs)}"
-
-print(f"bursts today-ish: {len(bursts)} | latest burst: {len(b)} samples, {dur:.0f}s")
-print(f"  pocket (first 45s): {s(pocket)}")
-print(f"  hand   (rest):      {s(hand)}")
-if dur < 70: print("  ⚠ burst under 70s — dwell cut short? consider redoing this station")
-if not pocket or not hand: print("  ⚠ one half is empty — advertising may have died (screen lock?)")
-PY
+echo "iPhone DB copy: $DB_COPY"
+python3 "$SCRIPT_DIR/ios_station_summary.py" "$DB_COPY" "$@"

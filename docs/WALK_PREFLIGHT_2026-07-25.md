@@ -2,13 +2,18 @@
 
 Walk date: 2026-07-25
 
-Freeze: `calib-freeze-2026-07-24b`
+Freeze (installed apps): `calib-freeze-2026-07-24b` → `1a41d59`
 
-Freeze commit: `1a41d59`
+Host scripts: current `main`, including absolute-time station checks, thin
+median rejection, and body-position filtering (`9ced273` alone only surfaces
+thin stations)
 
 Pair: Galaxy S22 ↔ iPhone 15 Plus
 
 Capture path: S22 logcat + iPhone SQLite over USB
+
+Root-cause report (why these corrections exist):
+[`IPHONE_WALK_ROOT_CAUSE_REPORT_2026-07-24.md`](IPHONE_WALK_ROOT_CAUSE_REPORT_2026-07-24.md)
 
 ## Decision
 
@@ -26,26 +31,41 @@ This walk does not need:
 Migration `0056` is not deployed, and the `07-24b` build does not contain the
 uploader. That is intentional. USB is the source of truth for this walk.
 
+**Do not** require a USB-vs-cloud `walk_id` match. That equality only checks
+cloud upload losslessness; cloud does not exist on this freeze.
+
 Current `main` contains client changes after the freeze. Building from `main`
 would add a failing upload retry against the absent RPC and would make the
-capture script reject the S22 as a client-code mismatch.
+capture script reject the S22 as a client-code mismatch. The **host** may stay
+on current `main` for capture/extract scripts; only the **phone apps** must
+remain on `07-24b`. Do not reset the host to `9ced273`: that commit surfaces
+thin counts but predates the exact-window checker and ingest protections.
 
 ## Exact scope
 
-This checklist assumes “the full ladder” means the documented repeat of the
-provisional S22 ↔ iPhone calibration:
+This checklist assumes “the full ladder” means the documented far-envelope
+repeat of the provisional S22 ↔ iPhone calibration (single-tier pivot:
+where detection dies, not a dense close-only ladder):
 
-| Station | Distance | Dwell |
-|---|---:|---:|
-| 1 | 25 ft | 90 s |
-| 2 | 65 ft | 90 s |
-| 3 | 90 ft | 90 s |
-| 4 | 130 ft | 90 s |
-| 5 | 175 ft | 90 s |
-| 6 | 200 ft | 90 s |
+| Field stop | Distance | Physical dwell | Extract stations |
+|---|---:|---:|---|
+| 1 | 25 ft | 90 s | `25ft-pocket` 45 s + `25ft-hand` 45 s |
+| 2 | 65 ft | 90 s | `65ft-pocket` + `65ft-hand` |
+| 3 | 90 ft | 90 s | `90ft-pocket` + `90ft-hand` |
+| 4 | 130 ft | 90 s | `130ft-pocket` + `130ft-hand` |
+| 5 | 175 ft | 90 s | `175ft-pocket` + `175ft-hand` |
+| 6 | 200 ft | 90 s | `200ft-pocket` + `200ft-hand` |
+
+**Why two extract stations per distance:** `extract_walk.py` does not split a
+window into pocket/hand. One 90 s median averages ~15 dB body-position
+difference into a number that describes neither. Labels like `25ft-pocket`
+still parse to `distance_ft = 25` via `learn/ingest.py`'s `DIST_RE`.
+
+If time forces a cut: drop middle distances first (90, then 130). Keep 25 and
+200 — ends bracket the drop-off.
 
 This is **not** the `WALK4_PROTOCOL.md` S9/Wi-Fi experiment with 5–50 ft and
-indoor room stations.
+indoor room stations. Dwell is **90 s**, not 60 s.
 
 The walk measures a warm-start, locked-screen bridge:
 
@@ -170,22 +190,27 @@ Do this after prep so its records prove the calibration flag is active.
 1. Place the phones about 1 m apart.
 2. Open In Range on both.
 3. Turn Beacon on on both.
-4. Keep both foregrounded for 60 seconds.
-5. Confirm each phone sees the other.
-6. Confirm the S22 produced calibration records:
+4. Record the host-clock instant when both are on as `<SMOKE_START>`.
+5. Keep both foregrounded for 60 seconds.
+6. Confirm each phone sees the other.
+7. Confirm the S22 produced calibration records:
 
 ```bash
 adb logcat -d -v threadtime | rg 'Advert corr=' | tail -n 10
 ```
 
-7. Confirm the iPhone database has a fresh return-direction burst:
+8. Confirm that exact iPhone interval has a return-direction burst:
 
 ```bash
-bash scripts/ios_station_check.sh 15p
+bash scripts/ios_station_check.sh 15p \
+  --date 2026-07-25 --start <SMOKE_START> \
+  --window smoke:0:60 --trim 0
 ```
 
-If either direction is empty, stop. A green Beacon toggle is not enough; a
-phone can advertise while its scanner is unhealthy.
+If either direction is empty, or the foreground iPhone smoke has fewer than
+five high-power rows, stop. A green Beacon toggle is not enough; a phone can
+advertise while its scanner is unhealthy. This command uses the recorded
+clock window, so stale rows from an earlier session cannot make the smoke pass.
 
 After the smoke test, turn both Beacons off before travelling to station 1.
 Smoke rows remain safe because the extractor uses explicit station windows.
@@ -193,19 +218,34 @@ Smoke rows remain safe because the extractor uses explicit station windows.
 ## 5. Prepare the station record
 
 Use the same clock as the prep host, or a watch visibly synchronized to it.
-Record the exact Beacon-on/start time for every station.
+Record the exact Beacon-on/start time for every distance. Hand half starts at
+pocket start + 45 s (same continuous beacon-on dwell). Write the hand clock
+time out explicitly; `stations.json` does not evaluate arithmetic.
 
-Suggested local-only `stations.json` template:
+Suggested local-only `stations.json` template (**12 rows**, pocket then hand):
 
 ```json
 [
-  {"label": "25ft",  "start": "HH:MM:SS", "dur": 90},
-  {"label": "65ft",  "start": "HH:MM:SS", "dur": 90},
-  {"label": "90ft",  "start": "HH:MM:SS", "dur": 90},
-  {"label": "130ft", "start": "HH:MM:SS", "dur": 90},
-  {"label": "175ft", "start": "HH:MM:SS", "dur": 90},
-  {"label": "200ft", "start": "HH:MM:SS", "dur": 90}
+  {"label": "25ft-pocket",  "start": "<25_POCKET_START>", "dur": 45},
+  {"label": "25ft-hand",    "start": "<25_START_PLUS_45S>", "dur": 45},
+  {"label": "65ft-pocket",  "start": "<65_POCKET_START>", "dur": 45},
+  {"label": "65ft-hand",    "start": "<65_START_PLUS_45S>", "dur": 45},
+  {"label": "90ft-pocket",  "start": "<90_POCKET_START>", "dur": 45},
+  {"label": "90ft-hand",    "start": "<90_START_PLUS_45S>", "dur": 45},
+  {"label": "130ft-pocket", "start": "<130_POCKET_START>", "dur": 45},
+  {"label": "130ft-hand",   "start": "<130_START_PLUS_45S>", "dur": 45},
+  {"label": "175ft-pocket", "start": "<175_POCKET_START>", "dur": 45},
+  {"label": "175ft-hand",   "start": "<175_START_PLUS_45S>", "dur": 45},
+  {"label": "200ft-pocket", "start": "<200_POCKET_START>", "dur": 45},
+  {"label": "200ft-hand",   "start": "<200_START_PLUS_45S>", "dur": 45}
 ]
+```
+
+CLI equivalent (same shape):
+
+```text
+# Example only: the hand time is exactly 45 seconds after pocket start.
+25ft-pocket@10:00:00+45 25ft-hand@10:00:45+45
 ```
 
 Store it under the walk directory. `run_logs/` is local-only and gitignored.
@@ -213,7 +253,7 @@ Store it under the walk directory. `run_logs/` is local-only and gitignored.
 Also record, separately:
 
 - actual measured distance;
-- the pocket → hand transition time, expected at start +45 s;
+- the pocket → hand transition time, expected at distance start +45 s;
 - any accidental screen wake;
 - any phone movement or orientation change;
 - any call, notification, Bluetooth interruption, or app error;
@@ -229,14 +269,37 @@ At each distance:
 3. Move only the S22 to the measured distance.
 4. Wait 10 seconds for both phones and the environment to settle.
 5. Open both apps and turn both Beacons on.
-6. Record that instant as the station start.
+6. Record that instant as the **pocket** station start (`NNft-pocket`).
 7. Lock both screens and verify they go fully black.
 8. Put the S22 in the same pocket used at every station.
 9. At +45 s, move the S22 to the same chest-height hand orientation without
-   waking its display.
+   waking its display; that instant is the **hand** station start
+   (`NNft-hand`).
 10. At +90 s, end the dwell and record any deviation.
 11. Turn both Beacons off.
-12. Move to the next station.
+12. **Mid-walk iPhone check (mandatory between distances):** unlock the iPhone
+    and leave the app foregrounded for 15 seconds so native samples flush.
+    Then plug in USB and run this with the recorded pocket start:
+
+    ```bash
+    bash scripts/ios_station_check.sh 15p \
+      --date 2026-07-25 --start <THIS_DISTANCE_POCKET_START>
+    ```
+
+    The helper uses the absolute operator clock and the same per-half 10-second
+    trim as final extraction. It does **not** anchor the split to the first
+    callback; doing that can label a late hand callback as pocket.
+
+    - `n >= 5`: usable RSSI median.
+    - `THIN!` (`n = 1..4`): repeat this distance once while geometry is set.
+      The final ingest keeps count/rate but rejects this median and IQR.
+    - `SILENT` (`n = 0`): no false median. Repeat once if silence is
+      unexpected at this distance; at the far ceiling it is valid evidence.
+
+    If repeating, preserve both trials. Append `-r2` windows (for example
+    `25ft-pocket-r2` / `25ft-hand-r2`) with the new clocks; never replace the
+    first trial after looking at its result.
+13. Move to the next station.
 
 The iPhone remains propped at the origin. Do not pocket it during this ladder.
 
@@ -245,8 +308,9 @@ If an app is foregrounded or the display remains lit for a material part of
 the dwell, repeat the station; foreground and locked samples must not be mixed
 without a label.
 
-Do not inspect live UI counts during a measured dwell. That changes the
-lifecycle being measured.
+Do not inspect live UI counts **during** a measured dwell. That changes the
+lifecycle being measured. Mid-walk checks happen only with beacons off between
+distances.
 
 ## 7. Flush the iPhone before copying
 
@@ -329,12 +393,17 @@ Do not leave the site until:
 - iPhone `rssi_log` is nonempty;
 - at least one iPhone row lands inside the recorded walk windows;
 - `meta-prep.json` and `meta-pull.json` exist;
-- all six station start times are recorded; and
+- all six physical starts and all twelve pocket/hand window times are
+  recorded; and
 - field notes identify every lifecycle deviation.
 
 ## 10. USB extraction command
 
-Use S22 as side A and iPhone as side B:
+Use S22 as side A and iPhone as side B. **Require `--trim 10`** because each
+extract window is 45 s; default `--trim 20` would discard 44% of every half.
+
+Host scripts must include the post-`9ced273` exact-window checker and thin
+ingest gate:
 
 ```bash
 python3 scripts/extract_walk.py \
@@ -343,6 +412,7 @@ python3 scripts/extract_walk.py \
   --stations-file run_logs/walks/2026-07-25-s22-iphone15p-locked/stations.json \
   --ios-date 2026-07-25 \
   --offset-a <S22_HOST_MINUS_DEVICE_S> \
+  --trim 10 \
   --pair s22-iphone15p \
   --capture-meta run_logs/walks/2026-07-25-s22-iphone15p-locked/meta-pull.json \
   --freeze calib-freeze-2026-07-24b \
@@ -356,6 +426,16 @@ The mixed pair intentionally has no iPhone Wi-Fi/GPS stream, so venue and GPS
 fusion fields will abstain. This walk validates BLE carrier behavior and
 per-direction observations, not the three-radio fusion model.
 
+Read the extract table carefully:
+
+- `n` with a trailing `!` means `0 < high_n < 5` — a thin median that *looks*
+  like a measurement. Re-walk once if phones/geometry still allow. Current
+  `learn/ingest.py` keeps its count/rate but sets its median and IQR missing.
+- Product ingest defaults to `--body-position product`: explicitly tagged
+  **hand** rows remain archived but do not train the product model. Use
+  `--body-position hand` or `all` only for deliberate reference analysis.
+- Never train on a single 90 s pocket+hand median.
+
 ## Trainability decision
 
 Archive the walk even if the locked iPhone return direction is sparse.
@@ -365,8 +445,10 @@ Mark it trainable only after extraction confirms:
 - measured station distances;
 - all station clocks are usable;
 - no mixed foreground/locked station;
+- pocket and hand halves logged as separate stations (not one averaged 90 s);
 - expected source ordering;
-- useful coverage across the ladder; and
+- useful coverage across the ladder;
+- thin (`!`) station-sides re-walked once or accepted as count/rate-only; and
 - no capture loss.
 
 If a protocol or capture failure occurred, rerun extraction with
@@ -375,15 +457,19 @@ accepting a cloud sequence gap.
 
 ## Final departure gate
 
-- [ ] `07-24b` resolves to `1a41d59`
+- [ ] `07-24b` resolves to `1a41d59` (installed apps only)
+- [ ] host scripts include absolute-time checker + thin-ingest safety
 - [ ] S22 passes `walk_capture.sh prep`
 - [ ] iPhone is a known `07-24b` release build
 - [ ] calibration rows proved on both devices
+- [ ] desk smoke ran the dated/start-anchored iPhone check successfully
 - [ ] hotspot off; Bluetooth and automatic time on
 - [ ] 25/65/90/130/175/200 ft measured
-- [ ] timing record ready
+- [ ] `stations.json` has 12 pocket/hand rows (not 6×90 s)
+- [ ] plan is `--trim 10` at extract
+- [ ] dated/start-anchored iPhone check ran between distances
 - [ ] iPhone origin placement fixed
 - [ ] protected devices absent
-- [ ] no migration, cloud upload, residency, or new build introduced
+- [ ] no migration, cloud upload, residency, or new phone build introduced
 
 If any box is false, fix it at the desk rather than at the trailhead.

@@ -8,7 +8,11 @@ not the distance classifier. Two rows per station: one per receive direction.
 
 Usage:
   python3 learn/ingest.py run_logs/walks/*/walk.json --pair s9-s9 \
-      --out learn/data/dataset.jsonl
+      --body-position product --out learn/data/dataset.jsonl
+
+`product` is the safe default: explicitly tagged `*-hand` stations stay in
+the walk archive but do not train the product model; `*-pocket` and legacy
+untagged stations do. Use `all` only for deliberate physics analysis.
 """
 import argparse
 import hashlib
@@ -17,6 +21,7 @@ import os
 import re
 
 DIST_RE = re.compile(r"(\d+)\s*ft", re.I)
+BODY_RE = re.compile(r"(?:^|[-_])(pocket|hand)(?=$|[-_])", re.I)
 
 FEATURES = ["high_med", "iqr_w", "rate", "high_n", "med_n", "venue_v", "gps_delta"]
 
@@ -28,22 +33,44 @@ def station_meta(label):
     return int(m.group(1)), ("block" in label.lower())
 
 
+def station_body_position(label):
+    match = BODY_RE.search(label)
+    return match.group(1).lower() if match else None
+
+
+def include_body_position(label, mode):
+    position = station_body_position(label)
+    if mode == "all":
+        return True
+    if mode == "product":
+        return position != "hand"
+    return position == mode
+
+
 def phone_features(p, venue_v, gps_delta):
+    high_n = p.get("high_n", 0)
+    # extract_walk marks n=1..4 as thin. Keep count/rate — sparsity is useful
+    # carrier evidence — but never let a one-packet "median" train the RSSI
+    # feature. The numeric fallback covers archives produced before the flag
+    # existed; 5 is extract_walk.MIN_HIGH_N and the rules_s9 evidence floor.
+    thin = p.get("thin", 0 < high_n < 5)
     iqr = None
-    if "high_p25" in p and "high_p75" in p:
+    if not thin and "high_p25" in p and "high_p75" in p:
         iqr = p["high_p75"] - p["high_p25"]
     return {
-        "high_med": p.get("high_med"),     # None when silent — silence is a
-        "iqr_w": iqr,                      # missing feature, not an imputed 0
-        "rate": p.get("rate", 0.0),        # 0.0 when silent — rate IS the signal
-        "high_n": p.get("high_n", 0),
+        # Missing when silent/thin; never impute an RSSI measurement as 0.
+        "high_med": None if thin else p.get("high_med"),
+        "iqr_w": iqr,
+        # Unlike RSSI, zero rate really is the signal for a silent station.
+        "rate": p.get("rate", 0.0),
+        "high_n": high_n,
         "med_n": p.get("med_n", 0),
         "venue_v": venue_v,
         "gps_delta": gps_delta,
     }
 
 
-def rows_from_walk(walk, walk_id, pair):
+def rows_from_walk(walk, walk_id, pair, body_position="product"):
     # Smoke fixtures / unmeasured captures are archived but never trained on:
     # extract_walk.py --trainable no stamps meta.trainable=false (a desk test
     # at an eyeballed distance would distort class variance and priors).
@@ -51,6 +78,8 @@ def rows_from_walk(walk, walk_id, pair):
         return []
     rows = []
     for s in walk["stations"]:
+        if not include_body_position(s["station"], body_position):
+            continue
         meta = station_meta(s["station"])
         if meta is None:
             continue
@@ -60,13 +89,14 @@ def rows_from_walk(walk, walk_id, pair):
         for d in ("a", "b"):
             rows.append({
                 "walk_id": walk_id, "pair": pair, "station": s["station"],
+                "body_position": station_body_position(s["station"]),
                 "direction": d, "distance_ft": dist, "blocked": blocked,
                 "features": phone_features(s[d], venue_v, gps_delta),
             })
     return rows
 
 
-def load_walk_rows(walk, fallback_id, pair):
+def load_walk_rows(walk, fallback_id, pair, body_position="product"):
     """Identity is VERIFIED, not assigned: if the archive carries a
     walk_manifest.v1 (extract_walk.py --pair), its pair_id must match ours or
     the walk is refused. walk_id prefers the manifest's content hash over the
@@ -78,7 +108,7 @@ def load_walk_rows(walk, fallback_id, pair):
     if mpair and mpair != pair:
         return wid, "pair_mismatch", []
     status = "ok" if mpair else "unverified_pair"
-    rows = rows_from_walk(walk, wid, pair)
+    rows = rows_from_walk(walk, wid, pair, body_position)
     # identity_verified rides every row into the dataset and model artifact —
     # unverified walks may train (visibility) but can never promote or export
     # for production.
@@ -100,6 +130,13 @@ def main():
     ap.add_argument("walks", nargs="+", help="walk.json files from extract_walk.py")
     ap.add_argument("--pair", required=True,
                     help="device pair label, e.g. s9-s9 or iphone14-iphone15")
+    ap.add_argument(
+        "--body-position",
+        choices=("product", "pocket", "hand", "all"),
+        default="product",
+        help=("station selection (default: product = pocket + legacy untagged, "
+              "never explicitly tagged hand)"),
+    )
     ap.add_argument("--out", required=True, help="dataset.jsonl output path")
     args = ap.parse_args()
 
@@ -107,7 +144,9 @@ def main():
     skipped = []
     for path in args.walks:
         fallback = os.path.basename(os.path.dirname(os.path.abspath(path))) or path
-        wid, status, got = load_walk_rows(json.load(open(path)), fallback, args.pair)
+        wid, status, got = load_walk_rows(
+            json.load(open(path)), fallback, args.pair, args.body_position
+        )
         if status == "pair_mismatch":
             print(f"REFUSED {wid}: manifest pair != --pair {args.pair!r} "
                   "(wrong walk for this dataset)")
