@@ -104,7 +104,7 @@ class LocationKeepalive {
     } catch (e) {
       // No binding (plain unit test). The native path is unavailable; the
       // Dart-stream fallback in start() covers it.
-      debugPrint('Location coordinator handler not registered: $e');
+      debugPrint('Location coordinator handler not registered: ${_shortError(e)}');
     }
   }
 
@@ -188,7 +188,7 @@ class LocationKeepalive {
       // Native coordinator not available on this build; fall through to the
       // Dart geolocator stream.
     } catch (e) {
-      debugPrint('Location coordinator native start failed: $e');
+      debugPrint('Location coordinator native start failed: ${_shortError(e)}');
       // Fall through to Dart stream so a partial native failure doesn't kill
       // the beacon.
     }
@@ -280,6 +280,12 @@ class LocationKeepalive {
         at: DateTime.fromMillisecondsSinceEpoch(m['ts'] as int),
         isMoving: m['moving'] as bool?,
       );
+
+  String _shortError(Object e) {
+    // Keep logs short in unit-test contexts where the binding isn't initialized.
+    // The runtime type is enough to diagnose the failure mode in production.
+    return e.runtimeType.toString();
+  }
 
   void _emitFix(LocationAssistFix fix) {
     onFix?.call(fix);

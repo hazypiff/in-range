@@ -80,7 +80,12 @@ final class BackgroundLocationCoordinator: NSObject {
     locationManager = manager
     isRunning = true
 
-    let auth = CLLocationManager.authorizationStatus()
+    let auth: CLAuthorizationStatus
+    if #available(iOS 14.0, *) {
+      auth = manager.authorizationStatus
+    } else {
+      auth = CLLocationManager.authorizationStatus()
+    }
     switch auth {
     case .notDetermined:
       manager.requestAlwaysAuthorization()
@@ -150,6 +155,17 @@ extension BackgroundLocationCoordinator: CLLocationManagerDelegate {
   func locationManager(
     _ manager: CLLocationManager,
     didChangeAuthorization status: CLAuthorizationStatus
+  ) {
+    applyAuthorizationStatus(status, manager: manager)
+  }
+
+  @available(iOS 14.0, *)
+  func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+    applyAuthorizationStatus(manager.authorizationStatus, manager: manager)
+  }
+
+  private func applyAuthorizationStatus(
+    _ status: CLAuthorizationStatus, manager: CLLocationManager
   ) {
     guard isRunning else { return }
     switch status {
