@@ -12,6 +12,33 @@ This document is the single source of truth for the next agent. It combines the 
 
 > **2026-07-25 update (audit-criticals round, HEAD `e8ad7b9`):** A full audit of the subtle-wake stack found six release-blocking defects on the dark-session path — restored-but-invisible sessions, natively-served tokens the server could not resolve, clobbered CoreBluetooth restoration, a dead authorization re-arm, incomplete relaunch/push wakes, and buffers destroyed before confirmed delivery. **All six are fixed and verified** (156/156 tests, analyze clean, migration rehearsal 0001→0060, plus a functional smoke of the new RPC). Two flags are now set in `.env` on the dev box (`INRANGE_SUBTLE_WAKE=true`, `INRANGE_LOCATION_RESIDENCY=true`) — Rahul's build box needs the same. See §15.
 
+> **2026-07-25 update (compliance round 3, HEAD `f6bf21e`):** A four-agent review (six-criticals re-verified PASS, iOS CI build GREEN) converged on the remaining App Store blockers and one more screen-off gain. Fixed from Linux: unused `processing` background mode removed (2.5.4); privacy manifest declares CoarseLocation + OtherDataTypes (BSSID/RSSI); `background_location` consent card re-enabled with an honest optional ask; policy links moved to `inrange.life` (`inrange.app/privacy` is a dead 502 on an unrelated product); subtle-wake stop now always reaches native (location wakes can no longer outlive beacon-off); APNs tokens unregister on sign-out; `INRANGE_SUBTLE_WAKE` reads via AppConfig (it was **silently false in every release build**); buffer drains serialized; cold-start fail-closed native reconcile; `--release` refuses `INRANGE_CALIB_SCAN=true` without an explicit walk override. **CLVisit monitoring added** — the no-motion arrival wake that closes the two-phones-stationary-at-one-venue gap. See §16.
+
+---
+
+## 16. Compliance round 3 (2026-07-25, HEAD `f6bf21e`)
+
+### 16.1 What the four agents established
+
+- The six criticals from `e8ad7b9` were independently re-verified at file:line — PASS, with adversarial probes (ack-loss, restore-vs-wake race, batch-growth, cross-user merge).
+- **The iOS CI build is GREEN** (`docs/CI_IOS_BUILD.md`, run 30177777377, unsigned IPA artifact) — the "Swift has never compiled" risk is closed, and every push now compiles the target for free on the public repo.
+- Four App-Review-visible blockers remained; three were Linux-fixable and are fixed in `f6bf21e`. The fourth (Push Notifications capability / `aps-environment`) is still Mac-only and still the one thing between "wired" and "deterministic" for tier 4.
+
+### 16.2 Still open (next round, in order)
+
+1. **Mac: Push Notifications capability** — kills the last compliance critical and unblocks silent push end-to-end. Then the pair test that matters: two stationary dark iPhones, same venue, ~5 min apart.
+2. **Web: publish real policy content** — `inrange.life/privacy`, `/terms`, `/privacy/health-data` return the landing page today (soft-404, verified). `/report` and `/delete-account` are real. App links already point at the right URLs; the content must exist before submission (Apple 5.1.1, MHMDA separate-document rule).
+3. **Persistent-GATT experiment (agent 3's best-supported iPhone gain)** — after discovery, keep a bounded pool of GATT connections with a notifying token characteristic instead of connect-read-disconnect; restoration preserves subscriptions. This is the strongest remaining near-term latency win and stays inside the rules. Bench before committing.
+4. **Durable ID-based outbox** — replaces count-ack with stable native event IDs → serialized drain → transactional outbox → idempotent server upload → delete after server ack. The count-ack is now serialized and safe against the reported race; this is the full-durability endgame, not a known bug.
+5. **Server-coordinated burst scheduling** — when phone A wakes, the Edge Function skews silent pushes to same-cell peers by 2–5 s so A's burst overlaps B's push window. Pure server logic; gated on the APNs capability.
+6. **BSSID salt rotation** — the venue-hint BSSID hash currently uses the static app HMAC secret; rotate daily to bound venue-fingerprint linkability.
+7. **Region radius vs geohash cell** — the 2 km anchor radius does not cover a ~5 km precision-5 cell; revisit when anchors drive tier-3 wakes.
+8. **INRANGE_LOCATION_RESIDENCY governance** — now `true` in the dev `.env` (gitignored, so the reversal exists in no history). It must not become the shipped default by inertia: its own gate (same-binary A/B on locked hardware) has still not been run.
+
+### 16.3 Confirmed absent (keep absent — this is the compliance edge)
+
+No silent-audio keepalive, no PushKit/VoIP abuse, no Find My usage, no IDFA, no advertising SDK, ATT genuinely not required (`NSPrivacyTracking=false`), silent push is `content-available: 1` only with no fake alert. The three techniques that get apps pulled now have a written refusal in `docs/APP_STORE_COMPLIANCE_2026-07-25.md` so the next "keep the app alive" proposal gets a citation, not a relitigation.
+
 ---
 
 ## 15. Audit-criticals round (2026-07-25, HEAD `e8ad7b9`)
@@ -476,6 +503,18 @@ git push origin main
 ---
 
 ## 14. Verification log (copy this section forward)
+
+```
+2026-07-25 Linux agent (compliance round 3, HEAD f6bf21e):
+  flutter test          → +156 passed
+  flutter analyze       → no issues
+  plists                → both parse (python plistlib); modes = bt-central,
+                          bt-peripheral, fetch, location, remote-notification
+  build script          → bash -n OK; --release refuses CALIB_SCAN without
+                          INRANGE_FIELD_WALK=1
+  domain check          → inrange.app/privacy 502 (dead); inrange.life/* 200
+  Swift compile         → CI dispatched (ios-build.yml on hazypiff/in-range)
+```
 
 ```
 2026-07-25 Linux agent (audit-criticals round, HEAD e8ad7b9):
