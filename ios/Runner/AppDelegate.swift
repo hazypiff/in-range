@@ -20,5 +20,8 @@ import UIKit
     if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "BackgroundBeacon") {
       BackgroundBeacon.shared.attach(messenger: registrar.messenger())
     }
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "WifiAssistPlugin") {
+      WifiAssistPlugin.register(with: registrar)
+    }
   }
 }
