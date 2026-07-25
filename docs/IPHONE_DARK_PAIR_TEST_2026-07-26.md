@@ -22,6 +22,11 @@ mechanically; record everything; the decision rule is at the bottom.
 3. **Cron**: `proximity-wake` Edge Function scheduled in the Supabase
    dashboard (every 5 min is the right starting cadence). This is the L5
    gap — without it tier 4 never fires even with perfect clients.
+   **Verify it is armed, don't assume**: confirm `device_push_tokens` has
+   `provider='apns'` rows for both test accounts, then fire the function
+   manually (`POST /functions/v1/proximity-wake {"limit": 50}`) and read
+   its response/logs. A run where the cron was never scheduled is NOT a
+   tier-4 result — record it as the tier 0-3 floor (see §2).
 4. **Migrations**: `bash scripts/rehearse_migrations.sh` green, then
    `supabase db push` (0055→0060 deploy together).
 5. **Edge Function**: redeploy `proximity-wake` (payload now sends
@@ -54,6 +59,16 @@ mechanically; record everything; the decision rule is at the bottom.
    `rssi_samples` if the upload flag was on.
 
 ## 2. What to record
+
+**First, the armament line — without it the numbers get misquoted later:**
+
+> Tiers live for this run: BLE (tier 0-1) ☐ · SLC/regions/CLVisit (tier 2-3)
+> ☐ · silent push (tier 4 — cron armed AND verified per §0.3) ☐
+> `.env` flags on the build: SUBTLE_WAKE=__ RESIDENCY=__
+
+A run with tier 4 inert is still a genuinely useful measurement — it is the
+floor without silent push — but the table must say that is what it was, or
+the number gets quoted later as "with everything on."
 
 | Field | A→B | B→A |
 |---|---|---|
