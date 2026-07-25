@@ -41,12 +41,14 @@ We will not pretend iOS can broadcast like Android. The honest definition is:
 
 > An iPhone is "active" when, after a single foreground user action, it can both (a) be discovered by peers and (b) discover peers with useful proximity evidence while the screen is locked and black.
 
-The evidence stack, in priority order:
+The evidence stack, ordered by **precision when available**, with **coverage** annotated so the common case isn't mistaken for the best case:
 
-1. **Nearby Interaction (UWB) distance** — preferred, warm-session only.
-2. **Persistent-GATT connected RSSI** — fallback for Android↔iPhone and non-UWB iPhones.
-3. **Advertisement RSSI** — current baseline; coarse and sparse when locked.
-4. **GPS + WiFi assists** — candidate pruning / venue corroboration, never a distance classifier.
+| Priority | Source | Precision | Coverage / caveats |
+|---|---|---|---|
+| 1 | **Nearby Interaction (UWB) distance** | Highest | Narrowest: no iPhone↔Android interop; requires UWB on both peers; body-worn envelope may fall short of far stations. Warm-session only. |
+| 2 | **Persistent-GATT connected RSSI** | Medium | Widest practical fallback: covers Android↔iPhone and non-UWB iPhones. This is the common-case workhorse. |
+| 3 | **Advertisement RSSI** | Low | Current baseline; coarse and sparse when locked, but universal. |
+| 4 | **GPS + WiFi assists** | N/A | Candidate pruning / venue corroboration only; never a distance classifier. |
 
 Cold discovery of two dark iPhones with no prior session remains a documented platform boundary.
 
