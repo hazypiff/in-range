@@ -2,13 +2,56 @@
 
 **Date:** 2026-07-25  
 **Repo:** `in-range` (Flutter + iOS/Android)  
-**Current HEAD:** `7e231ad`  
-**Remotes:** `hazypiff/in-range` and `inrangeai/in-range` both at `7e231ad`  
-**Author of this handoff:** Linux-side agent, after audit + hardening + build fixes + subtle tracking implementation + audit fixes + migration rehearsal
+**Current HEAD:** `e8ad7b9` (code) + this doc commit  
+**Remotes:** `hazypiff/in-range` and `inrangeai/in-range` both at `e8ad7b9`  
+**Author of this handoff:** Linux-side agent, after audit + hardening + build fixes + subtle tracking implementation + audit fixes + migration rehearsal + audit-criticals round
 
 This document is the single source of truth for the next agent. It combines the strategic completion plan, the current tactical state, and the exact Mac/Xcode steps required before any further native iOS work can be trusted.
 
 > **2026-07-25 update:** A code review found that `BackgroundLocationCoordinator.swift` and `WifiAssistPlugin.swift` were not in the Xcode target, and `NEHotspotNetwork.fetchCurrent` lacked the required iOS 14+ guard. Both files are now added to `project.pbxproj`, the availability guard is in place, and several logic bugs in the location coordinator are fixed. See §3.6.
+
+> **2026-07-25 update (audit-criticals round, HEAD `e8ad7b9`):** A full audit of the subtle-wake stack found six release-blocking defects on the dark-session path — restored-but-invisible sessions, natively-served tokens the server could not resolve, clobbered CoreBluetooth restoration, a dead authorization re-arm, incomplete relaunch/push wakes, and buffers destroyed before confirmed delivery. **All six are fixed and verified** (156/156 tests, analyze clean, migration rehearsal 0001→0060, plus a functional smoke of the new RPC). Two flags are now set in `.env` on the dev box (`INRANGE_SUBTLE_WAKE=true`, `INRANGE_LOCATION_RESIDENCY=true`) — Rahul's build box needs the same. See §15.
+
+---
+
+## 15. Audit-criticals round (2026-07-25, HEAD `e8ad7b9`)
+
+### 15.1 What was broken and what changed
+
+1. **Native restoration was disconnected from Dart/UI.** Native kept advertising/scanning after an eviction (`bb.enabled`), but Dart restarted with `_isOn = false`: restored sightings were rejected and the UI showed off over a live beacon.
+   - Fix: `BackgroundBeaconChannel.isNativeEnabled()` + `BeaconService.restoreNativeSession()` re-runs the full session (fresh claim, timers, wake sources) when native says the beacon is on; `BeaconController` reflects it. If the session cannot be restored (signed out, missing secrets) native is **stopped** — nothing advertises while the UI says off.
+
+2. **Native token rotation outran server identity resolution.** Only Dart's `claim_token` wrote `token_claim_history`, and `record_sighting` resolves exclusively through it — so any slot the native carrier served while Dart was suspended was unresolvable. The client also fetched only the current UTC day (midnight = stale token).
+   - Fix: migration `0060_batch_token_preclaim.sql` adds `claim_token_batch` — pre-claims every still-live slot the server issued to the caller into `token_claim_history` with **NULL location by design** (a fix stamped at session start would fail `correlate_encounter`'s 400 m veto after travel; the veto skips NULL-location claims). `claim_token`'s conflict clause now merges geo fields into pre-claimed rows when the live client later single-claims a slot, so the veto returns where a fresh fix exists. Client calls it throttled (once/6 h) before the single claim.
+   - Fix: `BatchTokenSource` fetches today **and** tomorrow (server permits both; stays under the 3-day abuse cap), each fetch failing soft independently.
+
+3. **Peripheral restoration clobbered its restored state.** `willRestoreState` recovered the service, then `peripheralManagerDidUpdateState` reset `serviceAdded = false` and re-added → `.alreadyRegistered` + orphaned characteristic. Central side dropped `.connecting` peripherals and never resumed reads on `.connected` ones.
+   - Fix: `didRestorePeripheral` flag (restoration callbacks arrive first, per Apple); central restoration now retains `.connecting` and resumes the token read from the peripheral's preserved point (`resumeTokenRead`).
+
+4. **The authorization re-arm could never fire.** `start()` nil'd the temporary manager's delegate on a non-Always grant, so the auth-change callback had no live manager to fire on.
+   - Fix: `pendingAuthManager` retained (observes only, never requests). The same dead-observer shape on the downgrade-teardown path is fixed the same way.
+
+5. **Location relaunch and silent-push wakes were incomplete.** SLC/region relaunch requires recreating a manager and restarting monitoring during launch; the silent push completed its handler immediately, ending the execution window before the BLE burst it was sent to buy.
+   - Fix: `SubtleWakeCoordinator.bootFromPersistence()` (called from `AppDelegate` before `super`) rebuilds monitoring from persisted `wantsToRun` + regions. Every wake (SLC, region enter/exit, silent push) now nudges `BackgroundBeacon` **natively** — the Dart burst is the second half, not a prerequisite. The push handler holds completion ~20 s and only treats `content-available` pushes as wakes.
+
+6. **Buffered events were destroyed before confirmed delivery.** Both coordinators flushed at plugin registration and deleted their persisted buffers first.
+   - Fix: pull-and-ack everywhere — `drainBufferedSightings` / `ackBufferedSightings(count)` and `drainBufferedWakes` / `ackBufferedWakes(count)`. Native deletes only after Dart confirms ingestion; a crash between drain and ack re-delivers instead of losing.
+
+**Also:** the `proximity-wake` Edge Function now sends `nonce` (the key the client reads; client tolerates legacy `wake`), closing the push-payload mismatch.
+
+### 15.2 What this does NOT fix (still Mac/device work)
+
+- **Push Notifications capability / `aps-environment` entitlement** — silent push is dead on a real device until Xcode adds it (§MAC steps). All tier-4 code paths are now correct *and inert* without it.
+- **Swift compilation** — `SubtleWakeCoordinator.swift` and `BackgroundBeacon.swift` changed substantially and have never been compiled. First Mac action, unchanged: build before anything stacks on top.
+- **The honest claim** after the Mac work: the two-dark-iPhones loop is *wired end to end* — native wake → native BLE burst → buffer → pull-and-ack ingest → `record_sighting` (late-evidence window) → pre-claimed token resolves → correlate. It is still not *measured*: the deliverable from the device matrix is a probability-and-latency curve, not an assertion.
+
+### 15.3 Updated Mac checklist (first session)
+
+1. Pull `main` (`e8ad7b9` or later). Set `INRANGE_SUBTLE_WAKE=true` and `INRANGE_LOCATION_RESIDENCY=true` in the build box `.env`.
+2. Open Xcode, build. Fix any compile errors in the five Swift files (this is the first time most of this code meets a compiler).
+3. Signing & Capabilities → add **Push Notifications** (creates the `aps-environment` entitlement). Confirm **Access WiFi Information** and the background modes are still present.
+4. Deploy migrations 0055→0060 (`bash scripts/rehearse_migrations.sh` first — it's the gate) and deploy the `proximity-wake` Edge Function (its payload changed: `wake` → `nonce`).
+5. Device matrix on two iPhones: token-slot boundary, midnight UTC, jetsam, SLC move (~500 m), venue region enter/exit, silent push, expected force-quit failure. Pull `bb_wake_log.txt` from both devices after.
 
 ---
 
@@ -433,6 +476,19 @@ git push origin main
 ---
 
 ## 14. Verification log (copy this section forward)
+
+```
+2026-07-25 Linux agent (audit-criticals round, HEAD e8ad7b9):
+  flutter test          → +156 passed
+  flutter analyze       → no issues
+  migration rehearsal   → 0001→0060 PASS (scripts/rehearse_migrations.sh)
+  0060 functional smoke → PASS (batch membership holds, all rows NULL-location,
+                          throttle fires, claim_token conflict merge fills geo)
+  Swift compile (Xcode) → NOT RUN (no Mac available — read-reviewed only;
+                          SubtleWakeCoordinator.swift and BackgroundBeacon.swift
+                          changed substantially since any compile)
+  Device test           → NOT RUN
+```
 
 ```
 2026-07-25 Linux agent:
