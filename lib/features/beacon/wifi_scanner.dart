@@ -12,6 +12,10 @@ import 'package:in_range/features/beacon/venue_matcher.dart';
 /// cached results every 60s and only *nudge* a fresh scan opportunistically.
 /// WiFi and BLE share one 2.4GHz antenna on phone combo chips, so a chatty
 /// WiFi cadence would steal airtime from the BLE scanner that matters more.
+///
+/// iOS: there is no public API to scan nearby Wi-Fi access points. This class
+/// no-ops on iOS so the missing platform channel does not spam the logs; iOS
+/// venue assist uses the current connected BSSID (see WifiAssist) instead.
 class WifiScanner {
   WifiScanner({this.scanInterval = const Duration(seconds: 60)});
 
@@ -43,6 +47,13 @@ class WifiScanner {
   }
 
   Future<void> _scanOnce() async {
+    // iOS has no nearby-WiFi-scan API. Repeated MissingPluginExceptions would
+    // only clutter logs and waste cycles; the connected-BSSID assist is sampled
+    // separately when another callback already provides runtime.
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      debugPrint('WiFi scan: iOS has no scan API; using connected-BSSID assist only');
+      return;
+    }
     try {
       // Nudge a fresh scan, then give the radio time to finish it before
       // reading. Reading immediately returns the PREVIOUS scan — measured at
