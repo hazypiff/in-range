@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:in_range/features/beacon/location_keepalive.dart';
@@ -96,5 +97,31 @@ void main() {
       expect(opens, 1);
       expect(k.isRunning, isTrue);
     });
+  });
+
+  // Regression guard for a bug that no behavioural test in this file could
+  // catch. The native path was previously gated on
+  // BindingBase.debugBindingType() != null. That reads as "skip in unit tests",
+  // but its backing field is assigned inside an assert block
+  // (flutter/foundation/binding.dart:293), and asserts are stripped in release
+  // AND profile builds. So it returned null on every real device, silently
+  // disabling the entire native coordinator — while this suite, which runs with
+  // asserts enabled, reported it working.
+  //
+  // A behavioural test cannot distinguish the two: `flutter test` always has
+  // asserts on. Pinning the source is the only thing that catches a recurrence.
+  test('never gates device behaviour on an assert-stripped debug API', () {
+    final src = File('lib/features/beacon/location_keepalive.dart')
+        .readAsStringSync();
+    final code = src
+        .split('\n')
+        .where((l) => !l.trimLeft().startsWith('//'))
+        .join('\n');
+    expect(code.contains('debugBindingType'), isFalse,
+        reason: 'debugBindingType() is null in release/profile — gating the '
+            'native coordinator on it disables it on real devices');
+    expect(code.contains('kDebugMode'), isFalse,
+        reason: 'same class of bug: build-mode checks must not decide whether '
+            'a production code path runs');
   });
 }

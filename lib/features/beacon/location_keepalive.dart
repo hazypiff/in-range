@@ -93,10 +93,18 @@ class LocationKeepalive {
         _enabled = enabled ?? (() => AppConfig.locationResidency),
         _channel = coordinatorChannel ??
             const MethodChannel('io.inrange.app/location_coordinator') {
-    // In unit tests the binding is not initialized; the handler is only needed
-    // in a real app context, so skip it rather than assert.
-    if (BindingBase.debugBindingType() != null) {
+    // try/catch, NOT BindingBase.debugBindingType(). That returns null in
+    // release AND profile builds — its backing field is assigned inside an
+    // assert block (flutter/foundation/binding.dart:293), which the compiler
+    // strips. Gating on it silently disabled this entire native path in every
+    // build produced by build-install-ios.sh --release, while `flutter test`
+    // (asserts on) reported it working.
+    try {
       _channel.setMethodCallHandler(_handleNativeCall);
+    } catch (e) {
+      // No binding (plain unit test). The native path is unavailable; the
+      // Dart-stream fallback in start() covers it.
+      debugPrint('Location coordinator handler not registered: $e');
     }
   }
 
@@ -157,22 +165,24 @@ class LocationKeepalive {
     }
 
     try {
-      // Prefer the native coordinator when it is registered. It buffers fixes
-      // while the app is suspended and bridges them on foreground. Skip the
-      // channel entirely in contexts with no binding (e.g. unit tests).
-      if (BindingBase.debugBindingType() != null) {
-        final ok = await _channel.invokeMethod<bool>('start', {
-          'accuracy': 'lowest',
-          'distanceFilter': 100,
-          'pauseAutomatically': false,
-          'background': true,
-        });
-        if (ok == true) {
-          _nativeRunning = true;
-          debugPrint('Location coordinator started (native)');
-          await _pullBufferedFixes();
-          return;
-        }
+      // Prefer the native coordinator. It buffers fixes while the app is
+      // suspended and bridges them on foreground.
+      //
+      // Attempted UNCONDITIONALLY — a missing binding or missing plugin throws
+      // and is caught below. The previous BindingBase.debugBindingType() guard
+      // looked like a test-only skip but is compiled away in release, so it
+      // skipped the native path on real devices instead.
+      final ok = await _channel.invokeMethod<bool>('start', {
+        'accuracy': 'lowest',
+        'distanceFilter': 100,
+        'pauseAutomatically': false,
+        'background': true,
+      });
+      if (ok == true) {
+        _nativeRunning = true;
+        debugPrint('Location coordinator started (native)');
+        await _pullBufferedFixes();
+        return;
       }
     } on MissingPluginException {
       // Native coordinator not available on this build; fall through to the
