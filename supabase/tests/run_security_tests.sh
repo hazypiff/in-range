@@ -5,7 +5,10 @@
 #      idempotently, onto the production-equivalent schema.
 #   2. Invariant check: run reciprocity_security_test.sql transactionally
 #      (it ROLLS BACK) against the live local dev database.
-#   3. Concurrency check: two OVERLAPPING committed transactions confirm the same
+#   3. Privilege/RLS regression: security_regression.sql, transactional. Added
+#      to this harness 2026-07-25 — it had been in the tree since 0019 wired
+#      into nothing, so it had never once been executed.
+#   4. Concurrency check: two OVERLAPPING committed transactions confirm the same
 #      pair at once; the pg_advisory_xact_lock must serialize them to exactly one
 #      encounter. This is the only check that exercises the lock (the fixture's
 #      T4 is sequential and cannot). It seeds and then deletes its own rows.
@@ -19,7 +22,7 @@ HERE="$(cd "$(dirname "$0")/.." && pwd)"   # supabase/
 # and psql runs nothing, exiting 0 — a silent no-op seed).
 DBX="docker exec -i -e PGPASSWORD=postgres $CONTAINER psql -U postgres -v ON_ERROR_STOP=1"
 
-echo "== 1/3 security migrations (0020+) apply cleanly, in order, idempotently =="
+echo "== 1/4 security migrations (0020+) apply cleanly, in order, idempotently =="
 # A full from-0001 rebuild is what `supabase db reset` does (it provisions the
 # pristine Supabase base — auth/storage/realtime/extensions — then applies every
 # migration); reconstructing that base by hand from a post-migration database is
@@ -37,11 +40,33 @@ done
 echo "✅ 0020+ apply cleanly in order (idempotent re-apply)"
 echo "   (full from-0001 rebuild: use 'supabase db reset')"
 
-echo "== 2/3 reciprocity security invariants (transactional, rolled back) =="
+echo "== 2/4 reciprocity security invariants (transactional, rolled back) =="
 docker cp "$HERE/tests/reciprocity_security_test.sql" "$CONTAINER:/tmp/sectest.sql" >/dev/null
-$DBX -d postgres -f /tmp/sectest.sql 2>&1 | grep -E "PASSED|ERROR|ASSERT" || { echo "❌ invariant check failed"; exit 1; }
+# Capture first, then test psql's OWN status. Piping straight into grep made the
+# pipeline exit with grep's status, and the pattern matched the word ERROR — so
+# a failing run printed its error, grep succeeded, and the harness reported
+# green. Found 2026-07-25.
+if ! $DBX -d postgres -f /tmp/sectest.sql >/tmp/sec_recip.log 2>&1; then
+  echo "❌ invariant check failed:"; grep -iE "ERROR|ASSERT" /tmp/sec_recip.log | head -5; exit 1
+fi
+grep -E "PASSED|ASSERT" /tmp/sec_recip.log || true
+echo "✅ reciprocity invariants hold"
 
-echo "== 3/3 advisory lock serializes truly concurrent reciprocal confirms =="
+echo "== 3/4 privilege + RLS regression suite (transactional, rolled back) =="
+# security_regression.sql was in the tree since 0019 and wired into NOTHING, so
+# it had never run. When first executed on 2026-07-25 it aborted immediately on
+# a claim_token signature dropped at 0024:287, meaning every assertion below
+# that line had been dead for 37 migrations. It now includes an enumerating
+# check that no SECURITY DEFINER function in public is executable by anon —
+# the control that would have caught the claim_proximity_wake_batch hole
+# (0057:120) that 0061 closes.
+docker cp "$HERE/tests/security_regression.sql" "$CONTAINER:/tmp/secreg.sql" >/dev/null
+if ! $DBX -d postgres -f /tmp/secreg.sql >/tmp/sec_reg.log 2>&1; then
+  echo "❌ privilege/RLS regression failed:"; grep -iE "ERROR|ASSERT" /tmp/sec_reg.log | head -5; exit 1
+fi
+echo "✅ no SECURITY DEFINER function reachable by anon; RLS + grant surface intact"
+
+echo "== 4/4 advisory lock serializes truly concurrent reciprocal confirms =="
 # Two users, both directions primed and fresh, then two overlapping correlate
 # calls race on the pair. Without pg_advisory_xact_lock both would try to INSERT
 # the encounter; the lock must serialize them into exactly one. Committed rows

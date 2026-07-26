@@ -55,10 +55,23 @@ EXCEPTION WHEN OTHERS THEN
 END $$;
 CREATE EXTENSION IF NOT EXISTS pg_net WITH SCHEMA extensions;
 CREATE SCHEMA IF NOT EXISTS auth;
+-- Columns chosen to match every auth.users field the migrations and tests
+-- actually reference (NEW.raw_user_meta_data / NEW.phone / NEW.updated_at are
+-- read by handle_new_user; u.created_at / u.last_sign_in_at by the reporting
+-- views). Without raw_user_meta_data the handle_new_user trigger raises
+-- 'record "new" has no field ...' and nothing that inserts a user can run —
+-- which is why security_regression.sql could not be rehearsed before
+-- 2026-07-25.
 CREATE TABLE auth.users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  instance_id UUID,
+  aud TEXT DEFAULT 'authenticated',
+  role TEXT DEFAULT 'authenticated',
   email TEXT,
+  phone TEXT,
+  raw_user_meta_data JSONB DEFAULT '{}'::JSONB,
   created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now(),
   last_sign_in_at TIMESTAMPTZ
 );
 CREATE OR REPLACE FUNCTION auth.uid() RETURNS UUID LANGUAGE sql STABLE AS $$

@@ -2,9 +2,51 @@
 
 BEGIN;
 
+-- ---------------------------------------------------------------------------
+-- Fixtures
+-- ---------------------------------------------------------------------------
+-- Added 2026-07-25. This file was never wired into run_security_tests.sh
+-- (which runs only reciprocity_security_test.sql), so it had never been
+-- executed and assumed fixture users that nothing created. Everything below
+-- runs inside the BEGIN/ROLLBACK, so these rows never persist.
+-- Only (id, email): every other auth.users column is nullable or defaulted on
+-- real Supabase, and this also applies against the reduced auth.users stub
+-- used by scripts/rehearse_migrations.sh.
+INSERT INTO auth.users (id, email)
+VALUES
+  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'sec_a@test.local'),
+  ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'sec_b@test.local'),
+  ('dddddddd-dddd-dddd-dddd-dddddddddddd', 'sec_d@test.local')
+ON CONFLICT (id) DO NOTHING;
+
+-- The acting user (sub = aaaa... in the JWT claims set below) must clear the
+-- age + photo gates, otherwise claim_token raises the verification error
+-- before it ever reaches the coordinate check, and the negative assertion
+-- further down ("coordinate-free token claim unexpectedly succeeded", which
+-- traps SQLSTATE 22023) never exercises what it claims to.
+--
+-- Deliberately NOT applied to bbbb.../dddd...: the photo-verification block
+-- and the swipe block below depend on those two starting unverified.
+UPDATE public.profiles
+SET display_name = 'SecA',
+    dob = '1990-01-01',
+    is_active = TRUE,
+    age_verified = TRUE,
+    is_photo_verified = TRUE,
+    photo_urls = ARRAY['sec_a.jpg']
+WHERE id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+
+-- 0045: current_user_can_discover() also requires an APPROVED verification row
+-- matching the current photo, not just the is_photo_verified flag. Same shape
+-- the reciprocity runner seeds (run_security_tests.sh).
+INSERT INTO public.photo_verifications (user_id, photo_path, slot_index, state, decided_at)
+VALUES ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'sec_a.jpg', 0, 'approved', now())
+ON CONFLICT DO NOTHING;
+
 DO $$
 DECLARE
   v_missing_rls TEXT;
+  v_anon_secdef TEXT;
   v_realtime TEXT[];
   v_claimed INT;
   v_attempts INT;
@@ -56,9 +98,18 @@ BEGIN
     'Edge Function service role lacks proximity wake outbox access';
   ASSERT NOT has_table_privilege('anon', 'public.device_push_tokens', 'SELECT'),
     'anon can read push tokens';
-  ASSERT has_table_privilege('authenticated', 'public.device_push_tokens', 'SELECT')
-    AND has_table_privilege('authenticated', 'public.device_push_tokens', 'INSERT'),
-    'authenticated cannot manage own push tokens';
+  -- Clients must reach this table ONLY through register_push_token /
+  -- unregister_push_token (SECURITY DEFINER). push_service.dart:74,98 does
+  -- exactly that and never selects the table; the Edge functions read it as
+  -- service_role. Until 2026-07-25 this asserted that authenticated held
+  -- direct SELECT+INSERT — an expectation that was never true and is weaker
+  -- than the shipped design. It went unnoticed because the assertion at the
+  -- old claim_token line aborted this block before reaching anything below it.
+  ASSERT NOT has_table_privilege('authenticated', 'public.device_push_tokens', 'SELECT')
+    AND NOT has_table_privilege('authenticated', 'public.device_push_tokens', 'INSERT'),
+    'authenticated has direct table access to push tokens; must go via RPC';
+  ASSERT has_function_privilege('authenticated', 'public.register_push_token(text,text,text,text)', 'EXECUTE'),
+    'authenticated cannot register a push token via RPC';
   ASSERT NOT has_function_privilege('anon', 'public.enqueue_proximity_wake(text,text)', 'EXECUTE'),
     'anon can enqueue proximity wake';
   ASSERT has_function_privilege('authenticated', 'public.enqueue_proximity_wake(text,text)', 'EXECUTE'),
@@ -74,11 +125,49 @@ BEGIN
     'client can execute maintenance';
   ASSERT has_function_privilege('service_role', 'public.run_maintenance()', 'EXECUTE'),
     'service role cannot execute maintenance';
-  ASSERT NOT has_function_privilege('anon', 'public.claim_token(text,timestamptz,double precision,double precision,range_type)', 'EXECUTE'),
+  -- 6-arg signature. The 5-arg form this asserted on until 2026-07-25 was
+  -- DROPPED at 0024:287 ("Drop the prior 5-arg signature first"), so
+  -- has_function_privilege raised undefined_function and aborted this whole
+  -- DO block — every assertion below it had been unreachable for 37
+  -- migrations. p_accuracy was added by the same migration that dropped it.
+  ASSERT NOT has_function_privilege('anon', 'public.claim_token(text,timestamptz,double precision,double precision,range_type,double precision)', 'EXECUTE'),
     'anon can claim a beacon token';
   ASSERT NOT has_function_privilege('anon', 'public.handle_new_user()', 'EXECUTE')
     AND NOT has_function_privilege('authenticated', 'public.handle_new_user()', 'EXECUTE'),
     'trigger function retained default execute privileges';
+
+  -- Enumerating check: NO SECURITY DEFINER function in public may be reachable
+  -- by anon. This exists because naming functions one at a time does not scale
+  -- and did not work: claim_proximity_wake_batch (0057:120) shipped with no
+  -- GRANT and no REVOKE, so its proacl was NULL, which means Postgres's
+  -- built-in default of EXECUTE TO PUBLIC — which anon inherits. It was
+  -- confirmed by execution to return other users' user_id and coarse location
+  -- to an unauthenticated caller, straight through the table's own
+  -- service_role-only RLS, and no assertion here would have caught it.
+  --
+  -- The 0019:2578 ALTER DEFAULT PRIVILEGES that was supposed to prevent this
+  -- class does not work: a fresh SECURITY DEFINER function created as postgres
+  -- in this schema still comes out anon-executable with proacl NULL. Adding
+  -- anon/authenticated to that statement was tested and did not change it.
+  -- So this assertion, not the default-privilege net, is the actual control.
+  -- Every function in this schema is protected only by its explicit REVOKE.
+  --
+  -- Extension-owned functions (PostGIS st_estimatedextent etc.) are excluded:
+  -- we do not own their privilege model.
+  SELECT string_agg(p.oid::regprocedure::TEXT, ', ' ORDER BY p.oid::regprocedure::TEXT)
+    INTO v_anon_secdef
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public'
+    AND p.prosecdef
+    AND has_function_privilege('anon', p.oid, 'EXECUTE')
+    AND NOT EXISTS (
+      SELECT 1 FROM pg_depend d
+      JOIN pg_extension e ON e.oid = d.refobjid
+      WHERE d.objid = p.oid AND d.deptype = 'e'
+    );
+  ASSERT v_anon_secdef IS NULL,
+    'SECURITY DEFINER function(s) executable by anon: ' || COALESCE(v_anon_secdef, '');
 
   SELECT array_agg(tablename::TEXT ORDER BY tablename) INTO v_realtime
   FROM pg_publication_tables
