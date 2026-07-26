@@ -1,0 +1,50 @@
+name: CI
+
+# Runs on every push and PR, not just main, and not just when ios/** changes.
+#
+# Why this exists: until 2026-07-25 nothing in .github/ ran `flutter test` or
+# `flutter analyze`. The 158-test suite executed only when a human remembered,
+# which is how security_regression.sql sat dead for 37 migrations and how two
+# separate rounds were reported green while the iOS build was broken. A test
+# that does not gate a merge is a test that protects nothing.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+  workflow_dispatch:
+
+# A newer push to the same ref makes the older run irrelevant — cancel it
+# rather than paying for both. Never cancel on main: those runs are the record.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  dart:
+    name: analyze + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Pub get
+        run: flutter pub get
+
+      # Formatting is deliberately NOT enforced here. The tree has never been
+      # `dart format`-clean, so adding it now would produce a red build that
+      # says nothing about correctness and teaches everyone to ignore CI.
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        # No --coverage: it roughly doubles runtime and nothing consumes the
+        # lcov output yet. Total line coverage was 22.3% on 2026-07-25 and the
+        # 1,580-line BeaconService sat at 7.0%; publishing that number is worth
+        # doing, but as a deliberate task, not as a side effect of this job.
+        run: flutter test --reporter expanded
