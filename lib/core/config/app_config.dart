@@ -27,6 +27,10 @@ class AppConfig {
           const String.fromEnvironment('INRANGE_PREFER_SERVER'),
         'INRANGE_CALIB_SCAN' =>
           const String.fromEnvironment('INRANGE_CALIB_SCAN'),
+        'INRANGE_SCAN_LEGACY_ONLY' =>
+          const String.fromEnvironment('INRANGE_SCAN_LEGACY_ONLY'),
+        'INRANGE_SCAN_RESTART_MINUTES' =>
+          const String.fromEnvironment('INRANGE_SCAN_RESTART_MINUTES'),
         'INRANGE_SUBTLE_WAKE' =>
           const String.fromEnvironment('INRANGE_SUBTLE_WAKE'),
         'INRANGE_LOCATION_RESIDENCY' =>
@@ -163,6 +167,68 @@ class AppConfig {
         .toLowerCase();
     return raw == 'true' || raw == '1' || raw == 'yes';
   }
+
+  // ===== BLE scan A/B arms (2026-07-27 walk) =============================
+  //
+  // Both of these shipped as fixed constants in e5d40e4 (findings E1 and D7 of
+  // the 2026-07-26 prior-art review), and both were originally recommended
+  // MEASURE-FIRST. Shipping them together destroyed the baseline for the two
+  // walk instruments that existed to prove the effects are real on THIS
+  // hardware: W9's advert-gap histogram (E1's ~4 s Samsung dual-PHY blind
+  // block) and the mid-window duty-cycle collapse (D7). With both already
+  // fixed, tomorrow's histogram can only show the gaps are *absent* — which is
+  // equally consistent with "the fix works" and with "the effect never existed
+  // on a Galaxy S9". A flag per arm recovers the comparison: flip ONE handset
+  // to the old values and walk the two side by side.
+  //
+  // Defaults are the NEW (fixed) values, so a plain build and a release build
+  // behave exactly as e5d40e4 shipped. Resolved values are logged unconditioned
+  // on INRANGE_CALIB_SCAN at every scan start (beacon_service.dart) — arm
+  // attribution has to work in a normal build too, or a log cannot be assigned
+  // to a leg after the fact.
+
+  /// Scan the legacy 1M PHY only (finding E1). Default **true** = the fix.
+  ///
+  /// `false` restores flutter_blue_plus's own default (flutter_blue_plus.dart:281
+  /// → FlutterBluePlusPlugin.java:549-552 sets PHY_LE_ALL_SUPPORTED +
+  /// setLegacy(false)), i.e. the pre-2026-07-26 both-PHY scan whose cost
+  /// upstream #938 reports as 4-second time slices of total blindness on some
+  /// Samsung handsets. PHY time-slicing is a property of the SCANNER, not of the
+  /// peers, so two phones scanning the same room with different values of this
+  /// flag is a valid controlled experiment — the A leg's W9 histogram should
+  /// show a ~4 s mode the B leg's does not.
+  ///
+  /// Android-only in effect (iOS CoreBluetooth exposes no PHY choice), but read
+  /// on both so a walk log states the arm on either handset.
+  static bool get scanLegacyPhyOnly {
+    final raw = (_env('INRANGE_SCAN_LEGACY_ONLY').isEmpty
+            ? 'true'
+            : _env('INRANGE_SCAN_LEGACY_ONLY'))
+        .toLowerCase();
+    return raw != 'false' && raw != '0' && raw != 'no';
+  }
+
+  /// Minutes between scan restarts (finding D7). Default **8** = the fix; the
+  /// pre-2026-07-26 value was 25.
+  ///
+  /// AOSP force-downgrades a long-running filtered scan after 10 min on
+  /// Android 14+ and makes it sticky for that scanner's life
+  /// (ScanManager.java:1550-1578, AppScanStats.java:801-810), which is why 8
+  /// won. The 30-minute figure the old comment cited is real and sourced — a
+  /// quoted paper in docs/research/ble-radio-optimization.md:19-21 — it is just
+  /// the ≤13 behaviour. Set 25 on one handset to measure whether the mid-window
+  /// duty-cycle collapse is observable on the S9s at all.
+  ///
+  /// Clamped 1–60: below 1 the AOSP scan quota (5 registrations per 30 s) would
+  /// dominate, above 60 the restart stops being upkeep against the demotion it
+  /// exists to prevent.
+  static int get scanRestartMinutes {
+    final parsed = int.tryParse(_env('INRANGE_SCAN_RESTART_MINUTES')) ?? 8;
+    return parsed.clamp(1, 60);
+  }
+
+  static Duration get scanRestartInterval =>
+      Duration(minutes: scanRestartMinutes);
 
   /// Prefer server feeds when online; always fall back to local SQLite/BLE.
   static bool get preferServerFeeds {

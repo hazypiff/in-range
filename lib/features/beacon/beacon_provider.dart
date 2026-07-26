@@ -181,8 +181,20 @@ class BeaconController extends StateNotifier<BeaconState> {
         isOn: true,
         tokenExpiresAt: expiresAt ?? state.tokenExpiresAt,
         cloudSynced: cloudSynced,
-        discoverable: state.discoverable,
+        // Read the service, not our own snapshot: `discoverable` is now composed
+        // (advertise up AND receive path alive) and can flip with no user action.
+        discoverable: _service.discoverable,
       );
+    };
+    // The radio can go down mid-session with nothing the user did to cause it —
+    // Bluetooth toggled, permission revoked, the iOS central dying while the
+    // peripheral still looks healthy. Before this the badge only resampled at
+    // toggle/restore, so the UI kept claiming "discoverable" over a dead radio
+    // until the user happened to touch the switch. That is precisely the state
+    // the don't-lie-about-discoverability rule exists to prevent.
+    _service.onDiscoverabilityChanged = (discoverable) {
+      if (!mounted || !state.isOn) return;
+      state = state.copyWith(discoverable: discoverable);
     };
   }
 

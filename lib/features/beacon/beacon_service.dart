@@ -3,6 +3,10 @@ import 'dart:collection';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+// For WidgetsBinding only: the iOS BLE-state re-read needs an app-resume
+// signal, and nothing in lib/ observed the lifecycle before this. No widgets
+// are built here.
+import 'package:flutter/widgets.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_ble_peripheral/flutter_ble_peripheral.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
@@ -86,16 +90,21 @@ class BeaconService {
   );
 
   /// iOS locked-phone carrier (W2/W4). Native sightings join the exact same
-  /// ingest path as scan results; the native advertising callback keeps
-  /// `_discoverable` honest across background transitions.
+  /// ingest path as scan results; the native BLE-state callbacks keep
+  /// `_advertisingUp` / `_receivePathDown` honest across background transitions.
   late final BackgroundBeaconChannel _bgBeacon = BackgroundBeaconChannel()
     ..onSighting = ((token, rssi, at) {
       if (!_isOn) return;
       _ingestForeignSample(token, rssi, AdvertPower.high, at: at);
     })
+    // Still bound: native fires this verbatim alongside onBleState (additive
+    // migration, nothing renamed) and it carries the same verdict, so the two
+    // cannot disagree. Kept so a native build predating onBleState still keeps
+    // discoverability honest.
     ..onAdvertisingState = ((advertising) {
-      _discoverable = advertising;
+      _applyAdvertisingVerdict(advertising, 'onAdvertisingState');
     })
+    ..onBleState = _onNativeBleState
     ..onBufferedSightingsReady = (() {
       unawaited(_drainNativeBuffer());
     });
@@ -152,8 +161,26 @@ class BeaconService {
   /// False while the platform can't broadcast the token (iOS scan-only): the
   /// beacon scans + logs but peers can't discover this device. Drives the
   /// "scanning only" UI so we never claim false discoverability (reviewer #2).
-  bool _discoverable = true;
-  bool get discoverable => _discoverable;
+  ///
+  /// This is the ADVERTISE half only. Read [discoverable] for the verdict the
+  /// UI is allowed to show — see [receivePathDown].
+  bool _advertisingUp = true;
+
+  /// Whether the "beacon is working" claim is honest right now.
+  ///
+  /// Advertising alone is not enough. Finding 1.3: iOS could be advertising
+  /// perfectly while `CBCentralManager` was poweredOff/unauthorized, i.e. we
+  /// were visible but stone deaf — and In Range needs BOTH directions before an
+  /// encounter exists, so a live advertiser over a dead scanner produces exactly
+  /// nothing while the UI says the beacon is up. Dart could not even observe
+  /// that case before 2026-07-26 (the entire native surface was one peripheral-
+  /// role bool), which is why it stayed shipped. Fail closed on either half.
+  bool get discoverable => _advertisingUp && !_receivePathDown;
+
+  /// The advertise half in isolation — for logs and for anything that needs to
+  /// say WHICH side is down. "Can't be seen" and "can't see" have different
+  /// remedies and different copy (background_beacon_channel.dart:44-45).
+  bool get advertisingUp => _advertisingUp;
 
   EphemeralToken? _currentToken;
   EphemeralToken? get currentToken => _currentToken;
@@ -386,10 +413,18 @@ class BeaconService {
       _flushUploads();
     });
     _scanRestartTimer?.cancel();
-    // MUST be < 10 min on Android 14+. (Was 25 min, justified by a
-    // `research/ble-radio-optimization.md` that DOES NOT EXIST in this repo —
-    // the 30-minute figure was unsourced in-tree. Replaced with AOSP, finding
-    // D7 of docs/BLE_PRIOR_ART_REVIEW_2026-07-26.md.)
+    // MUST be < 10 min on Android 14+ (finding D7 of
+    // docs/BLE_PRIOR_ART_REVIEW_2026-07-26.md).
+    //
+    // Path correction, 2026-07-26: the previous comment cited
+    // `research/ble-radio-optimization.md` and a reviewer, finding nothing at
+    // that path, concluded the 30-minute figure was unsourced and argued from
+    // there. The file is `docs/research/ble-radio-optimization.md` and the
+    // figure is sourced at :19-21 to a quoted academic paper ("the Android
+    // operating system automatically switches from the SCAN_MODE_LOW_LATENCY to
+    // the SCAN_MODE_OPPORTUNISTIC setting after 30 min of continuous
+    // scanning"). It was never wrong — it describes Android ≤13. Cite the full
+    // path; a one-character path error cost a reviewer an entire argument.
     //
     // AOSP demotes a long-running scan on a timeout that changed under us:
     // 30 min on Android 10–13, but **10 min on 14+**. The mechanism changed
@@ -410,7 +445,12 @@ class BeaconService {
     // The cost is one scan-quota charge per 8 min against a budget of 5 per
     // 30 s (D6) — a non-issue. Not backed off on failure: see
     // _requestScanRestart.
-    _scanRestartTimer = Timer.periodic(const Duration(minutes: 8), (_) {
+    //
+    // Behind INRANGE_SCAN_RESTART_MINUTES (default 8 = this value) so one
+    // handset can walk the old 25 tomorrow: e5d40e4 shipped this change AND
+    // E1's PHY change together, which left the duty-cycle-collapse instrument
+    // with nothing to compare against. See AppConfig.scanRestartMinutes.
+    _scanRestartTimer = Timer.periodic(AppConfig.scanRestartInterval, (_) {
       if (_isOn) _requestScanRestart('cadence');
     });
     // Dual-power cycle: 20 s high / 10 s medium. Medium slots are the
@@ -422,7 +462,7 @@ class BeaconService {
     // Power-cycle only on Android: iOS has no CBPeripheralManager TX-power
     // control (single high-power slot), and re-advertising it every 10 s would
     // just churn the iOS advertiser for no distance signal.
-    if (_discoverable && defaultTargetPlatform != TargetPlatform.iOS) {
+    if (_advertisingUp && defaultTargetPlatform != TargetPlatform.iOS) {
       _advPowerTimer = Timer.periodic(const Duration(seconds: 10), (_) {
         if (!_isOn) return;
         _advTick = (_advTick + 1) % 3;
@@ -936,9 +976,9 @@ class BeaconService {
     // and peers connect + read the token from the CA7E characteristic
     // instead, served per-read from the batch slots we pass here. Rotation
     // re-enters this method, so the module always holds the fresh batch.
-    // Falls back to scan-only (fail-closed _discoverable) if the native
-    // start reports no radio; the definitive advertising verdict arrives
-    // via onAdvertisingState.
+    // Falls back to scan-only (fail-closed _advertisingUp) if the native
+    // start reports no radio; the definitive verdict for BOTH roles arrives
+    // via onBleState, which native pushes from `start`.
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
       final payload = BackgroundBeaconChannel.slotsPayload(
         _tokenSource.slots,
@@ -947,13 +987,13 @@ class BeaconService {
         currentUntil: _currentToken!.expiresAt,
       );
       final ok = await _bgBeacon.start(payload);
-      _discoverable = ok;
+      _applyAdvertisingVerdict(ok, 'native start');
       debugPrint(ok
           ? 'iOS native advertising armed (marker + GATT token carrier)'
           : 'iOS native advertising not ready → scan-only fallback');
       return;
     }
-    _discoverable = true;
+    _applyAdvertisingVerdict(true, 'android advertise start');
 
     final peripheral = FlutterBlePeripheral();
     // Legacy payload: mfg id + 16-byte corr + 1 flag byte (fits 31-byte AD).
@@ -1102,9 +1142,13 @@ class BeaconService {
         onError: (Object e) => debugPrint('adapterState stream error: $e'),
       );
     }
+    // iOS: the native carrier is the only advertiser/scanner, and its state
+    // arrives by push. A push can be dropped by a suspended engine, so the
+    // session also watches for resume and re-reads.
+    _startResumeWatch();
     // Android only: on iOS the native BackgroundBeacon carrier owns advertising
-    // and reports through onAdvertisingState, and flutter_ble_peripheral is a
-    // dead dependency there (E9).
+    // and reports through onAdvertisingState / onBleState, and
+    // flutter_ble_peripheral is a dead dependency there (E9).
     if (_peripheralStateSub == null &&
         !kIsWeb &&
         defaultTargetPlatform == TargetPlatform.android) {
@@ -1129,6 +1173,271 @@ class BeaconService {
     _peripheralStateSub = null;
     _lastPeripheralState = null;
     _advertiserDown = false;
+    _stopResumeWatch();
+    // A "receive path is dead" verdict must not survive into the next session:
+    // after off→on the native managers are re-created and the old verdict would
+    // hold `discoverable` false over a perfectly healthy beacon. Same reasoning
+    // as rangeEstimator.clear() in turnOffBeacon (reviewer #17).
+    _receivePathConfirmTimer?.cancel();
+    _receivePathConfirmTimer = null;
+    _receivePathDown = false;
+    _nativeBleState = null;
+    _nativeBleStateUnknown = false;
+  }
+
+  // ===== iOS two-manager BLE state (finding 1.3) ==========================
+  //
+  // What this section is for: until 2026-07-26 the ENTIRE native BLE surface
+  // Dart consumed was `onAdvertisingState(bool)`, which covered
+  // CBPeripheralManager only and was raised `false` for radio-off,
+  // permission-denied and a transient didStartAdvertising failure alike, while
+  // `centralManagerDidUpdateState` reported nothing at all
+  // (BackgroundBeacon.swift:477-485). Two consequences shipped:
+  //
+  //  1. The app could be advertising happily with a DEAD central manager — no
+  //     scanning, no GATT reads, no sightings — and the UI would say
+  //     discoverable. In Range needs both directions before an encounter
+  //     exists, so that state produces nothing while claiming to work.
+  //  2. Every reason for "not advertising" looked identical, so the app could
+  //     not say "turn Bluetooth on" vs "grant Bluetooth in Settings" vs "we'll
+  //     retry", and never did.
+  //
+  // e5d40e4 made native report both roles fully. This section is the consumer;
+  // without it the native change delivers nothing user-visible.
+
+  /// Last authoritative native BLE state, or null when we have never had one
+  /// (non-iOS, pre-`onBleState` native build, or a failed read). Null means
+  /// UNKNOWN — see [nativeBleStateUnknown]. It is never evidence of health.
+  NativeBleState? _nativeBleState;
+  NativeBleState? get nativeBleState => _nativeBleState;
+
+  /// True when the last [readBleState] came back null while we expected an
+  /// answer. Recorded rather than papered over: a channel that cannot answer is
+  /// not the same as a radio that is fine, and the two were indistinguishable
+  /// before.
+  bool _nativeBleStateUnknown = false;
+  bool get nativeBleStateUnknown => _nativeBleStateUnknown;
+
+  /// Debounced verdict: the scan side is down while the beacon wants it up.
+  /// Gates [discoverable] so the app cannot claim to be working when it cannot
+  /// hear anybody.
+  bool _receivePathDown = false;
+  bool get receivePathDown => _receivePathDown;
+
+  /// Why advertising is down, kept as the THREE distinguishable causes the old
+  /// bool collapsed into one `false`. Null when advertising is up (or unknown).
+  ///
+  ///  * `radio:poweredOff` / `radio:unauthorized` / `radio:unsupported` — the
+  ///    peripheral manager itself. `advertisingError` is deliberately null in
+  ///    these cases on the native side (BackgroundBeacon.swift:488-490), so the
+  ///    reason has to be read off [NativeBleState.peripheral].
+  ///  * `startFailed:<message>` — a real `didStartAdvertising` error with the
+  ///    radio up. Transient and retryable; NOT something to tell the user to fix.
+  ///  * `notStarted` — radio fine, no error, nothing advertising yet.
+  String? get advertisingDownReason {
+    final s = _nativeBleState;
+    if (s == null || s.advertising) return null;
+    if (!s.peripheral.isUsable) return 'radio:${s.peripheral.name}';
+    final err = s.advertisingError;
+    return err == null ? 'notStarted' : 'startFailed:$err';
+  }
+
+  /// Fired whenever [discoverable] flips, so a UI holding a snapshot can
+  /// repaint. Wired by BeaconController — without it the controller only
+  /// sampled `discoverable` at toggle/restore, so a mid-session radio death
+  /// updated this service and the badge stayed stale until the next toggle.
+  /// That is the one case the don't-lie-about-discoverability rule exists for:
+  /// nothing the user did caused it, so nothing the user does will repaint it.
+  void Function(bool discoverable)? onDiscoverabilityChanged;
+
+  void _applyAdvertisingVerdict(bool advertising, String source) {
+    if (_advertisingUp == advertising) return;
+    final before = discoverable;
+    _advertisingUp = advertising;
+    debugPrint('BLE advertise side ${advertising ? "UP" : "DOWN"} ($source)'
+        '${advertising ? "" : " reason=${advertisingDownReason ?? "unknown"}"}');
+    if (discoverable != before) _notifyDiscoverability();
+  }
+
+  void _setReceivePathDown(bool down, String why) {
+    if (_receivePathDown == down) return;
+    final before = discoverable;
+    _receivePathDown = down;
+    debugPrint(down
+        ? 'BLE receive side DOWN ($why) — advertising=$_advertisingUp, '
+            'discoverable now false'
+        : 'BLE receive side recovered ($why)');
+    if (discoverable != before) _notifyDiscoverability();
+  }
+
+  void _notifyDiscoverability() {
+    try {
+      onDiscoverabilityChanged?.call(discoverable);
+    } catch (e) {
+      debugPrint('onDiscoverabilityChanged callback error: $e');
+    }
+  }
+
+  void _onNativeBleState(NativeBleState state) {
+    _nativeBleState = state;
+    _nativeBleStateUnknown = false;
+    _applyAdvertisingVerdict(state.advertising, 'onBleState');
+    _evaluateReceivePath(state, 'push');
+  }
+
+  /// A snapshot's `scanning: false` is only believable after a delay.
+  ///
+  /// `BackgroundBeacon.swift restartScanNow` (:342-353) calls `stopScan()` and
+  /// restarts 0.3 s later on the main queue, so ANY snapshot taken inside that
+  /// window reports a healthy scanner as idle. A pushed state can land there
+  /// too, despite the channel's note that it cannot: `notifyAdvertisingState`
+  /// pushes from `peripheralManagerDidStartAdvertising` (:486-493, :607), which
+  /// is not synchronised with the central manager at all — so the very first
+  /// push of a session routinely carries `scanning: false` before the scan has
+  /// started. Raising an alarm on one sample would therefore mark every healthy
+  /// session's startup as broken.
+  ///
+  /// 3 s = 10× the gap, and the confirm is a fresh independent read rather than
+  /// a re-check of the same stale snapshot.
+  static const Duration _receivePathConfirmDelay = Duration(seconds: 3);
+  Timer? _receivePathConfirmTimer;
+
+  void _evaluateReceivePath(NativeBleState state, String source) {
+    // The radio-level half needs NO debounce: a central manager that is
+    // poweredOff / unauthorized / unsupported cannot be a 0.3 s artefact of a
+    // scan restart, and it is exactly the case that was previously invisible.
+    if (!state.central.isUsable) {
+      _receivePathConfirmTimer?.cancel();
+      _receivePathConfirmTimer = null;
+      _setReceivePathDown(true, 'central=${state.central.name} ($source)');
+      return;
+    }
+    if (state.scanning || !state.enabled) {
+      _receivePathConfirmTimer?.cancel();
+      _receivePathConfirmTimer = null;
+      _setReceivePathDown(
+          false, state.scanning ? 'scanning ($source)' : 'native idle');
+      return;
+    }
+    // Enabled, central usable, not scanning: could be the restart gap. Confirm
+    // with a second read before believing it.
+    if (_receivePathDown || _receivePathConfirmTimer != null) return;
+    _receivePathConfirmTimer = Timer(_receivePathConfirmDelay, () {
+      _receivePathConfirmTimer = null;
+      unawaited(_confirmReceivePath());
+    });
+  }
+
+  Future<void> _confirmReceivePath() async {
+    if (!_isOn) return;
+    final again = await _bgBeacon.readBleState();
+    if (again == null) {
+      // Unknown is not "fine": leave the existing verdict standing rather than
+      // clearing it, and say so in the log.
+      _nativeBleStateUnknown = true;
+      debugPrint('BLE receive-path confirm unreadable — verdict unchanged '
+          '(receivePathDown=$_receivePathDown)');
+      return;
+    }
+    _nativeBleState = again;
+    _nativeBleStateUnknown = false;
+    _applyAdvertisingVerdict(again.advertising, 'confirm');
+    if (!again.central.isUsable || (again.enabled && !again.scanning)) {
+      // Cleared by the next native push (any manager transition, and every
+      // token rotation, which re-enters _startAdvertisingLocked → native
+      // `start` → notifyBleState) or by the next resume re-read. No poll is
+      // added here on purpose: a self-clearing timer is scan-health *recovery*,
+      // which is on the walk-day freeze list — this surface only reports.
+      _setReceivePathDown(
+          true,
+          'idle in two reads ${_receivePathConfirmDelay.inSeconds}s apart, '
+              'central=${again.central.name}');
+    } else {
+      _setReceivePathDown(false, 'scan-restart gap, not a failure');
+    }
+  }
+
+  /// Authoritative re-read of the native BLE state. Public so the resume path,
+  /// and any future caller, can force reconciliation.
+  ///
+  /// Needed because `onBleState` is a push and a push issued while the app is
+  /// backgrounded is accepted then silently dropped by a suspended engine —
+  /// exactly the hazard the native sighting BUFFER exists to work around
+  /// (drainBufferedSightings + ack, audit 2026-07-25 round 3). State has no
+  /// buffer, so it has to be pulled.
+  ///
+  /// A null answer is UNKNOWN and is never treated as healthy: nothing
+  /// pessimistic is cleared on null.
+  Future<NativeBleState?> refreshNativeBleState() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return null;
+    final state = await _bgBeacon.readBleState();
+    if (state == null) {
+      _nativeBleStateUnknown = true;
+      debugPrint('iOS BLE state unreadable → UNKNOWN (not healthy). '
+          'Last known: ${_nativeBleState ?? "none"}; '
+          'discoverable stays $discoverable');
+      return null;
+    }
+    debugPrint('iOS BLE state re-read: $state');
+    _nativeBleState = state;
+    _nativeBleStateUnknown = false;
+    _applyAdvertisingVerdict(state.advertising, 'resume re-read');
+    _evaluateReceivePath(state, 'resume');
+    return state;
+  }
+
+  /// One lifecycle observer, for one event. Registered here rather than in the
+  /// provider because nothing in lib/ observed the lifecycle at all before this
+  /// (no `WidgetsBindingObserver` anywhere), and the state that needs
+  /// reconciling belongs to this service.
+  _BeaconResumeObserver? _resumeObserver;
+
+  void _startResumeWatch() {
+    if (_resumeObserver != null) return;
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return;
+    final binding = _maybeWidgetsBinding();
+    if (binding == null) {
+      debugPrint('No WidgetsBinding — iOS BLE resume re-read unavailable');
+      return;
+    }
+    final obs = _BeaconResumeObserver(() {
+      if (!_isOn) return;
+      unawaited(refreshNativeBleState());
+      // Drain on resume too, not only on the native push. `onBufferedSightingsReady`
+      // is a push into a possibly-suspended engine — the identical hazard that
+      // `readBleState()` exists to work around — and a dropped one leaves real
+      // sightings sitting in UserDefaults until the next push happens to land.
+      // On a walk with both phones locked for long stretches that is exactly the
+      // data we came to collect, and the drain is idempotent (pull-and-ack: the
+      // native side only discards what we acknowledge), so a redundant call costs
+      // one empty channel round trip.
+      unawaited(_drainNativeBuffer());
+    });
+    _resumeObserver = obs;
+    binding.addObserver(obs);
+  }
+
+  void _stopResumeWatch() {
+    final obs = _resumeObserver;
+    if (obs == null) return;
+    _resumeObserver = null;
+    _maybeWidgetsBinding()?.removeObserver(obs);
+  }
+
+  /// `WidgetsBinding.instance` throws when no binding exists: a FlutterError
+  /// from `BindingBase.checkInstance`'s assert in debug, a null-check TypeError
+  /// in release/profile where that assert is stripped. Both are Objects, so one
+  /// catch covers both. Bindings really are absent here — the
+  /// flutter_background_service isolate (INRANGE_ENABLE_FGS) runs its own engine
+  /// and `flutter test` bodies that do not call
+  /// TestWidgetsFlutterBinding.ensureInitialized have none — and a beacon must
+  /// never fail to start because an observability hook could not register.
+  static WidgetsBinding? _maybeWidgetsBinding() {
+    try {
+      return WidgetsBinding.instance;
+    } catch (_) {
+      return null;
+    }
   }
 
   /// E2 — the defect this exists for: a Bluetooth off→on toggle stops the FBP
@@ -1188,7 +1497,7 @@ class BeaconService {
     final wasAdvertising = prev == PeripheralState.advertising;
     switch (state) {
       case PeripheralState.advertising:
-        _discoverable = true;
+        _applyAdvertisingVerdict(true, 'peripheral advertising');
         _advertiserDown = false;
         return;
       case PeripheralState.poweredOff:
@@ -1196,9 +1505,9 @@ class BeaconService {
       case PeripheralState.unsupported:
         // Fail closed — the UI must never claim discoverability the radio
         // cannot deliver (reviewer #2). _startAdvertisingLocked sets
-        // _discoverable = true optimistically on the Android path; this is the
+        // _advertisingUp = true optimistically on the Android path; this is the
         // correction.
-        _discoverable = false;
+        _applyAdvertisingVerdict(false, 'peripheral ${state.name}');
         // Don't retry into a radio that cannot advertise: peripheral.start()
         // would throw 'Bluetooth is off' and burn a log line. Remember instead,
         // and retry when the stream reports a usable state again — the adapter
@@ -1312,6 +1621,7 @@ class BeaconService {
     // unfiltered and match both carriers (mfg data + service UUID) in
     // _onScanResults.
     final calib = AppConfig.calibScanMode;
+    final legacyOnly = AppConfig.scanLegacyPhyOnly;
     final isIOS =
         !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
     try {
@@ -1349,7 +1659,15 @@ class BeaconService {
         // and a silently corrupted RSSI sample distribution on the exact
         // hardware this app field-tests on. Legacy-only cannot reduce coverage
         // here, because there is nothing on the other PHYs to find.
-        androidLegacy: true,
+        //
+        // Behind INRANGE_SCAN_LEGACY_ONLY (default true = the fix). PHY
+        // time-slicing is a receiver-side behaviour, so setting this false on
+        // one handset and true on the other, in the same room, is a valid A/B:
+        // the false leg's W9 advert-gap histogram should carry a ~4 s mode the
+        // true leg's does not. Without the flag, tomorrow's walk can only show
+        // that gaps are absent — which does not distinguish "the fix worked"
+        // from "#938 never applied to a Galaxy S9".
+        androidLegacy: legacyOnly,
         androidScanMode:
             calib ? AndroidScanMode.lowLatency : AndroidScanMode.balanced,
       );
@@ -1385,8 +1703,16 @@ class BeaconService {
       } catch (_) {}
       return;
     }
-    debugPrint(
-        'BLE scan started (filtered msd=0xFFFF, legacy-1M, ${calib ? "lowLatency/calib" : "balanced"})');
+    debugPrint('BLE scan started (filtered msd=0xFFFF, '
+        '${legacyOnly ? "legacy-1M" : "all-PHY"}, '
+        '${calib ? "lowLatency/calib" : "balanced"})');
+    // A/B arm attribution. Deliberately NOT calibScanMode-gated: knowing which
+    // arm produced a log matters in a normal build too, and the failure mode
+    // this guards against is a walk log that cannot be assigned to a leg after
+    // the fact — which is precisely how e5d40e4 lost the E1/D7 baseline in the
+    // first place. One line per scan start (~8 min), so it is not noisy.
+    debugPrint('BLE scan arm: INRANGE_SCAN_LEGACY_ONLY=$legacyOnly '
+        'INRANGE_SCAN_RESTART_MINUTES=${AppConfig.scanRestartMinutes}');
     if (calib) {
       // W8: success marker + the gap since the last scan result **of any kind**,
       // In Range peer or not. That gap is the whole point — if the scanner dies
@@ -1427,8 +1753,13 @@ class BeaconService {
   /// exceeds 2 there is nothing to bound.
   int _gattInflightPeak = 0;
 
-  /// W2: GATT outcome histogram. See _recoverTokenViaGatt for why the
-  /// connect_failed / timeout / read_failed split is not available in Dart yet.
+  /// W2: GATT outcome histogram. Buckets are `success` / `bad_length` /
+  /// `no_service` / the native failure code (`connect_failed`, `timeout`,
+  /// `read_failed`, `bt_off`, `no_permission`, `bad_args`, `channel_error`) /
+  /// `failed` for a null return that carried no code. The native split reaches
+  /// Dart via NativeGattTokenReader.readToken's `onFailure` — before 2026-07-26
+  /// that wrapper collapsed all six codes into one bucket, which would have made
+  /// tomorrow's histogram unable to answer the question it exists for.
   final Map<String, int> _gattOutcomeCounts = <String, int>{};
 
   /// W8: scan-failure histogram by FBP/platform code.
@@ -1739,6 +2070,7 @@ class BeaconService {
       // license obligation (iOS connects natively in BackgroundBeacon.swift
       // for the same reason). Disconnect/close is the native side's job.
       var stranger = false;
+      String? failureCode;
       final bytes = await NativeGattTokenReader.readToken(
         deviceId,
         serviceUuid: _inRangeServiceUuid,
@@ -1748,24 +2080,24 @@ class BeaconService {
           stranger = true;
           debugPrint('W3 GATT $deviceId: no In Range service (stranger)');
         },
+        onFailure: (code) => failureCode = code,
       );
       // W2/W3: outcome histogram + distinct-MAC fates. This is READ-ONLY — the
       // backoff floors above are untouched, because outcome-aware backoff (1.7)
       // is frozen until this data says which outcomes actually dominate.
       //
-      // The exact split the review asks for is NOT reachable from Dart today.
-      // GattTokenReader.kt does distinguish connect_failed / read_failed /
-      // timeout / no_service / bt_off / bad_args (:80-147), but
-      // NativeGattTokenReader.readToken collapses every non-`no_service`
-      // PlatformException into `null` and a debugPrint
-      // (gatt_token_reader.dart:32-42). Surfacing the code is a 3-line change to
-      // that wrapper, in a file this change does not own — so until then the
-      // bucket is `failed` and the codes stay in logcat.
+      // The split is now real. Until 2026-07-26 every non-`no_service` failure
+      // fell into one `failed` bucket, because the wrapper swallowed the native
+      // code — so W2 could not tell "the room is full of unreachable strangers"
+      // (connect_failed) from "our 10 s timeout is too tight" (timeout) from
+      // "the radio is off" (bt_off), which are three different fixes. The codes
+      // come straight from GattTokenReader.kt; `failed` now means only the one
+      // case that carries no code at all — a null return with no exception.
       if (AppConfig.calibScanMode) {
         _bumpCounter(
           _gattOutcomeCounts,
           bytes == null
-              ? (stranger ? 'no_service' : 'failed')
+              ? (stranger ? 'no_service' : (failureCode ?? 'failed'))
               : (bytes.length == 16 ? 'success' : 'bad_length'),
         );
         if (stranger) _w3NoServiceMacs.add(deviceId);
@@ -2276,4 +2608,19 @@ class SightingRecord {
 
   /// Reported GPS accuracy (metres) — sizes the server's plausibility veto.
   final double? observerAccuracyM;
+}
+
+/// Minimal lifecycle observer: BeaconService needs exactly one event, and
+/// `WidgetsBindingObserver`'s other twenty no-op overrides have no business in
+/// a BLE service. Resume is when a dropped `onBleState` push has to be pulled
+/// back — the engine was suspended, so the push never arrived.
+class _BeaconResumeObserver extends WidgetsBindingObserver {
+  _BeaconResumeObserver(this.onResumed);
+
+  final void Function() onResumed;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) onResumed();
+  }
 }
