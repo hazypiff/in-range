@@ -12,8 +12,12 @@ import UIKit
 /// token batch — background reads wake the app, so no timer ever fires.
 ///
 /// Central side: filtered scan for CAFE (the only scan shape iOS delivers
-/// in background). Token comes from the advert when present; otherwise
-/// connect → read CA7E → disconnect, with a per-peripheral token cache.
+/// in background). Token comes from the advert when present — as the second
+/// service UUID from an iOS peer, or as manufacturer data from an Android peer
+/// (finding B1, 2026-07-26: a filtered iOS scan still delivers manufacturer
+/// data, and Android's 16-byte token is already in it, so that direction needs
+/// no connect at all) — otherwise connect → read CA7E → disconnect, with a
+/// per-peripheral token cache.
 ///
 /// Survives relaunch: managers use CoreBluetooth state restoration, and the
 /// batch + enabled flag persist in UserDefaults so a BT-relaunched process
@@ -24,6 +28,12 @@ final class BackgroundBeacon: NSObject {
   // 0000CAFE-…: app-wide discovery marker (beacon_service.dart).
   private static let serviceUUID = CBUUID(string: "CAFE")
   private static let tokenCharUUID = CBUUID(string: "CA7E")
+  /// in-range's BLE company identifier, mirrored from
+  /// `beacon_service.dart:608` (`_inRangeManufacturerId`). Android's advert
+  /// carries the 16-byte correlation token under this id
+  /// (`beacon_service.dart:713-714`); CoreBluetooth hands the field back with
+  /// the company id still on the front, little-endian. Finding B1.
+  private static let inRangeCompanyID: UInt16 = 0xFFFF
   private static let peripheralRestoreID = "io.inrange.beacon.peripheral"
   private static let centralRestoreID = "io.inrange.beacon.central"
 
@@ -53,6 +63,17 @@ final class BackgroundBeacon: NSObject {
   private var lastConnectAttempt: [UUID: Date] = [:]
   private var lastScanRestart = Date.distantPast
   private var scanHeartbeat: Timer?
+
+  /// Last verdict from peripheralManagerDidStartAdvertising, retained so the
+  /// state snapshot can be rebuilt on demand: an invokeMethod issued while
+  /// backgrounded is silently dropped by a suspended engine (same hazard as
+  /// the sighting buffer), so Dart re-pulls the truth via `bleState`.
+  /// Prior-art review 2026-07-26, finding 1.3.
+  private var advertisingActive = false
+  private var advertisingError: String?
+  /// role → last state name written to bb_wake_log.txt, so W5 logs
+  /// transitions rather than re-logging a steady state.
+  private var lastLoggedManagerState: [String: String] = [:]
 
   private var defaults: UserDefaults { UserDefaults.standard }
 
@@ -146,6 +167,9 @@ final class BackgroundBeacon: NSObject {
         self.reconfigureAdvertising()
         self.ensureScanning()
         self.notifyBufferReady()
+        // Hand Dart a full snapshot immediately — the bool below only says
+        // whether the peripheral manager happened to be up (finding 1.3).
+        self.notifyBleState()
         result(self.peripheralMgr?.state == .poweredOn)
       case "updateBatch":
         self.storeSlots(call.arguments)
@@ -169,6 +193,12 @@ final class BackgroundBeacon: NSObject {
         let count = (call.arguments as? Int) ?? 0
         self.ackBuffer(count)
         result(nil)
+      case "bleState":
+        // Pull path for finding 1.3: an onBleState push issued while the app
+        // was backgrounded is accepted and silently dropped by a suspended
+        // engine, so Dart re-reads the authoritative state on foregrounding —
+        // same reasoning as the sighting buffer's pull-and-ack.
+        result(self.bleStateSnapshot())
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -200,6 +230,13 @@ final class BackgroundBeacon: NSObject {
     for (_, p) in inflight { centralMgr?.cancelPeripheralConnection(p) }
     inflight.removeAll()
     inflightRSSI.removeAll()
+    // Nothing is advertising or scanning after this; say so rather than
+    // leaving the last verdict standing (finding 1.3). The legacy
+    // onAdvertisingState bool is deliberately NOT re-fired here — its firing
+    // pattern stays byte-for-byte what the Dart consumer already handles.
+    advertisingActive = false
+    advertisingError = nil
+    notifyBleState()
   }
 
   // MARK: - Token batch
@@ -324,20 +361,75 @@ final class BackgroundBeacon: NSObject {
     restartScanNow()
   }
 
+  /// An in-range Android's token, straight off the advert — finding B1
+  /// (prior-art review 2026-07-26), the best impact-to-cost fix in that review.
+  ///
+  /// Until 2026-07-26 this module built its candidate list from
+  /// `CBAdvertisementDataServiceUUIDsKey` + the overflow key ONLY. So an
+  /// in-range Android was discovered by its CAFE marker, offered no 16-byte
+  /// token service UUID, and fell through to `central.connect`. That connect
+  /// can NEVER succeed: the Android advert is `connectable: false`
+  /// (`beacon_service.dart:727`) and there is no Android GATT server at all
+  /// (flutter_ble_peripheral 2.1.1 ships its server code commented out). The
+  /// iPhone→Android direction was therefore not degraded but dead, and every
+  /// attempt also burned that peer's 5-minute `connectRetryFloor` — forever.
+  ///
+  /// No GATT server is needed for this direction: the token is 16 bytes and is
+  /// already on the air. Prior art that a *filtered* iOS scan still delivers
+  /// Android manufacturer data — `opentrace-ios/.../CentralController.swift:100`
+  /// scans `withServices:` and reads `CBAdvertisementDataManufacturerDataKey`
+  /// from Android peers at `:165` in the same callback; DP-3T-prestandard makes
+  /// the ordering explicit at `BluetoothDiscoveryService.swift:165`,
+  /// *"// Only connect if we didn't got a EphId in the Advertisement"*.
+  /// OpenTrace still had to connect because its tempID is a base64 JSON blob
+  /// too big for an advert; in-range's 16 bytes are not.
+  ///
+  /// Layout mirrors `beacon_service.dart:703-705` exactly:
+  /// `[company id, little-endian][16-byte correlation id][flag byte]`, flag
+  /// bit0 = medium-power slot. The flag byte is OPTIONAL (16-byte adverts
+  /// predate it, and `beacon_service.dart:968` still accepts both lengths) and
+  /// is never part of the token — folding it in would corrupt every id. Any
+  /// other length is rejected outright rather than read at a guessed offset.
+  private static func androidAdvertToken(
+    _ advertisementData: [String: Any]
+  ) -> (hex: String, mediumPower: Bool)? {
+    guard let raw = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data,
+          raw.count >= 18
+    else { return nil }
+    let bytes = [UInt8](raw)
+    // CoreBluetooth returns the whole AD field, company id included, and the
+    // company id is little-endian on air.
+    let company = UInt16(bytes[0]) | (UInt16(bytes[1]) << 8)
+    guard company == inRangeCompanyID else { return nil }
+    let body = bytes.count - 2
+    guard body == 16 || body == 17 else { return nil }
+    let hex = bytes[2..<18].map { String(format: "%02x", $0) }.joined()
+    let mediumPower = body == 17 && (bytes[18] & 0x01) != 0
+    return (hex, mediumPower)
+  }
+
   // MARK: - Sighting delivery
 
-  private func emitSighting(tokenHex: String, rssi: Int) {
+  /// `mediumPower` carries B1's Android flag bit0 (`beacon_service.dart:705`).
+  /// It matters: "heard on medium" IS the physical feet_30 gate, so an Android
+  /// sighting mislabelled as high-power would silently widen that tier. iOS
+  /// peers have no power flag — high is the only slot they advertise in — so
+  /// the default preserves every pre-existing call site exactly.
+  private func emitSighting(tokenHex: String, rssi: Int, mediumPower: Bool = false) {
     let ts = Int(Date().timeIntervalSince1970 * 1000)
+    let sighting: [String: Any] = [
+      "token": tokenHex, "rssi": rssi, "ts": ts,
+      "pwr": mediumPower ? "medium" : "high",
+    ]
     // NEVER hand a background sighting to the Flutter engine: a suspended
     // engine's channel accepts the call and silently drops it (dark-bench
     // 2026-07-23 — native discoveries happened, Dart never saw them).
     // Background → persist natively; Dart pulls and acks when it is ready.
     if UIApplication.shared.applicationState == .active, let ch = channel {
-      ch.invokeMethod(
-        "onSighting", arguments: ["token": tokenHex, "rssi": rssi, "ts": ts])
+      ch.invokeMethod("onSighting", arguments: sighting)
     } else {
       var buf = (defaults.array(forKey: Self.keyBuffer) as? [[String: Any]]) ?? []
-      buf.append(["token": tokenHex, "rssi": rssi, "ts": ts])
+      buf.append(sighting)
       if buf.count > Self.bufferCap { buf.removeFirst(buf.count - Self.bufferCap) }
       defaults.set(buf, forKey: Self.keyBuffer)
     }
@@ -380,8 +472,74 @@ final class BackgroundBeacon: NSObject {
     reconfigureAdvertising()
   }
 
-  private func notifyAdvertisingState(_ ok: Bool) {
+  // MARK: - BLE state surface (finding 1.3, prior-art review 2026-07-26)
+
+  /// Until 2026-07-26 the ENTIRE outbound state surface was this one bool. It
+  /// was raised `false` both when the peripheral manager wasn't `poweredOn`
+  /// and when `didStartAdvertising` errored, so Dart could not tell BT-off
+  /// from permission-denied from a transient advertising failure — and it
+  /// covered the peripheral role only, so the app could be simultaneously
+  /// non-advertising AND non-scanning while the UI said "discoverable", which
+  /// is precisely what the project's don't-lie-about-discoverability rule
+  /// forbids. Kept firing verbatim (additive migration, never a rename) so the
+  /// Dart consumer keeps working while `onBleState` rolls out.
+  private func notifyAdvertisingState(_ ok: Bool, error: Error? = nil) {
+    advertisingActive = ok
+    // nil error on a `false` verdict means the reason is the manager state,
+    // not a start failure — the peripheral field carries it.
+    advertisingError = error?.localizedDescription
     channel?.invokeMethod("onAdvertisingState", arguments: ok)
+    notifyBleState()
+  }
+
+  private static func stateName(_ s: CBManagerState) -> String {
+    switch s {
+    case .poweredOn: return "poweredOn"
+    case .poweredOff: return "poweredOff"
+    case .unauthorized: return "unauthorized"
+    case .unsupported: return "unsupported"
+    case .resetting: return "resetting"
+    default: return "unknown"  // .unknown, plus anything a later iOS adds
+    }
+  }
+
+  /// The two-manager snapshot. Both CoreBluetooth roles are reported
+  /// SEPARATELY on purpose: Dart has to know *which* side is dead, because
+  /// "can't be seen" and "can't see" have different user-facing copy and
+  /// different remedies. Herald's worst-state-wins collapse into one verdict
+  /// is done Dart-side, over these two values.
+  private func bleStateSnapshot() -> [String: Any] {
+    let periphState: CBManagerState = peripheralMgr?.state ?? .unknown
+    let centralState: CBManagerState = centralMgr?.state ?? .unknown
+    // Advertising requires BOTH a live manager and a successful
+    // didStartAdvertising — the distinction the old single bool destroyed.
+    let isAdvertising: Bool = advertisingActive && periphState == .poweredOn
+    let isScanning: Bool = centralMgr?.isScanning ?? false
+    var out: [String: Any] = [
+      "peripheral": Self.stateName(periphState),
+      "central": Self.stateName(centralState),
+      "advertising": isAdvertising,
+      "scanning": isScanning,
+      "enabled": enabled,
+    ]
+    if let err = advertisingError { out["advertisingError"] = err }
+    return out
+  }
+
+  private func notifyBleState() {
+    channel?.invokeMethod("onBleState", arguments: bleStateSnapshot())
+  }
+
+  /// W5: append manager-state transitions to the existing bb_wake_log.txt so
+  /// the USB-pull workflow shows whether the SCAN side ever died silently
+  /// while advertising looked healthy — 2026-07-24's overnight soak produced
+  /// zero samples and zero evidence of WHY. Change-only: manager states are
+  /// rare events, and a re-logged steady state would bury the transitions.
+  private func logManagerState(_ role: String, _ state: CBManagerState) {
+    let name = Self.stateName(state)
+    guard lastLoggedManagerState[role] != name else { return }
+    lastLoggedManagerState[role] = name
+    logWake("\(role)-state:\(name)")
   }
 
   /// Soak-test observability (2026-07-24: overnight soak produced zero
@@ -408,6 +566,7 @@ final class BackgroundBeacon: NSObject {
 
 extension BackgroundBeacon: CBPeripheralManagerDelegate {
   func peripheralManagerDidUpdateState(_ peripheral: CBPeripheralManager) {
+    logManagerState("periph", peripheral.state)
     if peripheral.state == .poweredOn {
       if didRestorePeripheral {
         // Restoration relaunch: willRestoreState already recovered the
@@ -419,6 +578,10 @@ extension BackgroundBeacon: CBPeripheralManagerDelegate {
         serviceAdded = false  // genuine fresh start / power cycle
       }
       reconfigureAdvertising()
+      // reconfigureAdvertising is a no-op unless enabled, and when it does run
+      // the definitive verdict arrives via didStartAdvertising — but Dart still
+      // needs to learn the manager came up at all (finding 1.3).
+      notifyBleState()
     } else {
       notifyAdvertisingState(false)
     }
@@ -444,7 +607,9 @@ extension BackgroundBeacon: CBPeripheralManagerDelegate {
   func peripheralManagerDidStartAdvertising(
     _ peripheral: CBPeripheralManager, error: Error?
   ) {
-    notifyAdvertisingState(error == nil)
+    // The error text is the only thing that separates "advert rejected" from
+    // "radio off" on the Dart side — carry it (finding 1.3).
+    notifyAdvertisingState(error == nil, error: error)
   }
 
   func peripheralManager(
@@ -492,7 +657,15 @@ extension BackgroundBeacon: CBPeripheralManagerDelegate {
 
 extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
   func centralManagerDidUpdateState(_ central: CBCentralManager) {
+    // Finding 1.3 + W5: this callback used to be handled entirely inside Swift
+    // and report NOTHING to Dart, so a dead scanner was invisible — the app
+    // could be non-advertising and non-scanning while the UI said discoverable.
+    // Log first (the wake-log line survives a suspended Flutter engine; the
+    // channel push does not), then push, with isScanning read after
+    // ensureScanning so the snapshot is not one transition stale.
+    logManagerState("central", central.state)
     if central.state == .poweredOn { ensureScanning() }
+    notifyBleState()
   }
 
   func centralManager(_ central: CBCentralManager, willRestoreState dict: [String: Any]) {
@@ -560,8 +733,27 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
       return
     }
 
-    // No token on the air (locked iOS peer, or W1 Android where mfg data is
-    // out of reach of the filtered path): cached token, else connect + read.
+    // B1: an in-range ANDROID puts the token in manufacturer data, not in a
+    // service UUID — so it never matched the branch above and always fell into
+    // the connect path below, which cannot succeed against a non-connectable
+    // peer with no GATT server. Read the advert instead, and return: these
+    // peers must never be connected to, which also stops each one burning a
+    // guaranteed-failing connect every 5 minutes.
+    if let android = Self.androidAdvertToken(advertisementData) {
+      // Same active-app rule as the service-UUID branch: on iOS the Dart scan
+      // is UNFILTERED (`beacon_service.dart:914`) and already parses in-range
+      // manufacturer data at `:965-971`, so emitting here too would double the
+      // sample rate. The self-sight guard, estimator and buffering all stay on
+      // the one shared path through emitSighting.
+      if UIApplication.shared.applicationState != .active {
+        emitSighting(
+          tokenHex: android.hex, rssi: rssi, mediumPower: android.mediumPower)
+      }
+      scheduleScanRestart()
+      return
+    }
+
+    // No token on the air (locked iOS peer): cached token, else connect + read.
     let id = peripheral.identifier
     if let cached = tokenCache[id], Date().timeIntervalSince(cached.at) < Self.tokenCacheTTL {
       emitSighting(tokenHex: cached.hex, rssi: rssi)
