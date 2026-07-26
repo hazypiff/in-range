@@ -508,3 +508,98 @@ accepting a cloud sequence gap.
 - [ ] no migration, cloud upload, residency, or new phone build introduced
 
 If any box is false, fix it at the desk rather than at the trailhead.
+
+---
+
+# ⚠️ ADDENDUM 2026-07-26 — the build changed. Read before using the gate above.
+
+**The last box of the departure gate — "no migration, cloud upload, residency, or new
+phone build introduced" — is now FALSE by design.** Four commits landed on
+`feat/ble-prior-art-tier1` after this checklist was written. The gate's build
+references (`07-24b` → `1a41d59`) are stale. **Re-validate the build; do not assume
+it is the one this checklist was written against.**
+
+No migration, cloud-upload or residency change was introduced. The change is
+BLE-layer only, plus one dependency pin.
+
+## What changed, and why it matters to the walk
+
+| Change | Walk impact |
+| --- | --- |
+| **iPhone→Android detection restored** (B1) | This direction was **broken outright** before: the iPhone saw the Android's CAFE marker, found no token, and fell through to a connect that could never succeed. If prior walks showed a dead iPhone→Android direction, **that is expected and now fixed** — do not re-diagnose it |
+| **Scan restart 25 min → 8 min** | Shorter scan sessions. Segment boundaries move |
+| **`androidLegacy: true`** | Android now scans legacy-1M only, not both PHYs |
+| **Scan retry backoff + 4-per-30 s token bucket** | A scan-start storm can no longer silently wedge the radio |
+| **adapterState listener** | A Bluetooth toggle now recovers in seconds instead of up to 25 min |
+| **`discoverable` is now composed** | It means advertise-up **AND** receive-path-alive. The badge can now go false with no user action — that is correct, not a bug |
+| **flutter_blue_plus pinned 2.3.10 → 1.36.8** | Licensing. Behaviourally equivalent for our six entry points, but it **is** a different plugin build — worth one smoke check that scanning works before departure |
+
+## Instruments — set these or the walk produces less than it should
+
+All of W1–W9 are gated behind `AppConfig.calibScanMode`. **If calib mode is off, you
+get no instrument data at all.** Confirm it is on for both devices.
+
+**W8 is the one not to skip:** it logs scan-start outcomes and the gap since the last
+scan result *of any kind*. Before this, a dead scanner and an empty room were
+indistinguishable, so a silent scan death mid-walk read as "nobody around" and
+contaminated the whole segment. **Read W8 first when reviewing the data** — if it
+shows a scan death, every other number from that segment is suspect.
+
+**W10:** record the exact OS build of every device, per segment. Android's scan
+demotion is 30 min on ≤13 but **10 min on 14+**, where a filtered client is
+downgraded *stickily* for the scanner's life. Two handsets on one walk can therefore
+run at materially different duty cycles, and their RSSI and detection-rate numbers
+are **not comparable**. `platformInfo` on the `io.inrange.app/advert` channel returns
+this without touching the radio.
+
+## Run one leg on the OLD scan arm
+
+Two of the shipped changes were originally meant to be measured before shipping, and
+shipping them removed the baseline. To recover it, put **one handset on the old arm**:
+
+```
+INRANGE_SCAN_LEGACY_ONLY=false     # old: scan both PHYs
+INRANGE_SCAN_RESTART_MINUTES=25    # old cadence
+```
+
+Defaults are `true` / `8`. The resolved arm is logged unconditionally at every scan
+start (`BLE scan arm: …`), so any log can be attributed after the fact. The dual-PHY
+effect is receiver-side, so two phones scanning the same room is a valid comparison.
+Without an old-arm leg, W9's gap histogram can only show gaps are *absent* — equally
+consistent with the fix working and with the effect never existing on your hardware.
+
+## ⛔ Do not enable these during the walk
+
+- **The native Android scanner** (`AdvertScanner.startScan`). It is a **second**
+  `BluetoothLeScanner` registration; it charges the AOSP 5-per-30 s quota, and AOSP
+  delivers *no callback at all* when that trips. `platformInfo` and `classify` are
+  radio-free and safe. There is a banner in the file.
+- **The Apple overflow-bit scan filter.** `apple_overflow_bit.dart` is tested and
+  ready but deliberately unwired — it needs a bench measurement first (see
+  [`POST_WALK_UPGRADE_QUEUE.md`](POST_WALK_UPGRADE_QUEUE.md) item 1).
+
+## Pulling the data
+
+- Android calib logs: as per the existing capture flow in this document.
+- **iOS: `bb_wake_log.txt`** via USB pull from the app's Documents directory. It now
+  also carries central- and peripheral-manager state transitions (`central-state:…`,
+  `periph-state:…`), change-only. This is the only record of whether iOS granted
+  background windows at all, separately from whether anything was seen during them.
+
+## After the walk
+
+[`POST_WALK_UPGRADE_QUEUE.md`](POST_WALK_UPGRADE_QUEUE.md) is the ordered queue, with
+the specific instrument that gates each item. Three entries can be **cancelled** by
+the data rather than built — check those gates before writing code.
+
+## CI note
+
+The GitHub Actions **account owning the private repo (`inrangeai`) is under a
+spending-limit block** — jobs there start and die in ~3 s with a billing annotation,
+which looks like a code failure and is not. Public-repo minutes are free and work:
+
+```bash
+gh workflow run ios-build.yml --repo hazypiff/in-range --ref feat/ble-prior-art-tier1
+```
+
+That is how the current iOS build was verified green (run `30224433032`).

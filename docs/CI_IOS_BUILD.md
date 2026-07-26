@@ -112,3 +112,30 @@ two locked iPhones. CI closes the *compile* gap only.
 - **Codemagic** — 500 free macOS minutes/month, Flutter-native, no signing
   needed for `--no-codesign`.
 - **Xcode Cloud** — requires the paid Apple Developer account; not an option yet.
+
+## 2026-07-26 — billing block recurred, on the OTHER account
+
+The 2026-07-25 green run was on `hazypiff`. The private repo is owned by **`inrangeai`,
+a separate account**, and it is now blocked: runs start and die in ~3 s with *"recent
+account payments have failed or your spending limit needs to be increased"*. Jobs
+`startedAt 23:03:13` / `completedAt 23:03:16` — the same never-really-ran signature
+described above, and it reads as a code failure when it is not.
+
+**Public repos get free Actions minutes, so this works today:**
+
+```bash
+gh workflow run ios-build.yml --repo hazypiff/in-range --ref <branch>
+gh run list --repo hazypiff/in-range --branch <branch> --limit 4
+```
+
+Run `30224433032` compiled the Tier-1 Swift (B1 manufacturer-data parse + the widened
+`CBManagerState` channel) green, no warnings in `BackgroundBeacon.swift`.
+
+Note `ios-build.yml` triggers only on `workflow_dispatch` and pushes to `main`, so a
+feature-branch push does **not** build iOS automatically — dispatch it. `ci.yml` is on
+`['**']` and does run on every push.
+
+macOS runners bill at **10x** the per-minute rate, which is why a private-repo iOS
+build trips a low spending limit before anything else does.
+
+To fix properly: raise the limit on **`inrangeai`**, not `hazypiff`.
