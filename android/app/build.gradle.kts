@@ -50,6 +50,21 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+
+    // JVM unit tests, src/test/kotlin. Plain JUnit and nothing else on purpose:
+    // AdvertParser.kt is a pure Kotlin `object` over ByteArray with no Android
+    // imports, so its AD-walk and offset arithmetic — the load-bearing part, the
+    // part a wrong answer makes us silently blind to backgrounded iPhones —
+    // needs no Robolectric, no android.jar shadow, no emulator and no attached
+    // handset. That is the whole reason the parser was written that way.
+    // Anything that needs a Context or a BluetoothLeScanner belongs in
+    // androidTest, not here; do not reach for Robolectric to widen this.
+    //
+    // Run: ./gradlew :app:testDebugUnitTest
+    // NOT in CI yet — .github/workflows/ci.yml runs `flutter analyze` and
+    // `flutter test` only and never invokes Gradle, so this task has to be run
+    // by hand until an Android job exists. Adding one is the cheap follow-up.
+    testImplementation("junit:junit:4.13.2")
 }
 
 // Force every KotlinCompile task (app + transitive plugins) onto JVM 17.

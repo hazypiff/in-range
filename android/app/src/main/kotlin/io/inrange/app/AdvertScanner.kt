@@ -113,10 +113,28 @@ class AdvertScanner(private val context: Context) : EventChannel.StreamHandler {
 
     // ── MethodChannel: io.inrange.app/advert ───────────────────────────
 
+    /// ⚠️ RADIO STATE, at a glance:
+    ///   platformInfo  no radio, no adapter lookup, no permission, no state.
+    ///                 Pure Build.* reads. Safe on a device where this
+    ///                 scanner must stay off, which is the whole point of
+    ///                 instrument W10.
+    ///   classify      no radio. Pure AdvertParser over bytes Dart already has.
+    ///   startScan     ⛔ SECOND BluetoothLeScanner REGISTRATION. Deliberately
+    ///   stopScan         unreached: as of 2026-07-26 no Dart caller exists,
+    ///   isScanning       and the 2026-07-27 calibration freeze covers it.
+    ///                    Registration charges the AOSP quota (5 per 30 s) and
+    ///                    AOSP refuses SILENTLY when it trips — no callback, no
+    ///                    error, finding D6 — so enabling this perturbs exactly
+    ///                    what the walk measures. Do NOT switch it on to
+    ///                    exercise the parser: classify() and
+    ///                    app/src/test/kotlin/.../AdvertParserTest.kt exist for
+    ///                    that and touch nothing.
     fun handle(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
+            // ── radio-free ──
             "platformInfo" -> result.success(platformInfo())
             "classify" -> classify(call, result)
+            // ── radio: inert, no caller, see the banner above ──
             "startScan" -> startScan(call, result)
             "stopScan" -> stopScan(result)
             "isScanning" -> result.success(callback != null)
@@ -125,7 +143,14 @@ class AdvertScanner(private val context: Context) : EventChannel.StreamHandler {
     }
 
     /// Everything Dart needs to choose D3's ScanFilter offsets, plus the device
-    /// identity instrument W10 asks every log segment to be tagged with.
+    /// identity and scan-demotion class that instrument W10 asks every log
+    /// segment to be tagged with.
+    ///
+    /// **Reads nothing but `Build`.** No BluetoothManager, no adapter, no
+    /// permission check, no scanner registration, no I/O — so it answers on a
+    /// handset where this scanner is (and must stay) off, and on one with
+    /// Bluetooth disabled entirely. That is the requirement: a calibration
+    /// segment has to be taggable before and independently of any radio work.
     ///
     /// `appleBlobSemantics` is how AOSP will collapse duplicate Apple ADs on
     /// *this* build: "last_wins" up to 14, "merge_flag_gated" on 15 (the
@@ -133,8 +158,40 @@ class AdvertScanner(private val context: Context) : EventChannel.StreamHandler {
     /// ScanRecord.java:646-660, so it may be either), "merge" on 16+ where it
     /// is ungated (:644-656). On "merge_flag_gated" the safe move is to
     /// register a filter at both offsets — they are OR'd.
+    ///
+    /// ── Why the demotion fields are derived here and not in Dart (W10) ────
+    /// Two handsets on the same walk do not scan at the same duty cycle, and
+    /// nothing in an RSSI series says which one you are looking at. AOSP stops
+    /// crediting a long-running scan and demotes it after a timeout that
+    /// changed with Android 14, and on 14+ a client that registers *any*
+    /// ScanFilter is additionally forced to SCAN_MODE_LOW_POWER stickily — for
+    /// the life of that scanner, not until the screen comes back. Post-demotion
+    /// that is a 0.512 s window in a 5.12 s interval = 10% duty, against
+    /// BALANCED's 1.024 s / 4.096 s = 25%
+    /// (docs/research/ble-radio-optimization.md:142, values read out of AOSP).
+    /// So an Android 10 S9 and an Android 14+ S22 on the same walk sample the
+    /// air at 25% and 10% respectively, and cross-device RSSI or detection-rate
+    /// comparisons that do not carry these two fields are not comparable — the
+    /// calibration labels then inherit the error with no trace of it.
+    ///
+    /// These are AOSP internals, so Dart gets the answer rather than the
+    /// constant to re-derive:
+    ///   `scanDemotionTimeoutMs`         1_800_000 through Android 13,
+    ///                                   600_000 from Android 14 (sdkInt >= 34).
+    ///                                   The 30-minute figure is the one
+    ///                                   ble-radio-optimization.md:19-21
+    ///                                   records from the paper that measured
+    ///                                   it; 14 cut it to 10, which is why
+    ///                                   e5d40e4 moved the scan restart to 8 min.
+    ///   `filteredScanStickyLowPower`    true from Android 14: a filtered
+    ///                                   client cannot get back above
+    ///                                   LOW_POWER without a fresh scanner.
+    /// Both are functions of `sdkInt` alone, so Dart can cross-check them; they
+    /// are here so that only one place in the codebase knows the numbers.
     private fun platformInfo(): Map<String, Any?> {
         val sdk = Build.VERSION.SDK_INT
+        // Android 14 = UPSIDE_DOWN_CAKE = 34. Named rather than inlined twice.
+        val demotedAtTen = sdk >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
         return mapOf(
             "sdkInt" to sdk,
             "release" to (Build.VERSION.RELEASE ?: ""),
@@ -146,6 +203,8 @@ class AdvertScanner(private val context: Context) : EventChannel.StreamHandler {
                 sdk == 35 -> "merge_flag_gated"
                 else -> "last_wins"
             },
+            "scanDemotionTimeoutMs" to if (demotedAtTen) 10 * 60 * 1000 else 30 * 60 * 1000,
+            "filteredScanStickyLowPower" to demotedAtTen,
         )
     }
 
