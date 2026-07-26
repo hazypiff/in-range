@@ -1,5 +1,20 @@
 # Feet Test Plan — 2026-07-22 (iPhone 14 ↔ iPhone 15 Plus)
 
+> **Status (annotated 2026-07-26) — partly executed. Not current direction.**
+>
+> - **Session A ran** on 2026-07-23 (six stations 25/65/90/130/175/200 ft) and
+>   its outcome is final: owner-locked iPhone-pair thresholds
+>   **Close By ≥ −82 · Near By −83…−93 · In Range < −93**, taken from the
+>   POCKET curve. Those live in `PROXIMITY_TIERS.md`; the results narrative is
+>   the 2026-07-23 entry in `DEVICE_TESTING_JOURNAL.md`. The baseline quoted
+>   below (−84/−96, from 2026-07-17) has been **superseded**.
+> - **Sessions B (sidewalk clutter) and C (park / trees / one NLOS point) were
+>   never run.** They remain genuinely open experiments — that is why this
+>   document is kept rather than deleted. Session D's both-pocketed case was
+>   partly covered by the 07-23 sweep's split dwell.
+> - For the *current* walk protocol see `WALK_PREFLIGHT_2026-07-25.md`; for the
+>   next gating measurement see `IPHONE_DARK_PAIR_TEST_2026-07-26.md`.
+
 Goal: pick the FINAL tier boundaries — Close / middle tier / In Range — and
 prove they hold up outside the open-field ideal. The 2026-07-17 sweep gave the
 baseline curve (open field, line of sight, phone in hand); tomorrow answers

@@ -2,74 +2,73 @@
 
 Real Encounters. Real Connections.
 
-Location-based dating app using Bluetooth (feet) + GPS (miles) to surface only people you've physically crossed paths with.
+Location-based dating app using Bluetooth (feet) + GPS (miles) to surface only
+people you've physically crossed paths with.
 
-## 🔐 Proximity-security work → start here
+## Start here
 
-Active anti-forgery hardening (the "#6" roadmap). If you're picking this up, read
-**[`docs/SECURITY_HANDOFF.md`](docs/SECURITY_HANDOFF.md)** — current state, the
-executable remaining tasks (enforcement cutover, App Attest/Play Integrity, UWB),
-the shipped relay-abuse operations policy, and ground rules. Full narrative in
-[`docs/ADVERSARIAL_REVIEW_2026-07-15.md`](docs/ADVERSARIAL_REVIEW_2026-07-15.md).
-Shipped through migration `0033` (prod). Gate for any change:
-`bash supabase/tests/run_security_tests.sh`.
+**[`docs/README.md`](docs/README.md) is the documentation index** — one line per
+doc, grouped by architecture / walks + calibration / compliance / setup + ops /
+research. Read that before opening anything else in `docs/`.
 
-## Current Status (2026-07-07)
-- Phase 0 approved (Flutter + Supabase foundation)
-- Supabase schema + PostGIS RPCs delivered (`supabase/migrations/0001_init.sql`)
-- Flutter project skeleton prepared (no SDK required for file prep)
-- See full research-backed plan: `../in-range-enhanced-plan-2026.md`
+Fast paths for the three most common jobs:
 
-## Getting Started (once Flutter SDK is available)
+| I'm here to… | Read |
+|---|---|
+| Run tomorrow's calibration walk | [`docs/WALK_PREFLIGHT_2026-07-25.md`](docs/WALK_PREFLIGHT_2026-07-25.md) |
+| Continue the iPhone beacon work | [`docs/IPHONE_BEACON_COMPLETION_HANDOFF.md`](docs/IPHONE_BEACON_COMPLETION_HANDOFF.md) |
+| Continue proximity-security ("#6") | [`docs/SECURITY_HANDOFF.md`](docs/SECURITY_HANDOFF.md) |
+
+Settled platform/product decisions that should not be re-debated live in
+[`docs/ARCHITECTURE_CONTRACTS.md`](docs/ARCHITECTURE_CONTRACTS.md) Part 0.
+
+## Getting started
 
 ```bash
-cd in-range
 flutter pub get
-
-# For codegen (Riverpod + Freezed)
-flutter pub run build_runner build --delete-conflicting-outputs
+flutter pub run build_runner build --delete-conflicting-outputs   # Riverpod + Freezed
+flutter test
 ```
 
-## Project Structure (matches enhanced plan)
+- Mac / iOS toolchain and signing: [`docs/MAC_SETUP.md`](docs/MAC_SETUP.md)
+- Backend setup: [`docs/SUPABASE_SETUP.md`](docs/SUPABASE_SETUP.md)
+- Migration ledger is `supabase/migrations/` — treat the directory as the
+  authority for what has shipped, not a number quoted in prose.
+
+Gate for any proximity-security change:
+`bash supabase/tests/run_security_tests.sh`
+
+## Project structure
 
 ```
 in-range/
 ├── supabase/
-│   └── migrations/
-│       └── 0001_init.sql          # Profiles, token_claims, sightings, encounters, matches, messages + RPCs
+│   ├── migrations/     # schema + PostGIS RPCs (0001_init.sql is the baseline)
+│   ├── functions/      # Edge Functions
+│   └── tests/          # security harness (the gate)
 ├── lib/
-│   ├── core/
-│   │   ├── di/
-│   │   ├── network/               # Supabase client wrapper
-│   │   └── utils/
+│   ├── core/           # config, db, di, network, notifications, permissions
 │   ├── features/
-│   │   ├── auth/
-│   │   ├── profile/
-│   │   ├── beacon/                # Toggle, range, scanning service (foreground on Android)
-│   │   ├── encounters/            # Swipe feed (photo + neighborhood only)
-│   │   ├── matches/
-│   │   ├── chat/
-│   │   └── settings/
+│   │   ├── auth/  profile/
+│   │   ├── beacon/     # advertise + scan, range estimation, tier classification
+│   │   ├── encounters/ # swipe feed (photo + neighborhood only)
+│   │   ├── matches/  chat/  settings/
 │   └── shared/
-├── pubspec.yaml
-└── README.md
+├── ios/  android/  web/
+├── learn/              # self-learning calibration loop (GNB trainer, registry)
+├── scripts/            # build/install, walk capture + extraction
+├── docs/               # see docs/README.md
+└── test/
 ```
 
-## Key Phase 0 Deliverables Delivered
-1. ✅ Supabase schema + PostGIS RPCs (`claim_token`, `record_sighting`, `correlate_encounter`, `get_my_encounters`)
-2. (Next) Ephemeral token format spec
-3. ✅ Flutter scaffold (pubspec with flutter_blue_plus, geolocator, supabase_flutter, riverpod, freezed + feature folders)
+## Design notes that still hold
 
-## Next (unblocked)
-- Install Flutter SDK if needed (`snap install flutter` or tarball)
-- `flutter pub get` + verify
-- Implement ephemeral token spec + client claim logic
-- Wire basic beacon service that calls the RPCs (test on Android device)
+- Background BLE/GPS is **best-effort** (foreground service + notification on
+  Android; on iOS see `docs/IOS_BACKGROUND_BLE_WIRING.md`).
+- Rotating ephemeral tokens — `docs/ephemeral-token-spec.md`.
+- Correlation happens **server-side** via PostGIS for accuracy + privacy.
+- RLS is enabled — test with authenticated users.
+- The UI shows a **tier name, never feet** (`docs/PROXIMITY_TIERS.md`).
 
-## Important Notes from Research
-- Background BLE/GPS is best-effort (foreground service + notification on Android)
-- Use rotating ephemeral tokens (see token spec when created)
-- All correlation happens server-side via PostGIS for accuracy + privacy
-- RLS policies are enabled — test with authenticated users
-
-Run `supabase db reset` (local) or apply migration to start testing the backend foundation.
+Historical: an early research-backed plan lives **outside this repo** at
+`../in-range-enhanced-plan-2026.md`.

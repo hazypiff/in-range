@@ -17,7 +17,27 @@ dependencies:
   flutter_riverpod: ^2.6.1
 
   # BLE + Location (per 2026 research - flutter_blue_plus preferred)
-  flutter_blue_plus: ^2.3.10
+  #
+  # PINNED, DO NOT BUMP. 2.x relicensed: LICENSE.md Section 1.3 requires a paid
+  # commercial licence for "any for-profit organization ... regardless of how the
+  # Software was obtained", Section 3 extends that to "commercial use by
+  # individuals", and 3.3 counts development and testing as commercial use. The
+  # obligation is on ALL use, not on connect() — the `License` enum on connect()
+  # is only where you declare a tier. So writing our own GATT reader
+  # (GattTokenReader.kt) and our own iOS carrier never bought an exemption.
+  #
+  # NOTICE.md: the old BSD-3 terms apply to "all releases ... up to and including
+  # version 1.36.8 ... which are irrevocable". Verified against the 1.36.8
+  # artifact: LICENSE is plain BSD-3 (Copyright 2017-2024 DeMarco, Popovic,
+  # Weinberger, Clark), zero occurrences of "commercial" or "for-profit", and all
+  # nine APIs we use are present (AndroidScanMode, adapterName, getPhySupport,
+  # MsdFilter, withMsd, withServices, continuousUpdates, androidLegacy,
+  # adapterStateNow). It also pins flutter_blue_plus_android 7.0.4, which unlike
+  # 9.x ships no license_ping.gradle — so every `flutter build` stops POSTing our
+  # package name, app name and version to a third party's Apps Script.
+  #
+  # Bumping to 2.x is a licensing decision, not a dependency update.
+  flutter_blue_plus: 1.36.8
   flutter_ble_peripheral: ^2.1.1   # For advertising ephemeral tokens
   geolocator: ^13.0.2
   geocoding: ^4.0.0

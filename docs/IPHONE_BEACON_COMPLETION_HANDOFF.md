@@ -506,7 +506,7 @@ What it does **not** measure:
 | `android/app/src/main/kotlin/io/inrange/app/MainActivity.kt` | Host GATT server channel for W5 |
 | `docs/IN_RANGE_IPHONE_COMPLETION_PLAN.md` | Strategic completion plan |
 | `docs/MAC_SETUP.md` | Mac toolchain + signing steps |
-| `docs/IPHONE_BEACON_PROGRESS_HANDOFF.md` | Prior progress summary |
+| `docs/IPHONE_DARK_PAIR_TEST_2026-07-26.md` | The gating measurement protocol (§16.4 rule 3) |
 | `docs/IPHONE_BEACON_COMPLETION_HANDOFF.md` | **This file** — current state + Mac readiness |
 
 ---
@@ -572,3 +572,27 @@ git push origin main
   Supabase migration    → 0057_subtle_wake_support.sql created
   Edge Function         → proximity-wake/index.ts created
 ```
+
+---
+
+## Appendix A — carried forward from the retired progress handoff
+
+*(Migrated 2026-07-26. `docs/IPHONE_BEACON_PROGRESS_HANDOFF.md` named this file
+as its successor and has been retired. These five facts were the only ones it
+held that are not stated above. Deliberately an unnumbered appendix: the round
+sections 15/16 must keep their numbering, because
+`test/config_policy_test.dart` cites §16.4 by number.)*
+
+- **`WifiAssistPlugin` reports the RAW BSSID/SSID.** The Dart class returns them
+  raw. **Do not upload or log them without hashing.** (§3.3 above documents only
+  the null-return cases.) The production app salts-and-hashes BSSIDs before
+  upload — nothing downstream may be the place that leaks what the app protects.
+- **The Swift WiFi plugin does not wake the app.** It only works when Dart
+  already has runtime. It is not a background discovery mechanism.
+- Every foreign advert is routed through the envelope with
+  `localState: 'locked'` on iOS and **`'scan'` otherwise**.
+- **Live band decisions (`classify`, `_isNear`, `evidenceFor`) still use only
+  `ProximitySource.advertRssi`.** `addSample()` remains a backwards-compatible
+  wrapper for advert RSSI.
+- `test/location_coordinator_test.dart` exists (absent from the commit table and
+  file map above).

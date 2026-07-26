@@ -75,6 +75,43 @@ not rediscover them:
   - [ ] Decide on paid Apple Developer account before any multi-day walk
         (7-day expiry kills longer studies)
 
+### 2026-07-16 — iOS beacon start-failure: root-caused and fixed
+- Platform(s): iOS · Devices: iPhone 14 (iOS 26.5.2), Mac Tahoe 26.5.2 /
+  Flutter 3.44.6 / Xcode 26.5
+- *(Migrated 2026-07-26 from the retired `IOS_BEACON_AUDIT_2026-07-16.md`.
+  The root cause itself is also recorded in `IOS_CARRIER_DECISION_2026-07-16.md`;
+  what follows is the evidence and the tooling lessons that existed only in the
+  audit doc.)*
+- On-screen diagnostic that cracked it:
+  `loc=granted locAlways=permanentlyDenied btScan=denied btAdv=denied btConn=denied bt=granted`
+- **Root cause:** `PermissionService.requestForegroundBle()` required
+  `bluetoothScan` + `bluetoothAdvertise` to be *granted*. Those are
+  **Android 12+ only** permissions; on iOS `permission_handler` returns them
+  permanently `denied`, so the gate could never pass on any iPhone — the beacon
+  was unreachable on iOS regardless of build or settings. The real iOS
+  permission (`bluetooth`) was granted the whole time. Fixed by
+  platform-branching the gate (iOS checks `Permission.bluetooth` only).
+- History: the iOS beacon had **never** been on. The previous day's blocker was
+  missing crypto secrets; after fixing that with the shared `.env`, this
+  surfaced. Android beacon worked throughout.
+- Diagnostic leverage: that failure message fires **only** on the
+  silent-denial path — config/crypto/sign-in failures throw `StateError` and
+  render a different message. That is what narrowed the search.
+- Verified NOT the cause: same failure on debug **and** release builds (so not
+  a build-mode artifact); Podfile `PERMISSION_*` macros verified present in
+  `Pods.xcodeproj` (12 build configs). Those macros were a genuine latent bug
+  in their own right (permission_handler compiles handlers out without them)
+  and were kept.
+- **Tooling lesson:** the `strings`-based binary gate used mid-debug is
+  **unreliable on Dart AOT snapshots** (false negatives) — do not trust it.
+- **Mac↔iPhone debug attach remedy:** repeated CoreDevice tunnel wedges that
+  day; killing stray `devicectl` processes plus `CoreDeviceService` /
+  `remotepairingd` un-wedges it. Replug as a last resort.
+- Second blocker surfaced behind it (iOS advertising deliberately throws — the
+  token rides in manufacturerData, which the iOS `flutter_ble_peripheral`
+  bridge cannot send). That is a correct fail-closed guard; spec and options
+  in `IOS_ADVERTISING_CARRIER.md`.
+
 ### 2026-07-17 — iPhone↔iPhone indoor bring-up + close-range findings
 - Platform(s): iOS↔iOS (iPhone 14 + iPhone 15 Plus, both foreground service-UUID carrier)
 - Setup: enclosed indoor room; stop-and-return method, beacon off between stations,
@@ -100,7 +137,9 @@ not rediscover them:
   overflow area) — foreground-only prototype; production background needs the GATT
   carrier (IOS_CARRIER_DECISION §3).
 - **Action:** close-range boundaries are unresolvable indoors. NEXT = outdoor
-  high-distance sweep (docs/WALK_IPHONE_FIRST_PROTOCOL.md, high-distance section)
+  high-distance sweep (**done that afternoon — see the next entry**; the
+  protocol doc `WALK_IPHONE_FIRST_PROTOCOL.md` was retired 2026-07-26 once its
+  sweep had been executed and its method lessons folded into these entries)
   to (1) find the phone↔phone detection ceiling and (2) test whether 60/100/200 ft
   separate — the data decides the tier boundaries. Far tier (201+) likely exceeds
   BLE range → may need GPS (the app's miles mode), TBD by the ceiling measurement.

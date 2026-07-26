@@ -46,8 +46,9 @@ while its scanner is silently dead. Fresh app start + beacon toggle + confirm
 
 ## For the Mac-side agent: joining the shared training dataset
 
-The self-learning loop (Work repo `learn/`, see
-`CALIBRATION_FREEZE_2026-07-18.md` there) trains on `walk.json` archives.
+The self-learning loop (now unified into `learn/` in this repo — see
+`CALIBRATION_FREEZE_2026-07-23.md`, which supersedes the 07-18/07-18b freezes
+this doc was written against) trains on `walk.json` archives.
 For iPhone walks to ever enter that dataset, each capture needs the same
 discipline the Android path now enforces:
 
