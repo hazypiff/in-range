@@ -1219,7 +1219,26 @@ class BeaconService {
     }
     // Replace only when this sample is strictly stronger; otherwise keep the
     // existing coherent record untouched.
-    if (prev == null || rssi > prev.rssi) {
+    //
+    // ...with one exception: a record with no coordinates can never be sent.
+    // _ensureLocationCache() above is fire-and-forget (a Timer plus up to 6 s
+    // in getCurrentPosition) and turnOnBeacon does not await it, so sightings
+    // observed in the first seconds of a session are built with a null
+    // observerLat/observerLon. _flushSightings skips those records (they fail
+    // record_sighting's required lat/lon) but only REMOVES a record after a
+    // successful send — so without this clause a strong early sighting sticks
+    // in _pendingByCorr forever: never uploadable because it has no
+    // coordinates, never replaced because no later sample beats its RSSI, and
+    // holding one of the _maxPendingSightings slots until FIFO eviction.
+    // The peer is simply never reported, which reads as "it didn't detect me"
+    // at exactly the moment a user is watching. Found by audit 2026-07-25.
+    //
+    // Coherence (reviewer #12) is preserved: we swap in a whole later sample
+    // rather than stitching coordinates onto an older one.
+    final prevUnusable =
+        prev != null && (prev.observerLat == null || prev.observerLon == null);
+    final thisUsable = record.observerLat != null && record.observerLon != null;
+    if (prev == null || rssi > prev.rssi || (prevUnusable && thisUsable)) {
       _pendingByCorr[observedCorrelationIdHex] = record;
     }
 
