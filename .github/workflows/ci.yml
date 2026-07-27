@@ -78,9 +78,27 @@ jobs:
       - name: Pub get
         run: flutter pub get
 
+      # `./gradlew` is NOT in the repo — android/.gitignore ignores both
+      # `/gradlew` and `gradle-wrapper.jar` (Flutter's template default), so a
+      # fresh checkout has no wrapper and `./gradlew` fails with exit 127. Rather
+      # than change that ignore policy, install the exact version the wrapper
+      # pins and drive Gradle directly.
+      - name: Read pinned Gradle version
+        id: gradlever
+        run: |
+          v=$(sed -n 's#.*distributions/gradle-\([0-9.]*\)-.*#\1#p' \
+              android/gradle/wrapper/gradle-wrapper.properties)
+          test -n "$v" || { echo "could not parse gradle version"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Gradle $v"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ steps.gradlever.outputs.version }}
+
       - name: Gradle unit tests
         working-directory: android
-        run: ./gradlew :app:testDebugUnitTest --no-daemon
+        run: gradle :app:testDebugUnitTest --no-daemon
 
       - name: Upload test report on failure
         if: failure()
