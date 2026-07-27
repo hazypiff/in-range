@@ -18,7 +18,7 @@
 # reproducible from this archive.
 #
 # prep aborts if any phone's installed build is not the FREEZE build (default
-# calib-freeze-2026-07-24b). ALLOW_BUILD_MISMATCH=1 downgrades that to a warning.
+# calib-freeze-2026-07-27). ALLOW_BUILD_MISMATCH=1 downgrades that to a warning.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -31,7 +31,7 @@ EXCLUDE="$PROTECTED_DEVICES ${EXCLUDE:-}"
 BUF="${BUF:-64M}"
 # Calibration freeze the walk must run under. prep verifies every connected
 # phone's installed build against this before touching the buffers.
-FREEZE="${FREEZE:-calib-freeze-2026-07-24b}"
+FREEZE="${FREEZE:-calib-freeze-2026-07-27}"
 PKG="${PKG:-io.inrange.app}"
 MODE="${1:-}"
 NAME="${2:-}"
