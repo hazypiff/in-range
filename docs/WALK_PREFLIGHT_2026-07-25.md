@@ -1,5 +1,30 @@
 # S22 ↔ iPhone Locked-Bridge Walk — Operator Checklist
 
+> # 🛑 STOP — read this before anything below it
+>
+> **Everything from here to the ADDENDUM describes the 2026-07-25 walk: a different
+> pair (S22 ↔ iPhone 15 Plus), a different freeze (`calib-freeze-2026-07-24b` =
+> `1a41d59`), and a different plan.** It is kept because its measured findings and
+> its "what this walk does NOT measure" section are still true *of that build*.
+>
+> **For the 2026-07-27 walk, jump to the ADDENDUM at the end of this file.**
+>
+> Four rules in the body below are **reversed** for today, and following them would
+> stage the wrong walk:
+>
+> | Body says | Today |
+> | --- | --- |
+> | Freeze is `calib-freeze-2026-07-24b` → `1a41d59` | Freeze is **`calib-freeze-2026-07-27` = `0582633`** |
+> | "Do not cut or install a build from current `main`" | A new freeze **was** cut; both S9s are already on it and `prep` passes |
+> | "This walk does not need … a new freeze" | It needed one — the old freeze is 9 commits behind the installed builds |
+> | Pair is S22 ↔ iPhone 15 Plus | Today's Android side is **two S9s running different A/B arms** |
+>
+> Do **not** bulk-edit the body to match today. Its verification claims
+> (`readRSSI` absent, `beacon_service.dart:60` hardcoding `AdvertPower.high`,
+> migration `0056` undeployed) were verified **at `1a41d59`** and several are no
+> longer true at the current freeze. Rewriting them would turn a true historical
+> record into a false current one.
+
 Walk date: 2026-07-25
 
 Freeze (installed apps): `calib-freeze-2026-07-24b` → `1a41d59`

@@ -19,7 +19,7 @@ Takes about 15 minutes for both.
 ```bash
 cd ~/in-range
 git fetch --tags
-git checkout calib-freeze-2026-07-24b
+git checkout calib-freeze-2026-07-27
 ```
 
 This puts you on a detached HEAD — that's expected and correct for a calibration round.
@@ -68,7 +68,7 @@ Sanity-check the stamp — it should equal the freeze commit, with **no** `-dirt
 suffix:
 
 ```bash
-git rev-parse --short 'calib-freeze-2026-07-24b^{commit}'
+git rev-parse --short 'calib-freeze-2026-07-27^{commit}'
 adb shell dumpsys package io.inrange.app | grep -m1 versionName
 ```
 
@@ -131,7 +131,7 @@ Extraction (unchanged):
 ```bash
 python3 scripts/extract_walk.py --pair <pair> \
   --capture-meta <meta-pull.json> \
-  --freeze calib-freeze-2026-07-24b
+  --freeze calib-freeze-2026-07-27
 ```
 
 ---

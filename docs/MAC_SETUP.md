@@ -34,16 +34,24 @@ no iOS-specific server step. You are only building a second client.
 
 ## 1. Repo + secrets on the Mac
 
-- Clone/pull the repo, then **check out the walk branch**:
+- Clone/pull the repo, then **check out the walk freeze tag — not a branch**:
   ```bash
-  git fetch --all
-  git checkout feat/ble-prior-art-tier1     # NOT main — main predates the BLE work
+  git fetch --all --tags
+  git checkout calib-freeze-2026-07-27          # = 0582633
+  git rev-parse --short HEAD                    # must print: 0582633
   ```
-  As of 2026-07-26 this branch carries the Tier-1 BLE fixes (PR #5), including the
-  change that **restores the Android-advertiser → iPhone-observer direction**. On `main` that direction is
-  still broken, so a walk built from `main` reproduces a known-dead path.
+  **Do not build from `main`** (it predates the Tier-1 BLE work, so the
+  Android-advertiser → iPhone-observer direction is still broken there) **and do
+  not build from the branch tip** `feat/ble-prior-art-tier1` — commits after the
+  freeze are documentation only, but the build stamp comes from `HEAD`, so a tip
+  build gets a different `versionName` and both S9s plus the iPhone would no longer
+  be on one freeze.
 
-  If `git status` is not clean, the build stamp gets a `-dirty` suffix and
+  Both S9s are already installed and verified at `0582633`, and the iOS build is
+  green at that exact commit on macos-latest. Building the iPhone from the same tag
+  is what keeps the walk one freeze.
+
+  If `git status` is not clean, the stamp gets a `-dirty` suffix and
   `walk_capture.sh` **refuses it** — commit or stash before building.
 
 - **`flutter pub get` will change plugin versions on first run.** `flutter_blue_plus`
