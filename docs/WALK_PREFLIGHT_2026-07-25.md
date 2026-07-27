@@ -511,7 +511,25 @@ If any box is false, fix it at the desk rather than at the trailhead.
 
 ---
 
-# ⚠️ ADDENDUM 2026-07-26 — the build changed. Read before using the gate above.
+# ⚠️ ADDENDUM 2026-07-26/27 — the build changed. Read before using the gate above.
+
+## The freeze is `calib-freeze-2026-07-27` = `0582633`
+
+Verified at that exact commit: both S9s installed and `walk_capture.sh prep` passing
+with **no** `ALLOW_BUILD_MISMATCH`, `flutter analyze` clean, `flutter test` 183/183,
+Android unit tests 45/45, and the iOS build green on macos-latest.
+
+**If you rebuild, build from the tag, not from `HEAD`.**
+
+```bash
+git checkout calib-freeze-2026-07-27      # NOT the branch tip
+```
+
+Commits after the freeze are **documentation only** (verified: three files, all
+under `docs/`), but the build stamp comes from `git rev-parse --short HEAD`, so a
+rebuild from the branch tip produces a different `versionName` and `prep` will
+abort every phone. That abort is correct — it is the guard doing its job, not a
+bug to override.
 
 **The last box of the departure gate — "no migration, cloud upload, residency, or new
 phone build introduced" — is now FALSE by design.** Four commits landed on
