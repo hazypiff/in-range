@@ -16,7 +16,7 @@ there; it retracts several of its own claims.**
 
 | Commit | Contents |
 | --- | --- |
-| `e5d40e4` | B1 iPhone→Android manufacturer-data parse · D5 native AD parser · C3/E3/D6 scan retry + token bucket + `_scanRunning` · E2 adapterState listener · E8 peripheral-state subscription · E1 `androidLegacy: true` · D7 restart 25→8 min · 1.3 full `CBManagerState` · W1–W9 instruments |
+| `e5d40e4` | B1 Android-advertiser → iPhone-observer manufacturer-data parse · D5 native AD parser · C3/E3/D6 scan retry + token bucket + `_scanRunning` · E2 adapterState listener · E8 peripheral-state subscription · E1 `androidLegacy: true` · D7 restart 25→8 min · 1.3 full `CBManagerState` · W1–W9 instruments |
 | `c373b7e` | iOS BLE state consumed in the UI · W2 outcome split · A/B scan-arm flags · resume-time buffer drain |
 | `963c5db` | 45 mutation-checked JUnit tests for `AdvertParser` · W10 demotion derivation |
 | `a758507` | flutter_blue_plus pinned to 1.36.8 (E5 licence + E6 build ping) · docs consolidation |

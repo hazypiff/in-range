@@ -609,6 +609,36 @@ observed on an S9 is the last-AD-wins case and does **not** transfer to Android 
 the specific instrument that gates each item. Three entries can be **cancelled** by
 the data rather than built — check those gates before writing code.
 
+## ⚠️ Decide before departure: local/USB data, or cloud correlation?
+
+**Verified against production 2026-07-27** via the Management API (read-only):
+
+```
+select max(version), count(*) from supabase_migrations.schema_migrations
+  -> max_version = 0055, n = 55
+select proname from pg_proc where proname in ('claim_token','claim_token_batch')
+  -> claim_token          (claim_token_batch is ABSENT)
+```
+
+So `supabase/migrations/0060_batch_token_preclaim.sql` **is not on prod.** Per-token
+`claim_token` still exists, so foreground claims work once there is network — but
+**batch preclaim will fail even with network restored**, so locked/background native
+slots cannot be preclaimed and cloud correlation across later slots is broken.
+
+Compounding it: **the attached S9s currently have no IP route and no DNS.** WiFi is
+enabled and airplane mode off, but they are associated with no AP, so
+`claim_token_batch` fails DNS lookup before it can fail on the missing RPC.
+
+**Two honest options. Pick one now and write it in the journal:**
+
+| Option | What you get | What it costs |
+| --- | --- | --- |
+| **Local / USB-only calibration walk** (recommended today) | Every W1–W10 instrument, RSSI distributions, gap histograms, the A/B arms, both BLE directions. All of it lands in logcat and SQLite and comes off over USB | No cloud correlation of later token slots. Accept and record it |
+| **Cloud-backed correlation** | Dark-phone correlation across slots | Requires applying migrations 0056–0060 to **production**, plus restoring the hotspot. **Do not rush five migrations onto prod on walk morning** — that is how a walk day becomes an incident |
+
+The instrument data this walk exists to collect does **not** depend on cloud. The
+default should be the local walk unless someone deliberately decides otherwise.
+
 ## CI note
 
 The GitHub Actions **account owning the private repo (`inrangeai`) is under a
