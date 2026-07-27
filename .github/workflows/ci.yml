@@ -48,3 +48,43 @@ jobs:
         # 1,580-line BeaconService sat at 7.0%; publishing that number is worth
         # doing, but as a deliberate task, not as a side effect of this job.
         run: flutter test --reporter expanded
+
+  android-unit:
+    name: android unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # AdvertParser exists because flutter_blue_plus merges every manufacturer AD
+    # into one blob and labels it with the FIRST company id, which can silently
+    # break backgrounded-iPhone detection. Its 45 tests are mutation-checked
+    # (three mutations to the parser fail nine of them), but this job never ran
+    # Gradle, so until now they executed only when someone remembered — the exact
+    # failure mode the header comment above describes.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      # `flutter pub get` writes the generated Gradle plugin files that
+      # android/ needs; without it the Gradle build cannot resolve the Flutter
+      # plugin loader and fails before reaching any test.
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Gradle unit tests
+        working-directory: android
+        run: ./gradlew :app:testDebugUnitTest --no-daemon
+
+      - name: Upload test report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-test-report
+          path: android/app/build/reports/tests/testDebugUnitTest/

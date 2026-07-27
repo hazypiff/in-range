@@ -316,6 +316,14 @@ class BeaconService {
   /// one runs is folded into a follow-up pass.
   Future<void> _drainNativeBuffer() async {
     if (!_isOn) return;
+    // iOS-only: the buffer lives in BackgroundBeacon.swift. There is no Android
+    // implementation of io.inrange/background_beacon, so on Android every call
+    // threw MissingPluginException, got caught, and printed
+    // "BackgroundBeacon drain failed: ..." on EVERY beacon start (observed on an
+    // S9, 2026-07-26 bench). Harmless, but it put an alarming line in the walk
+    // logs we are about to read closely — and a real drain failure would have
+    // been indistinguishable from the routine one.
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return;
     if (_nativeDrainInFlight) {
       _nativeDrainPending = true;
       return;
