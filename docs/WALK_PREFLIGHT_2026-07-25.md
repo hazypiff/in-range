@@ -563,10 +563,27 @@ INRANGE_SCAN_RESTART_MINUTES=25    # old cadence
 ```
 
 Defaults are `true` / `8`. The resolved arm is logged unconditionally at every scan
-start (`BLE scan arm: …`), so any log can be attributed after the fact. The dual-PHY
-effect is receiver-side, so two phones scanning the same room is a valid comparison.
-Without an old-arm leg, W9's gap histogram can only show gaps are *absent* — equally
-consistent with the fix working and with the effect never existing on your hardware.
+start (`BLE scan arm: …`), so any log can be attributed after the fact. Without an
+old-arm leg, W9's gap histogram can only show gaps are *absent* — equally consistent
+with the fix working and with the effect never existing on your hardware.
+
+### ⚠️ The two flags need DIFFERENT hardware. Do not set both on one phone.
+
+Verified 2026-07-26: the attached S9s (`SM-G960U`) report **API 29 / Android 10**.
+
+| Flag | Valid on | Why |
+| --- | --- | --- |
+| `INRANGE_SCAN_LEGACY_ONLY` | **S9 (API 29)** ✅ | `setLegacy`/`setPhy` are guarded at API ≥ 26, so dual-PHY scanning is active. And these are **Samsungs** — exactly the vendor upstream #938 reports the 4-second time-slicing on. The S9 is the *right* phone for this arm |
+| `INRANGE_SCAN_RESTART_MINUTES` | **S22 only** (API 34+) | AOSP's 10-minute demotion is **Android 14+**. On API 29 the timeout is **30 minutes**, which the old 25-minute restart already beat — so an 8-vs-25 comparison on an S9 measures **nothing**. The sticky `LOW_POWER` downgrade also only exists on 14+ |
+
+So: run the **legacy-only A/B across two S9s** (one `true`, one `false`, same room,
+same leg), and run the **restart-cadence A/B on the S22** if you have a second 14+
+handset — otherwise skip that arm and record that it was not testable, rather than
+collecting a null result and reading it as a pass.
+
+Also note API 29 puts the S9s in AOSP's **`last_wins`** bucket for duplicate Apple
+manufacturer ADs (`appleBlobSemantics`, from `platformInfo`), so any D3 offset
+observed on an S9 is the last-AD-wins case and does **not** transfer to Android 15+.
 
 ## ⛔ Do not enable these during the walk
 
