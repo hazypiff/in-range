@@ -34,7 +34,22 @@ no iOS-specific server step. You are only building a second client.
 
 ## 1. Repo + secrets on the Mac
 
-- Clone/pull the repo.
+- Clone/pull the repo, then **check out the walk branch**:
+  ```bash
+  git fetch --all
+  git checkout feat/ble-prior-art-tier1     # NOT main — main predates the BLE work
+  ```
+  As of 2026-07-26 this branch carries the Tier-1 BLE fixes (PR #5), including the
+  change that **restores iPhone→Android detection**. On `main` that direction is
+  still broken, so a walk built from `main` reproduces a known-dead path.
+
+  If `git status` is not clean, the build stamp gets a `-dirty` suffix and
+  `walk_capture.sh` **refuses it** — commit or stash before building.
+
+- **`flutter pub get` will change plugin versions on first run.** `flutter_blue_plus`
+  is pinned to `1.36.8` (licensing — see the comment in `pubspec.yaml`; do not bump
+  it to 2.x). Expect it to resolve `flutter_blue_plus_darwin 7.0.3`. If CocoaPods
+  complains after that, `cd ios && pod install --repo-update`.
 - **Copy `.env` from the Linux box.** It is **gitignored** — a clone will NOT
   have it, and without it the app has no backend config. It holds the prod
   Supabase URL + publishable key.
