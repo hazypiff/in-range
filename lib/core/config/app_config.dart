@@ -47,6 +47,15 @@ class AppConfig {
 
   static String get supabaseUrl => _env('SUPABASE_URL');
 
+  /// Crack #1 (issue #4) wake-ping endpoint. Null until hazypiff's server
+  /// half exists — a null URL keeps the native wake-ping silent, so this is
+  /// the feature flag. Expected shape once live:
+  /// '$supabaseUrl/functions/v1/wake-ping'.
+  static String? get wakePingUrl {
+    final v = _env('INRANGE_WAKE_PING_URL');
+    return v.isEmpty ? null : v;
+  }
+
   static String get supabaseAnonKey {
     final k = _env('SUPABASE_PUBLISHABLE_KEY');
     if (k.isNotEmpty) return k;

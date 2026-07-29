@@ -143,4 +143,26 @@ class BackgroundBeaconChannel {
       debugPrint('BackgroundBeacon stop failed: $e');
     }
   }
+
+  /// W5 owner rule: a resolved pair (pass/reject) drops its live session
+  /// immediately — the app never tracks someone the user said no to.
+  Future<void> dropPeer(String tokenHex) async {
+    try {
+      await _channel.invokeMethod<void>('dropPeer', tokenHex);
+    } catch (e) {
+      debugPrint('BackgroundBeacon dropPeer failed: $e');
+    }
+  }
+
+  /// Crack #1 (issue #4): arm the native wake-ping with the server endpoint
+  /// + a fresh auth token. Call on start and on every token rotation so the
+  /// stored JWT stays fresh. Native stays silent when url is null.
+  Future<void> setWakePing({String? url, String? auth}) async {
+    try {
+      await _channel
+          .invokeMethod<void>('setWakePing', {'url': url, 'auth': auth});
+    } catch (e) {
+      debugPrint('BackgroundBeacon setWakePing failed: $e');
+    }
+  }
 }

@@ -686,6 +686,16 @@ class BeaconService {
         currentUntil: _currentToken!.expiresAt,
       );
       final ok = await _bgBeacon.start(payload);
+      // Crack #1: refresh the native wake-ping endpoint + JWT on every
+      // (re)start — rotation re-enters here every ~15 min, keeping the
+      // stored token fresh. Endpoint is null until the server half (issue
+      // #4) ships, which keeps the native side silent.
+      if (AppConfig.hasRealSupabase) {
+        unawaited(_bgBeacon.setWakePing(
+          url: AppConfig.wakePingUrl,
+          auth: InRangeSupabase.client.auth.currentSession?.accessToken,
+        ));
+      }
       _discoverable = ok;
       debugPrint(ok
           ? 'iOS native advertising armed (marker + GATT token carrier)'
@@ -1118,6 +1128,14 @@ class BeaconService {
       }
     } finally {
       _gattInflight.remove(deviceId);
+    }
+  }
+
+  /// W5 owner rule (2026-07-24): a pass/reject resolves the pair — its live
+  /// session (if any) is torn down immediately. No-op off-iOS / no session.
+  void dropPeer(String tokenHex) {
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      unawaited(_bgBeacon.dropPeer(tokenHex));
     }
   }
 
