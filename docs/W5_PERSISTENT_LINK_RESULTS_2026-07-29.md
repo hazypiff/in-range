@@ -1,9 +1,22 @@
 # W5 persistent-link — bench results 2026-07-29
 
 **Status:** test-only (`INRANGE_W5_LINKS`, default OFF). Single evening,
-single pair (iPhone 14 + iPhone 13, both iOS 18.6.2, paid-team build).
-Promising; NOT yet durability-proven. No production behavior changes until
-the flag is deliberately enabled.
+single pair. Promising; NOT yet durability-proven. No production behavior
+changes until the flag is deliberately enabled.
+
+**Rig:** iPhone 14 (iPhone14,7, iOS 18.6.2) + iPhone 13 (iPhone14,5, iOS
+18.6.2). Paid team `JHK29L6A78`. Code at commit `ec7856e` (this doc's
+numbers corrected in the follow-up commit). Native events →
+`Documents/bb_wake_log.txt`; RSSI → `rssi_log(id,at_ms,correlation_id,
+rssi,power)`. RSSI is a **proximity proxy, not calibrated distance.**
+
+**Timestamp discipline (important):** `at_ms` is Unix epoch **UTC** ms.
+An initial audit query bounded the window with SQLite `strftime('%s','…
+22:25:00')`, which parses the literal as **UTC** → 18:25 EDT, and wrongly
+pulled 82 afternoon samples. Corrected: the both-locked test ran
+**22:24:57–22:34:57 America/New_York (EDT, UTC−4)** = epoch
+1785378297–1785378897. All ranging counts below use that epoch window and
+exclude post-unlock live-scan samples.
 
 ## What W5 is
 
@@ -34,12 +47,24 @@ so a cold test is not confounded by a stale cached token.
 
 A (13) beacon on → locked. B (14) beacon on, awake ~30–60 s → **discovered
 A's overflow advert → `gatt-read` → `w5-start` → `notify-ready` → beats**.
-B then locked; both asleep 10 min:
-- **Liveness:** 167/167 beats, 0 disconnects, 14–15/min every minute.
-- **Ranging (buffer flushed on foreground):** 82 RSSI samples in the
-  both-locked window, 7–11/min every minute, max gap 8.5 s, median −43 dBm.
+B then locked; both asleep for the 22:24:57–22:34:57 EDT window:
+- **Liveness:** 167/167 beats each phone, 0 disconnects, 14–15/min every
+  minute.
+- **Bidirectional RSSI proximity measurements** (buffers flushed on
+  foreground; both id-ranges contiguous = captured-while-locked then
+  bulk-inserted at flush, not live post-unlock):
+  - iPhone 14: **143 samples**, 22:25:00→22:34:54, 14–15/min every minute,
+    max intersample gap 4.3 s (edge gaps: start→first 3.3 s, last→end
+    2.4 s), median −39 dBm (−43..−35).
+  - iPhone 13: **110 samples**, 22:27:17→22:34:53 (started ~2 min into the
+    window — as Phone A it formed its own central→B link later), then
+    11–15/min, max gap 4.3 s, median −38 dBm (−45..−35).
+- Post-unlock live-scan samples (196 on the 14) were excluded from the
+  counts above.
 
-This proves **awake-discovers-already-locked → both-locked holds AND ranges.**
+This proves **awake-discovers-already-locked → both-locked link holds AND
+both phones collect RSSI proximity measurements of each other** — for one
+cold-established session.
 
 ## Explicitly NOT proven
 
