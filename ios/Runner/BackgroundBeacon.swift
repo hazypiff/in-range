@@ -30,8 +30,6 @@ final class BackgroundBeacon: NSObject {
   // execution, inside which the next outgoing beat is sent: neither side
   // ever suspends while the session lives.
   private static let keepaliveCharUUID = CBUUID(string: "CA5E")
-  private static let keepaliveInterval: TimeInterval = 8
-  private static let rssiInterval: TimeInterval = 10
   private static let peripheralRestoreID = "io.inrange.beacon.peripheral"
   private static let centralRestoreID = "io.inrange.beacon.central"
 
@@ -63,9 +61,26 @@ final class BackgroundBeacon: NSObject {
     var tokenHex: String
     var lastEvent: Date
     var keepaliveChar: CBCharacteristic?
+    var lastRssiAt: Date
+    var lastBeatAt: Date
+    var writeInFlight: Bool  // exactly one .withResponse write outstanding
+    var notifyReady: Bool    // didUpdateNotificationStateFor confirmed
+    var seq: Int             // beat sequence number (logging)
+    var lastGattOp: String   // last GATT op attempted (logging)
   }
   private var w5: [UUID: W5Session] = [:]
   private var keepaliveNotifyChar: CBMutableCharacteristic?
+  /// Peripheral-side: a notify that updateValue refused (queue full) — retried
+  /// only from peripheralManagerIsReady(toUpdateSubscribers:).
+  private var pendingNotify = false
+  /// W5 is a TEST-ONLY link layer until proven through the awake gates; gated
+  /// by the INRANGE_W5_LINKS dart-define (persisted here by Dart). Off = pure
+  /// token-read behavior, no persistent connections.
+  private var w5LinksEnabled: Bool { defaults.bool(forKey: Self.keyW5Links) }
+  // Callback-primed cadence: after a write CONFIRMS (didWriteValueFor), the
+  // next beat is scheduled ~4 s out. Herald-shaped — not an instant loop.
+  private static let w5Cadence: TimeInterval = 4
+  private static let keyW5Links = "bb.w5links"
 
   // peripheral.identifier → (tokenHex, cachedAt)
   private var tokenCache: [UUID: (hex: String, at: Date)] = [:]
@@ -206,6 +221,10 @@ final class BackgroundBeacon: NSObject {
           self.defaults.set(args["auth"] as? String, forKey: Self.keyPingAuth)
         }
         result(nil)
+      case "setW5Links":
+        // Test-only gate for W5 persistent links (INRANGE_W5_LINKS).
+        self.defaults.set((call.arguments as? Bool) ?? false, forKey: Self.keyW5Links)
+        result(nil)
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -238,6 +257,13 @@ final class BackgroundBeacon: NSObject {
     for (_, p) in inflight { centralMgr?.cancelPeripheralConnection(p) }
     inflight.removeAll()
     inflightRSSI.removeAll()
+    // Clear per-peer session/discovery state on stop. Without this a cached
+    // peer token (15 min TTL) makes a re-enabled scanner emit sightings
+    // WITHOUT reconnecting, so W5 never re-establishes — which confounded the
+    // 2026-07-29 cold test. A beacon-off is a clean-slate boundary.
+    tokenCache.removeAll()
+    lastConnectAttempt.removeAll()
+    pendingNotify = false
   }
 
   // MARK: - Token batch
@@ -297,9 +323,14 @@ final class BackgroundBeacon: NSObject {
       let char = CBMutableCharacteristic(
         type: Self.tokenCharUUID, properties: [.read], value: nil,
         permissions: [.readable])
+      // .write (WITH response), not .writeWithoutResponse: Herald documents a
+      // ~30 s iOS queue stall + supervision-timeout disconnect from unacked
+      // writes (heraldprox.io/bluetooth/os), which matches the 2026-07-29
+      // parted-7 failure. The ack is also the link-layer traffic that resets
+      // the supervision timer.
       let keepalive = CBMutableCharacteristic(
         type: Self.keepaliveCharUUID,
-        properties: [.notify, .writeWithoutResponse], value: nil,
+        properties: [.notify, .write], value: nil,
         permissions: [.writeable])
       keepaliveNotifyChar = keepalive
       let service = CBMutableService(type: Self.serviceUUID, primary: true)
@@ -513,23 +544,38 @@ extension BackgroundBeacon: CBPeripheralManagerDelegate {
     notifyAdvertisingState(error == nil)
   }
 
-  // W5 ping-pong, peripheral half: an incoming heartbeat write is our wake —
-  // answer with a notify beat ~8 s later, inside the granted window. The
-  // central's next write re-arms us; the loop sustains both sides asleep.
+  // W5 ping-pong, peripheral half: an incoming heartbeat write IS our wake —
+  // notify back SYNCHRONOUSLY, now, inside this window. A delayed beat dies
+  // when iOS re-suspends us before the timer fires (the 2026-07-29 bug that
+  // broke the cascade). The central's notify handler answers instantly in
+  // turn, so the two synchronous responses sustain each other with no timer.
   func peripheralManager(
     _ peripheral: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]
   ) {
-    for request in requests where request.characteristic.uuid == Self.keepaliveCharUUID {
-      logWake("w5-beat-in")
-      DispatchQueue.main.asyncAfter(deadline: .now() + Self.keepaliveInterval) {
-        [weak self] in
-        guard let self = self, self.enabled, let ch = self.keepaliveNotifyChar else { return }
-        self.peripheralMgr?.updateValue(
-          Data([0x01]), for: ch, onSubscribedCentrals: nil)
-      }
-      // A live session proves a peer is right here — keep our own scan warm.
-      scheduleScanRestart()
+    // Validate every request; respond EXACTLY ONCE (responding to the first
+    // request in the array acks them all — CB semantics). A .withResponse
+    // write that is never answered stalls the central's queue.
+    guard let first = requests.first else { return }
+    var ok = true
+    for request in requests {
+      if request.characteristic.uuid != Self.keepaliveCharUUID { ok = false }
     }
+    peripheral.respond(to: first, withResult: ok ? .success : .writeNotPermitted)
+    guard ok else { return }
+    // Notify back so a SUSPENDED central still gets a wake (bidirectional).
+    // Queue on refusal; retry only from peripheralManagerIsReady.
+    if let ch = keepaliveNotifyChar {
+      let sent = peripheralMgr?.updateValue(
+        Data([0x01]), for: ch, onSubscribedCentrals: nil) ?? false
+      pendingNotify = !sent
+    }
+  }
+
+  func peripheralManagerIsReady(toUpdateSubscribers peripheral: CBPeripheralManager) {
+    guard pendingNotify, let ch = keepaliveNotifyChar else { return }
+    let sent = peripheral.updateValue(
+      Data([0x01]), for: ch, onSubscribedCentrals: nil)
+    pendingNotify = !sent
   }
 
   func peripheralManager(
@@ -626,7 +672,7 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
       if let ch = svc.characteristics?.first(where: { $0.uuid == Self.tokenCharUUID }) {
         p.readValue(for: ch)
       } else {
-        p.discoverCharacteristics([Self.tokenCharUUID], for: svc)
+        p.discoverCharacteristics([Self.tokenCharUUID, Self.keepaliveCharUUID], for: svc)
       }
     } else {
       p.discoverServices([Self.serviceUUID])
@@ -646,11 +692,38 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
 
     // Foreground fast path: rotating token rides as the non-marker UUID.
     if let tokenUUID = advertised.first(where: { $0 != Self.serviceUUID && $0.data.count == 16 }) {
+      let peerToken = tokenUUID.data.map { String(format: "%02x", $0) }.joined()
       // While the app is active the Dart unfiltered scan already ingests this
       // advert — emitting here too would double the sample rate.
       if UIApplication.shared.applicationState != .active {
-        emitSighting(tokenHex: tokenUUID.data.map { String(format: "%02x", $0) }.joined(),
-                     rssi: rssi)
+        emitSighting(tokenHex: peerToken, rssi: rssi)
+      }
+      // W5 establishment: even though the token is already readable from the
+      // air, OPEN a persistent connection now so proximity survives BOTH
+      // phones sleeping later (an advert-only sighting dies the instant both
+      // lock). Single-initiator tiebreak: the side whose current advertised
+      // token sorts lower dials; the peer computes the mirror and stands
+      // down — no double connect. Skip if a session/attempt already exists.
+      let id = peripheral.identifier
+      if w5LinksEnabled, w5[id] == nil, inflight[id] == nil,
+         let myToken = currentTokenHex(), myToken < peerToken {
+        let recent = lastConnectAttempt[id].map {
+          Date().timeIntervalSince($0) < Self.connectRetryFloor } ?? false
+        if !recent {
+          lastConnectAttempt[id] = Date()
+          tokenCache[id] = (peerToken, Date())
+          inflightRSSI[id] = rssi
+          inflight[id] = peripheral
+          peripheral.delegate = self
+          centralMgr?.connect(peripheral, options: nil)
+          DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+            guard let self = self, self.w5[id] == nil,
+                  let p = self.inflight[id] else { return }
+            self.centralMgr?.cancelPeripheralConnection(p)  // read-only fallback timed out
+            self.inflight.removeValue(forKey: id)
+            self.inflightRSSI.removeValue(forKey: id)
+          }
+        }
       }
       scheduleScanRestart()
       return
@@ -702,8 +775,13 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
   ) {
     inflight.removeValue(forKey: peripheral.identifier)
     inflightRSSI.removeValue(forKey: peripheral.identifier)
-    if w5.removeValue(forKey: peripheral.identifier) != nil {
-      logWake("w5-parted")  // peer walked away — session over, back to scanning
+    if let s = w5.removeValue(forKey: peripheral.identifier) {
+      // Full domain+code + last GATT op + seq: the diagnostic that tells us
+      // whether the cascade starved (supervision timeout, code 6/7) or the
+      // link physically dropped, and how far the beat sequence got.
+      let e = error as NSError?
+      let reason = e.map { "\($0.domain):\($0.code)" } ?? "clean"
+      logWake("w5-parted-\(reason)-seq\(s.seq)-op:\(s.lastGattOp)")
     }
     scheduleScanRestart()
   }
@@ -713,13 +791,15 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
       centralMgr?.cancelPeripheralConnection(peripheral)
       return
     }
-    peripheral.discoverCharacteristics([Self.tokenCharUUID], for: svc)
+    peripheral.discoverCharacteristics([Self.tokenCharUUID, Self.keepaliveCharUUID], for: svc)
   }
 
   func peripheral(
     _ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService,
     error: Error?
   ) {
+    // Discover BOTH the token AND keepalive characteristics — W5 needs the
+    // keepalive handle, which the committed version never requested.
     guard let ch = service.characteristics?.first(where: { $0.uuid == Self.tokenCharUUID })
     else {
       centralMgr?.cancelPeripheralConnection(peripheral)
@@ -733,16 +813,15 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
     error: Error?
   ) {
     let id = peripheral.identifier
-    // W5 notify beat from the peer: answer with the next heartbeat write and
-    // keep the RSSI loop alive.
+    // W5 notify from the peer: a wake signal (bridges background gaps where
+    // our cadence timer was suspended). Re-prime a beat if the cadence has
+    // elapsed and no write is in flight — the single gated sender enforces
+    // one-write-at-a-time. No synchronous unacked write here.
     if characteristic.uuid == Self.keepaliveCharUUID {
-      guard var s = w5[id] else { return }
-      s.lastEvent = Date()
-      w5[id] = s
-      DispatchQueue.main.asyncAfter(deadline: .now() + Self.keepaliveInterval) {
-        [weak self] in
-        self?.w5Beat(id)
-      }
+      guard w5[id] != nil else { return }
+      w5[id]?.lastEvent = Date()
+      w5MaybeReadRSSI(id)
+      w5MaybeBeat(id)
       return
     }
     guard characteristic.uuid == Self.tokenCharUUID,
@@ -757,39 +836,97 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
       tokenCache = tokenCache.filter { $0.value.at > cutoff }
     }
     emitSighting(tokenHex: hex, rssi: inflightRSSI[id] ?? -85)
-    // W5: token read = session start. Hold the connection (session-scoped),
-    // subscribe to the peer's keepalive, begin the RSSI loop. Continuous
-    // proximity with both phones asleep — the Herald shape.
+    // W5 (test-only, INRANGE_W5_LINKS): token read = session start. Subscribe
+    // to the peer's keepalive; the first beat waits for
+    // didUpdateNotificationStateFor. If W5 is gated off, disconnect after the
+    // read (pure token-read behavior).
+    guard w5LinksEnabled else {
+      centralMgr?.cancelPeripheralConnection(peripheral)
+      return
+    }
     if w5[id] == nil {
-      w5[id] = W5Session(peripheral: peripheral, tokenHex: hex, lastEvent: Date(),
-                         keepaliveChar: nil)
+      let ka = peripheral.services?
+        .first(where: { $0.uuid == Self.serviceUUID })?.characteristics?
+        .first(where: { $0.uuid == Self.keepaliveCharUUID })
+      w5[id] = W5Session(
+        peripheral: peripheral, tokenHex: hex, lastEvent: Date(),
+        keepaliveChar: ka, lastRssiAt: .distantPast, lastBeatAt: .distantPast,
+        writeInFlight: false, notifyReady: false, seq: 0, lastGattOp: "start")
       logWake("w5-start")
-      if let svc = peripheral.services?.first(where: { $0.uuid == Self.serviceUUID }),
-         let ka = svc.characteristics?.first(where: { $0.uuid == Self.keepaliveCharUUID }) {
-        w5[id]?.keepaliveChar = ka
+      inflight.removeValue(forKey: id)  // session owns the peripheral now
+      if let ka = ka {
+        // Subscribe first; the first beat fires from didUpdateNotificationState.
         peripheral.setNotifyValue(true, for: ka)
       }
-      inflight.removeValue(forKey: id)  // session owns the peripheral now
-      w5Beat(id)
-      w5ReadRSSI(id)
+      peripheral.readRSSI()
     } else {
       w5[id]?.tokenHex = hex  // rotation refresh on the open connection
     }
   }
 
-  /// One heartbeat write; the peer's notify answer schedules the next.
-  private func w5Beat(_ id: UUID) {
-    guard enabled, let s = w5[id], s.peripheral.state == .connected,
-          let ka = s.keepaliveChar else { return }
-    s.peripheral.writeValue(Data([0x01]), for: ka, type: .withoutResponse)
+  /// didUpdateNotificationStateFor: the subscription is confirmed — only now
+  /// is it safe to send the first beat.
+  func peripheral(
+    _ peripheral: CBPeripheral,
+    didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?
+  ) {
+    let id = peripheral.identifier
+    guard characteristic.uuid == Self.keepaliveCharUUID, w5[id] != nil else { return }
+    if let error = error {
+      logWake("w5-notify-err-\((error as NSError).code)")
+      return
+    }
+    w5[id]?.notifyReady = characteristic.isNotifying
+    logWake("w5-notify-ready")
+    w5MaybeBeat(id)
   }
 
-  private func w5ReadRSSI(_ id: UUID) {
-    guard enabled, let s = w5[id], s.peripheral.state == .connected else { return }
-    s.peripheral.readRSSI()
-    DispatchQueue.main.asyncAfter(deadline: .now() + Self.rssiInterval) { [weak self] in
-      self?.w5ReadRSSI(id)
+  /// didWriteValueFor: the .withResponse write was acked. Clear the in-flight
+  /// flag, sample RSSI (throttled, driven by this confirmed callback), and
+  /// prime the next beat ~4 s out (callback-primed cadence).
+  func peripheral(
+    _ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic,
+    error: Error?
+  ) {
+    let id = peripheral.identifier
+    guard characteristic.uuid == Self.keepaliveCharUUID, w5[id] != nil else { return }
+    w5[id]?.writeInFlight = false
+    if let error = error {
+      w5[id]?.lastGattOp = "write-fail-\((error as NSError).code)"
+      logWake("w5-write-err-\((error as NSError).code)")
+      // Failed write: retry on the next wake/cadence rather than spinning.
+      return
     }
+    w5[id]?.lastGattOp = "write-ok"
+    w5[id]?.lastEvent = Date()
+    w5MaybeReadRSSI(id)
+    DispatchQueue.main.asyncAfter(deadline: .now() + Self.w5Cadence) { [weak self] in
+      self?.w5MaybeBeat(id)
+    }
+  }
+
+  /// The single gated beat sender: at most one .withResponse write outstanding,
+  /// paced to the cadence. Callable from the notify wake, the cadence timer,
+  /// and the notify-ready callback — all funnel through here.
+  private func w5MaybeBeat(_ id: UUID) {
+    guard w5LinksEnabled, var s = w5[id], s.peripheral.state == .connected,
+          s.notifyReady, !s.writeInFlight, let ka = s.keepaliveChar else { return }
+    guard Date().timeIntervalSince(s.lastBeatAt) >= Self.w5Cadence - 0.5 else { return }
+    s.writeInFlight = true
+    s.lastBeatAt = Date()
+    s.seq += 1
+    s.lastGattOp = "write-seq-\(s.seq)"
+    w5[id] = s
+    logWake("w5-beat-\(s.seq)")
+    s.peripheral.writeValue(Data([0x01]), for: ka, type: .withResponse)
+  }
+
+  private func w5MaybeReadRSSI(_ id: UUID) {
+    guard var s = w5[id], s.peripheral.state == .connected,
+          Date().timeIntervalSince(s.lastRssiAt) >= 1.0 else { return }
+    s.lastRssiAt = Date()
+    w5[id] = s
+    s.peripheral.readRSSI()
   }
 
   func peripheral(_ peripheral: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {

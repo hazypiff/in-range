@@ -686,6 +686,8 @@ class BeaconService {
         currentUntil: _currentToken!.expiresAt,
       );
       final ok = await _bgBeacon.start(payload);
+      // W5 test gate: only establish persistent links when the build opts in.
+      unawaited(_bgBeacon.setW5Links(AppConfig.w5LinksEnabled));
       // Crack #1: refresh the native wake-ping endpoint + JWT on every
       // (re)start — rotation re-enters here every ~15 min, keeping the
       // stored token fresh. Endpoint is null until the server half (issue
