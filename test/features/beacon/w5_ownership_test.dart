@@ -1,215 +1,249 @@
+import 'dart:math';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:in_range/features/beacon/w5_ownership.dart';
 
-/// Acceptance tests for the #7 encounter-lease ownership state machine.
-/// Scenario numbers map to the authorized brief's acceptance list. Scenarios
-/// 11–14 are build/isolation-level (#8 compile-time diagnostic isolation) and
-/// are covered outside this unit surface — noted at the bottom.
+/// Acceptance tests for the #7 encounter-lease ownership oracle (corrected per
+/// PR #9 review). candA < candB by string order throughout. Scenarios 11-14
+/// (diagnostic isolation) are build-level (#8), not this unit surface.
 void main() {
-  // Two stable encounter nonces. 'aaaa' < 'bbbb', so the 'aaaa' side is the
-  // rotation-invariant initiator for the whole encounter.
-  const nonceA = 'aaaa';
-  const nonceB = 'bbbb';
-  final lease = W5Lease.id(nonceA, nonceB);
+  const candA = 'cand-a';
+  const candB = 'cand-b';
+  const aliasA = 'aliasA';
+  const aliasB = 'aliasB';
+  // Lease id at establishment == min(candidate) == candA (see per-test asserts).
 
-  group('W5Lease', () {
-    test('lease id is order-independent (both sides derive the same id)', () {
-      expect(W5Lease.id(nonceA, nonceB), W5Lease.id(nonceB, nonceA));
-    });
-    test('initiator is deterministic and complementary', () {
-      expect(W5Lease.iAmInitiator(nonceA, nonceB), isTrue);
-      expect(W5Lease.iAmInitiator(nonceB, nonceA), isFalse);
-    });
-  });
-
-  // Scenario 1: token ordering reverses while linked → exactly one link.
-  test('1. rotation/tiebreak flip does not create a second link', () {
-    final a = W5Ownership(); // initiator side
-    a.onDiscovered(leaseId: lease, iAmInitiator: true);
-    a.onLinkUp(
-        leaseId: lease, handle: 'A->B', role: W5Role.outbound,
-        iAmInitiator: true);
-    expect(a.linkCount(lease), 1);
-    // A later re-discovers the SAME encounter with a FLIPPED initiator flag
-    // (what a rotating token would do). The existing encounter blocks a dial.
-    final fx = a.onDiscovered(leaseId: lease, iAmInitiator: false);
-    expect(fx, isEmpty);
-    expect(a.linkCount(lease), 1);
-  });
-
-  // Scenario 2 (the core fix): inbound-only ownership blocks reverse
-  // duplication. This is exactly the proven leak: B held only an inbound link,
-  // its ownership map was empty, a token flip made it dial.
-  test('2. inbound-only peer does NOT dial after ordering reverses', () {
-    final b = W5Ownership(); // non-initiator side
-    // B receives the inbound subscription (A dialed B).
-    final up = b.onLinkUp(
-        leaseId: lease, handle: 'A->B', role: W5Role.inbound,
-        iAmInitiator: false);
+  // Decisive case: the initial dialer is chosen by TOKEN order, which can be
+  // opposite to candidate order. leaseId is min(candidate) regardless of dialer.
+  test('dialer chosen by token order; lease anchored to min(candidate)', () {
+    // A dials B (token order) even though B holds the smaller candidate.
+    final a = W5Ownership();
+    // Here A's own candidate is the LARGER one (candB), peer's is smaller.
+    final dial = a.onDiscovered(
+        alias: aliasB, wouldDial: true, candidateId: candB);
+    expect(dial, [(W5Op.dial, candB)]);
+    final up = a.onControl(
+        handle: 'A->B', role: W5Role.outbound,
+        myCandidate: candB, peerCandidate: candA, peerAlias: aliasB);
     expect(up, [(W5Op.owns, 'A->B')]);
-    expect(b.ownedHandle(lease), 'A->B');
-    // Ordering reverses; B would now be "initiator" under a rotating token —
-    // but the encounter already exists, so B stands down (no dial). Pre-fix
-    // this returned a dial and produced the duplicate.
-    final fx = b.onDiscovered(leaseId: lease, iAmInitiator: true);
-    expect(fx, isEmpty);
-    expect(b.linkCount(lease), 1);
+    // Lease is anchored to the smaller candidate (candA), not the dialer's.
+    expect(a.keeperOf(candA), 'A->B');
+    expect(a.confirmedKeeperCount, 1);
   });
 
-  // Scenario 3: identifier churn during a valid lease → no duplicate dial.
-  test('3. peripheral-identifier churn does not cause a re-dial', () {
-    final a = W5Ownership();
-    a.onDiscovered(leaseId: lease, iAmInitiator: true);
-    a.onLinkUp(
-        leaseId: lease, handle: 'h1', role: W5Role.outbound,
-        iAmInitiator: true);
-    // The peer's advertising address churned → a discovery under a NEW handle,
-    // but the encounter nonce (hence leaseId) is unchanged → stand down.
-    final fx = a.onDiscovered(leaseId: lease, iAmInitiator: true);
-    expect(fx, isEmpty);
-    expect(a.linkCount(lease), 1);
-  });
-
-  // Scenario 4: simultaneous inbound/outbound race → deterministic convergence.
-  test('4. simultaneous open converges to one link on each side', () {
-    // Initiator A: owns its outbound; also receives an inbound (B raced a dial)
-    // → closes the inbound, keeps outbound.
-    final a = W5Ownership();
-    a.onLinkUp(
-        leaseId: lease, handle: 'A->B', role: W5Role.outbound,
-        iAmInitiator: true);
-    final aInbound = a.onLinkUp(
-        leaseId: lease, handle: 'B->A', role: W5Role.inbound,
-        iAmInitiator: true);
-    expect(aInbound, [(W5Op.close, 'B->A')]);
-    expect(a.ownedHandle(lease), 'A->B');
-    expect(a.linkCount(lease), 1);
-
-    // Non-initiator B: owns the inbound (A->B); its own raced outbound (B->A)
-    // is closed. Both sides therefore keep the A->B connection — converged.
+  // Scenario 2 (core fix): inbound-only peer does not dial after a token flip.
+  test('inbound-only peer stands down after ordering reverses', () {
     final b = W5Ownership();
-    b.onLinkUp(
-        leaseId: lease, handle: 'B->A', role: W5Role.outbound,
-        iAmInitiator: false); // non-keeper, held transiently
-    final bKeeper = b.onLinkUp(
-        leaseId: lease, handle: 'A->B', role: W5Role.inbound,
-        iAmInitiator: false);
-    expect(bKeeper, [(W5Op.owns, 'A->B'), (W5Op.close, 'B->A')]);
-    expect(b.ownedHandle(lease), 'A->B');
-    expect(b.linkCount(lease), 1);
+    // B receives an inbound link from A (A dialed B).
+    b.onControl(
+        handle: 'A->B', role: W5Role.inbound,
+        myCandidate: candB, peerCandidate: candA, peerAlias: aliasA);
+    expect(b.confirmedKeeperCount, 1);
+    b.onConfirmed(handle: 'A->B');
+    // A token flip would make B "want" to dial — but aliasA maps to the lease.
+    final fx = b.onDiscovered(alias: aliasA, wouldDial: true, candidateId: candB);
+    expect(fx, isEmpty);
+    expect(b.confirmedKeeperCount, 1);
   });
 
-  // Scenario 5: multiple peers → one link per distinct peer, never a global cap.
-  test('5. distinct peers get independent links (no global cap)', () {
+  // Discovery before any peer control data is known → dial (not stand down).
+  test('discovery of an unknown peer dials', () {
     final a = W5Ownership();
-    final leaseC = W5Lease.id(nonceA, 'cccc');
-    a.onLinkUp(
-        leaseId: lease, handle: 'A->B', role: W5Role.outbound,
-        iAmInitiator: true);
-    a.onLinkUp(
-        leaseId: leaseC, handle: 'A->C', role: W5Role.outbound,
-        iAmInitiator: true);
-    expect(a.activeEncounters, 2);
-    expect(a.linkCount(lease), 1);
-    expect(a.linkCount(leaseC), 1);
+    expect(a.onDiscovered(alias: 'newpeer', wouldDial: true, candidateId: candA),
+        [(W5Op.dial, candA)]);
   });
 
-  // Scenario 6: restoration rebuilds ownership without duplication.
-  test('6. re-registering the same handle/lease stays single', () {
+  // Simultaneous open: both role-reversed links converge to ONE keeper on each
+  // phone (the smaller link-candidate wins), regardless of event order.
+  for (final order in ['out-first', 'in-first']) {
+    test('simultaneous open converges to one keeper ($order)', () {
+      // A side: keeps its outbound A->B (candA is smaller).
+      final a = W5Ownership();
+      void aOut() => a.onControl(
+          handle: 'A->B', role: W5Role.outbound,
+          myCandidate: candA, peerCandidate: candB, peerAlias: aliasB);
+      void aIn() => a.onControl(
+          handle: 'B->A', role: W5Role.inbound,
+          myCandidate: candA, peerCandidate: candB, peerAlias: aliasB);
+      if (order == 'out-first') {
+        aOut();
+        aIn();
+      } else {
+        aIn();
+        aOut();
+      }
+      expect(a.confirmedKeeperCount, 1);
+      expect(a.keeperOf(candA), 'A->B'); // the smaller-candidate link kept
+
+      // B side keeps the SAME physical link (A->B, inbound on B).
+      final b = W5Ownership();
+      void bOut() => b.onControl(
+          handle: 'B->A', role: W5Role.outbound,
+          myCandidate: candB, peerCandidate: candA, peerAlias: aliasA);
+      void bIn() => b.onControl(
+          handle: 'A->B', role: W5Role.inbound,
+          myCandidate: candB, peerCandidate: candA, peerAlias: aliasA);
+      if (order == 'out-first') {
+        bOut();
+        bIn();
+      } else {
+        bIn();
+        bOut();
+      }
+      expect(b.confirmedKeeperCount, 1);
+      expect(b.keeperOf(candA), 'A->B');
+    });
+  }
+
+  // A healthy keeper survives token rotations and lower-valued duplicate
+  // candidates (sticky).
+  test('confirmed keeper is not displaced by rotation or a smaller candidate',
+      () {
     final a = W5Ownership();
-    a.onLinkUp(
-        leaseId: lease, handle: 'A->B', role: W5Role.outbound,
-        iAmInitiator: true);
-    // Restoration replays the same link.
-    final again = a.onLinkUp(
-        leaseId: lease, handle: 'A->B', role: W5Role.outbound,
-        iAmInitiator: true);
-    expect(again, [(W5Op.owns, 'A->B')]);
-    expect(a.linkCount(lease), 1);
+    a.onControl(
+        handle: 'A->B', role: W5Role.outbound,
+        myCandidate: candA, peerCandidate: candB, peerAlias: aliasB);
+    a.onConfirmed(handle: 'A->B');
+    // Peer rotates its token in-band.
+    a.onAliasRoll(leaseId: candA, newAlias: 'aliasB2');
+    // A later inbound link arrives with a SMALLER candidate — must be closed,
+    // never adopted, because the keeper is confirmed.
+    final fx = a.onControl(
+        handle: 'late', role: W5Role.inbound,
+        myCandidate: candA, peerCandidate: 'cand-0', peerAlias: 'aliasB2');
+    expect(fx, [(W5Op.close, 'late')]);
+    expect(a.keeperOf(candA), 'A->B');
+    expect(a.confirmedKeeperCount, 1);
+    // A discovery under EITHER the new or previous alias maps to the lease.
+    expect(a.leaseForAlias('aliasB2'), candA);
+    expect(a.leaseForAlias(aliasB), candA); // previous kept during grace
   });
 
-  // Scenario 7: disconnect/reconnect retains or re-establishes correctly.
-  test('7. keeper disconnect ends encounter; reconnect re-owns', () {
+  // Identifier churn on either role → no second keeper (alias maps to lease).
+  test('identifier churn does not create a second keeper', () {
     final a = W5Ownership();
-    a.onLinkUp(
-        leaseId: lease, handle: 'A->B', role: W5Role.outbound,
-        iAmInitiator: true);
-    final down = a.onLinkDown(handle: 'A->B');
-    expect(down, [(W5Op.ended, lease)]);
-    expect(a.activeEncounters, 0);
-    // Reconnect.
-    final re = a.onLinkUp(
-        leaseId: lease, handle: 'A->B2', role: W5Role.outbound,
-        iAmInitiator: true);
-    expect(re, [(W5Op.owns, 'A->B2')]);
-    expect(a.linkCount(lease), 1);
+    a.onControl(
+        handle: 'h1', role: W5Role.outbound,
+        myCandidate: candA, peerCandidate: candB, peerAlias: aliasB);
+    a.onConfirmed(handle: 'h1');
+    // The peer reappears under a churned CB handle but the SAME alias.
+    expect(a.onDiscovered(alias: aliasB, wouldDial: true, candidateId: 'x'),
+        isEmpty);
+    expect(a.confirmedKeeperCount, 1);
   });
 
-  // Scenario 8: lease expiry / dropPeer erase encounter identity.
-  test('8. teardown closes the link and erases the encounter', () {
+  // Disconnect/reconnect inside grace resumes; after grace erases.
+  test('reconnect within grace resumes; after grace the encounter ends', () {
     final a = W5Ownership();
-    a.onLinkUp(
-        leaseId: lease, handle: 'A->B', role: W5Role.outbound,
-        iAmInitiator: true);
-    final td = a.onTeardown(leaseId: lease);
-    expect(td, [(W5Op.close, 'A->B'), (W5Op.ended, lease)]);
-    expect(a.activeEncounters, 0);
-    expect(a.ownedHandle(lease), isNull);
+    a.onControl(
+        handle: 'h1', role: W5Role.outbound,
+        myCandidate: candA, peerCandidate: candB, peerAlias: aliasB);
+    a.onConfirmed(handle: 'h1');
+    a.onLinkDown(handle: 'h1');
+    // still in grace → an expiry check before reconnect would end it, but a
+    // reconnect first re-owns the SAME lease.
+    a.onControl(
+        handle: 'h2', role: W5Role.outbound,
+        myCandidate: candA, peerCandidate: candB, peerAlias: aliasB);
+    expect(a.keeperOf(candA), 'h2');
+    // A late grace-expiry now no-ops (keeper present).
+    expect(a.onGraceExpiry(leaseId: candA), isEmpty);
+
+    // Now drop and let grace expire.
+    a.onLinkDown(handle: 'h2');
+    expect(a.onGraceExpiry(leaseId: candA), [(W5Op.ended, candA)]);
+    expect(a.activeLeases, 0);
   });
 
-  // Scenario 9: beacon OFF clears ownership safely.
-  test('9. beacon off tears every encounter down', () {
+  // Multiple peers → one keeper each, never a global cap.
+  test('two and three distinct peers get independent keepers', () {
     final a = W5Ownership();
-    final leaseC = W5Lease.id(nonceA, 'cccc');
-    a.onLinkUp(
-        leaseId: lease, handle: 'A->B', role: W5Role.outbound,
-        iAmInitiator: true);
-    a.onLinkUp(
-        leaseId: leaseC, handle: 'A->C', role: W5Role.outbound,
-        iAmInitiator: true);
+    a.onControl(
+        handle: 'hb', role: W5Role.outbound,
+        myCandidate: 'ca', peerCandidate: 'zb', peerAlias: 'ab');
+    a.onControl(
+        handle: 'hc', role: W5Role.outbound,
+        myCandidate: 'cc', peerCandidate: 'zc', peerAlias: 'ac');
+    a.onControl(
+        handle: 'hd', role: W5Role.outbound,
+        myCandidate: 'cd', peerCandidate: 'zd', peerAlias: 'ad');
+    expect(a.activeLeases, 3);
+    expect(a.confirmedKeeperCount, 3);
+  });
+
+  // Beacon OFF and explicit teardown erase leases/aliases.
+  test('beacon off tears every encounter down', () {
+    final a = W5Ownership();
+    a.onControl(
+        handle: 'hb', role: W5Role.outbound,
+        myCandidate: 'ca', peerCandidate: 'zb', peerAlias: 'ab');
+    a.onControl(
+        handle: 'hc', role: W5Role.outbound,
+        myCandidate: 'cc', peerCandidate: 'zc', peerAlias: 'ac');
     final off = a.onBeaconOff();
     expect(off.where((e) => e.$1 == W5Op.ended).length, 2);
-    expect(a.activeEncounters, 0);
+    expect(a.activeLeases, 0);
+    expect(a.leaseForAlias('ab'), isNull);
   });
 
-  // Scenario 10: malformed / stale / replayed / conflicting messages fail safe.
-  group('10. hostile/degenerate inputs fail safely', () {
-    test('unknown link-down is a no-op', () {
-      expect(W5Ownership().onLinkDown(handle: 'ghost'), isEmpty);
-    });
-    test('teardown of unknown lease is a no-op', () {
-      expect(W5Ownership().onTeardown(leaseId: 'ghost'), isEmpty);
-    });
-    test('dial that never links up is cleared (does not wedge future dials)',
-        () {
+  test('teardown closes keeper and erases identity', () {
+    final a = W5Ownership();
+    a.onControl(
+        handle: 'h1', role: W5Role.outbound,
+        myCandidate: candA, peerCandidate: candB, peerAlias: aliasB);
+    expect(a.onTeardown(leaseId: candA), [(W5Op.close, 'h1'), (W5Op.ended, candA)]);
+    expect(a.activeLeases, 0);
+  });
+
+  // Hostile/degenerate inputs fail safe.
+  group('degenerate inputs fail safely', () {
+    test('unknown link-down / teardown / grace are no-ops', () {
       final a = W5Ownership();
-      expect(a.onDiscovered(leaseId: lease, iAmInitiator: true),
-          [(W5Op.dial, '')]);
-      // Still negotiating → a repeat discover does not double-dial.
-      expect(a.onDiscovered(leaseId: lease, iAmInitiator: true), isEmpty);
-      // Watchdog fires → clears the negotiating encounter.
-      expect(a.onDialFailed(leaseId: lease), [(W5Op.ended, lease)]);
-      // Now a fresh dial is allowed again.
-      expect(a.onDiscovered(leaseId: lease, iAmInitiator: true),
-          [(W5Op.dial, '')]);
+      expect(a.onLinkDown(handle: 'ghost'), isEmpty);
+      expect(a.onTeardown(leaseId: 'ghost'), isEmpty);
+      expect(a.onGraceExpiry(leaseId: 'ghost'), isEmpty);
+      a.onAliasRoll(leaseId: 'ghost', newAlias: 'z'); // no throw
     });
-    test('a conflicting duplicate keeper-role link is closed, never adopted',
-        () {
+    test('dial that never handshakes is cleared', () {
       final a = W5Ownership();
-      a.onLinkUp(
-          leaseId: lease, handle: 'first', role: W5Role.outbound,
-          iAmInitiator: true);
-      final dup = a.onLinkUp(
-          leaseId: lease, handle: 'second', role: W5Role.outbound,
-          iAmInitiator: true);
-      expect(dup, [(W5Op.close, 'second')]);
-      expect(a.ownedHandle(lease), 'first'); // oldest healthy kept
+      expect(a.onDiscovered(alias: aliasB, wouldDial: true, candidateId: candA),
+          [(W5Op.dial, candA)]);
+      expect(a.onDiscovered(alias: aliasB, wouldDial: true, candidateId: candA),
+          isEmpty); // engaged, no double-dial
+      expect(a.onDialFailed(candidateId: candA), [(W5Op.ended, candA)]);
+      expect(a.onDiscovered(alias: aliasB, wouldDial: true, candidateId: candA),
+          [(W5Op.dial, candA)]); // dialable again
     });
   });
 
-  // Scenarios 11–14 (diagnostic settings cannot affect production; in-place
-  // upgrade retains legitimate restoration; diagnostic run/session id reset;
-  // diagnostic logging bounded/compiled-out) are BUILD/ISOLATION-level, verified
-  // by the #8 compile-time isolation + Phase-1 harness fixes, not by this unit
-  // surface. Tracked in issue #8.
+  // Property test: randomized event orderings for ONE encounter must never
+  // yield more than one confirmed keeper, and must not throw.
+  test('property: randomized orderings keep ≤1 keeper per encounter', () {
+    for (var seed = 0; seed < 200; seed++) {
+      final rng = Random(seed);
+      final a = W5Ownership();
+      // Two role-reversed links for one encounter, plus noise events.
+      final events = <void Function()>[
+        () => a.onControl(
+            handle: 'A->B', role: W5Role.outbound,
+            myCandidate: candA, peerCandidate: candB, peerAlias: aliasB),
+        () => a.onControl(
+            handle: 'B->A', role: W5Role.inbound,
+            myCandidate: candA, peerCandidate: candB, peerAlias: aliasB),
+        () => a.onControl(
+            handle: 'dup', role: W5Role.inbound,
+            myCandidate: candA, peerCandidate: 'cand-0', peerAlias: aliasB),
+        () => a.onConfirmed(handle: 'A->B'),
+        () => a.onConfirmed(handle: 'B->A'),
+        () => a.onAliasRoll(leaseId: candA, newAlias: 'rot'),
+        () => a.onLinkDown(handle: 'dup'),
+      ]..shuffle(rng);
+      for (final e in events) {
+        e();
+      }
+      // Invariant: at most one confirmed keeper for the single encounter.
+      expect(a.confirmedKeeperCount, lessThanOrEqualTo(1),
+          reason: 'seed $seed violated the one-keeper invariant');
+    }
+  });
 }

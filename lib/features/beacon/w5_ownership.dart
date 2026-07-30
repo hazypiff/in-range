@@ -1,187 +1,244 @@
-/// Encounter-lease ownership state machine — the #7 fix, as a pure Dart spec.
+/// Encounter-lease ownership state machine — the #7 fix, as a pure Dart
+/// reference **oracle** (production authority is native Swift; CoreBluetooth
+/// restores state before Dart attaches — see docs/W5_ENCOUNTER_LEASE_DESIGN.md).
 ///
-/// No BLE / platform dependencies, so it is unit-testable in isolation
-/// (`test/features/beacon/w5_ownership_test.dart`). This is the **authoritative
-/// specification** of the ownership semantics; the production iOS W5 path
-/// (CoreBluetooth delegates in BackgroundBeacon.swift) acts as a thin adapter
-/// that implements these exact rules, with the platform callbacks translated
-/// into the events below. See docs/W5_ENCOUNTER_LEASE_DESIGN.md.
+/// No BLE/platform deps → unit- and property-testable in isolation.
 ///
-/// Invariant: **one logical link per encounter (leaseId), counted across BOTH
-/// inbound and outbound roles — while allowing simultaneous links to multiple
-/// distinct peers.** No global session cap; no durable peer identity.
+/// Invariant (asserted in tests): **per local encounter, after the convergence
+/// bound, at most ONE confirmed logical W5 keeper exists** — across inbound and
+/// outbound roles — while distinct peers each get their own keeper (no global
+/// cap).
+///
+/// Model (corrected per PR #9 review):
+///  - The initial dialer is chosen by the existing token ordering (unchanged);
+///    convergence — not the dial choice — enforces the invariant.
+///  - Each encounter attempt carries a random 128-bit `candidate`. The keeper is
+///    the first healthy link; during a genuine race the smaller **link
+///    candidate** wins on both sides. A confirmed keeper is sticky — later
+///    lower-valued candidates never displace it.
+///  - `leaseId` = the winning candidate; rotating tokens are `aliases` mapped to
+///    the lease and rolled in-band; previous alias kept for a bounded grace.
 library;
 
 enum W5Role { outbound, inbound }
 
-/// A side effect the adapter must apply. Records give structural equality,
-/// which keeps the tests declarative.
 enum W5Op { dial, close, owns, ended }
 
 typedef W5Effect = (W5Op op, String arg);
 
-/// Order-independent lease identity derived from two per-encounter nonces.
-///
-/// The reference uses a dependency-free order-independent combine; production
-/// truncates SHA-256 over `min(nonce)||max(nonce)` (design doc) so the id never
-/// reveals a nonce. The ownership logic is hash-agnostic — only determinism and
-/// symmetry matter, both of which hold here.
-class W5Lease {
-  static String id(String nonceA, String nonceB) {
-    final lo = nonceA.compareTo(nonceB) <= 0 ? nonceA : nonceB;
-    final hi = nonceA.compareTo(nonceB) <= 0 ? nonceB : nonceA;
-    return '$lo|$hi';
-  }
+String _minStr(String a, String b) => a.compareTo(b) <= 0 ? a : b;
 
-  /// Rotation-invariant initiator: the smaller nonce dials. Nonces are stable
-  /// for the encounter, so this cannot flip mid-encounter (fixes the leak).
-  static bool iAmInitiator(String myNonce, String peerNonce) =>
-      myNonce.compareTo(peerNonce) < 0;
-}
-
-class _Encounter {
-  _Encounter({required this.iAmInitiator});
-  final bool iAmInitiator;
-  String? keeper; // the single canonical link handle
-  final Set<String> redundant = {}; // links being converged away
-  W5Role get keeperRole => iAmInitiator ? W5Role.outbound : W5Role.inbound;
+class _Lease {
+  _Lease(this.id, this.aliasCurrent);
+  String id;
+  String? keeper; // the single confirmed/candidate keeper handle
+  String? keeperCandidate; // the link-candidate of the current keeper
+  bool confirmed = false; // keepalive flowing → sticky
+  bool inGrace = false;
+  String aliasCurrent;
+  String? aliasPrevious;
 }
 
 class W5Ownership {
-  final Map<String, _Encounter> _encounters = {};
-  final Map<String, String> _handleLease = {};
+  final Map<String, _Lease> _leases = {}; // leaseId -> lease
+  final Map<String, String> _aliasToLease = {}; // token alias -> leaseId
+  final Map<String, String> _handleToLease = {}; // link handle -> leaseId
 
-  int get activeEncounters => _encounters.length;
+  // ---- observation surface (tests) ----
+  int get activeLeases => _leases.length;
+  bool hasKeeper(String leaseId) => _leases[leaseId]?.keeper != null;
+  String? keeperOf(String leaseId) => _leases[leaseId]?.keeper;
+  String? leaseForAlias(String alias) => _aliasToLease[alias];
 
-  int linkCount(String leaseId) {
-    final e = _encounters[leaseId];
-    if (e == null) return 0;
-    return (e.keeper == null ? 0 : 1) + e.redundant.length;
+  /// Total confirmed keepers across all encounters — the thing the invariant
+  /// bounds to (one per distinct encounter).
+  int get confirmedKeeperCount =>
+      _leases.values.where((l) => l.keeper != null).length;
+
+  /// Discovery of an advert carrying [alias]. Dial iff not already engaged with
+  /// this encounter (alias unknown) AND the existing token order says dial.
+  /// [candidateId] is a fresh random the adapter will carry on the outbound.
+  List<W5Effect> onDiscovered({
+    required String alias,
+    required bool wouldDial,
+    required String candidateId,
+  }) {
+    if (_aliasToLease.containsKey(alias)) return const []; // engaged → stand down
+    if (!wouldDial) return const [];
+    if (!_leases.containsKey(candidateId)) {
+      _leases[candidateId] = _Lease(candidateId, alias); // provisional
+      _aliasToLease[alias] = candidateId;
+    }
+    return [(W5Op.dial, candidateId)];
   }
 
-  String? ownedHandle(String leaseId) => _encounters[leaseId]?.keeper;
-
-  /// Discovery: dial iff not already engaged with this encounter AND I am the
-  /// rotation-invariant initiator. An existing encounter (in ANY role) blocks a
-  /// dial — this is what stops the inbound-only peer from re-dialing.
-  List<W5Effect> onDiscovered({
-    required String leaseId,
-    required bool iAmInitiator,
+  /// The versioned control handshake completed on [handle]. [myCandidate] is our
+  /// encounter candidate; [peerCandidate]/[peerAlias] were learned from the
+  /// HELLO/HELLO_ACK exchange. Establishes or converges the lease.
+  List<W5Effect> onControl({
+    required String handle,
+    required W5Role role,
+    required String myCandidate,
+    required String peerCandidate,
+    required String peerAlias,
   }) {
-    if (_encounters.containsKey(leaseId)) return const [];
-    if (iAmInitiator) {
-      _encounters[leaseId] = _Encounter(iAmInitiator: true);
-      return const [(W5Op.dial, '')];
+    final effects = <W5Effect>[];
+    // The keeper-selection value: the candidate of whoever dialed THIS link
+    // (the central). Both peers compute this identically for both links.
+    final linkCandidate = role == W5Role.outbound ? myCandidate : peerCandidate;
+
+    // Sticky FIRST: if this peer's alias already maps to a CONFIRMED keeper,
+    // close the newcomer — never recompute the lease id or displace a healthy
+    // keeper (even if the newcomer carries a smaller candidate).
+    final existingId = _aliasToLease[peerAlias];
+    if (existingId != null) {
+      final l = _leases[existingId];
+      if (l != null && l.confirmed && l.keeper != null && l.keeper != handle) {
+        _handleToLease.remove(handle);
+        return [(W5Op.close, handle)];
+      }
+    }
+
+    final realId = _minStr(myCandidate, peerCandidate);
+    // Locate the encounter: by the peer's alias, else by our provisional lease.
+    String? id = existingId;
+    id ??= _leases.containsKey(myCandidate) ? myCandidate : null;
+
+    _Lease lease;
+    if (id != null && _leases.containsKey(id)) {
+      lease = _leases[id]!;
+      if (lease.id != realId) _rekey(lease, realId); // provisional → real
+    } else if (_leases.containsKey(realId)) {
+      lease = _leases[realId]!;
+    } else {
+      lease = _Lease(realId, peerAlias);
+      _leases[realId] = lease;
+    }
+    lease.inGrace = false;
+    _aliasToLease[peerAlias] = lease.id;
+    _handleToLease[handle] = lease.id;
+
+    if (lease.keeper == null) {
+      lease.keeper = handle;
+      lease.keeperCandidate = linkCandidate;
+      effects.add((W5Op.owns, handle));
+    } else if (lease.keeper == handle) {
+      effects.add((W5Op.owns, handle)); // idempotent replay / restoration
+    } else if (lease.confirmed) {
+      // Sticky: a healthy keeper is never displaced by a newcomer.
+      _handleToLease.remove(handle);
+      effects.add((W5Op.close, handle));
+    } else {
+      // Genuine race, neither confirmed yet → keep the smaller link candidate.
+      if (linkCandidate.compareTo(lease.keeperCandidate!) < 0) {
+        final old = lease.keeper!;
+        _handleToLease.remove(old);
+        effects.add((W5Op.close, old));
+        lease.keeper = handle;
+        lease.keeperCandidate = linkCandidate;
+        effects.add((W5Op.owns, handle));
+      } else {
+        _handleToLease.remove(handle);
+        effects.add((W5Op.close, handle));
+      }
+    }
+    return effects;
+  }
+
+  /// Keepalive is flowing on the keeper → mark it confirmed (now sticky).
+  void onConfirmed({required String handle}) {
+    final id = _handleToLease[handle];
+    final lease = id == null ? null : _leases[id];
+    if (lease != null && lease.keeper == handle) lease.confirmed = true;
+  }
+
+  /// Peer rotated its token in-band over the keeper: atomic current→previous.
+  void onAliasRoll({required String leaseId, required String newAlias}) {
+    final lease = _leases[leaseId];
+    if (lease == null) return;
+    final oldPrev = lease.aliasPrevious;
+    lease.aliasPrevious = lease.aliasCurrent;
+    lease.aliasCurrent = newAlias;
+    _aliasToLease[newAlias] = leaseId;
+    _aliasToLease[lease.aliasPrevious!] = leaseId; // keep previous during grace
+    if (oldPrev != null && oldPrev != lease.aliasCurrent) {
+      _aliasToLease.remove(oldPrev); // drop the alias two rotations ago
+    }
+  }
+
+  /// A link dropped. If it was the keeper, enter reconnect grace (caller arms a
+  /// 120 s timer → onGraceExpiry). A non-keeper drop is a no-op.
+  List<W5Effect> onLinkDown({required String handle}) {
+    final id = _handleToLease.remove(handle);
+    if (id == null) return const [];
+    final lease = _leases[id];
+    if (lease == null) return const [];
+    if (lease.keeper == handle) {
+      lease.keeper = null;
+      lease.keeperCandidate = null;
+      lease.confirmed = false;
+      lease.inGrace = true; // await reconnect within grace
     }
     return const [];
   }
 
-  /// A link resolved to [leaseId] carrying [role]. Converge to one canonical
-  /// link: keep the link in this device's keeper role, close the rest.
-  List<W5Effect> onLinkUp({
-    required String leaseId,
-    required String handle,
-    required W5Role role,
-    required bool iAmInitiator,
-  }) {
-    final e = _encounters.putIfAbsent(
-        leaseId, () => _Encounter(iAmInitiator: iAmInitiator));
-    final effects = <W5Effect>[];
-    if (role == e.keeperRole) {
-      if (e.keeper != null && e.keeper != handle) {
-        // Duplicate keeper-role link — close it, never adopt it (oldest wins).
-        effects.add((W5Op.close, handle));
-      } else {
-        _handleLease[handle] = leaseId;
-        e.keeper = handle;
-        effects.add((W5Op.owns, handle));
-        // Keeper arrived → close every non-keeper we were holding transiently.
-        for (final r in e.redundant) {
-          effects.add((W5Op.close, r));
-          _handleLease.remove(r);
-        }
-        e.redundant.clear();
-      }
-    } else {
-      // Non-keeper role: close immediately if the keeper already exists; else
-      // hold it transiently until the keeper arrives (then closed above).
-      if (e.keeper != null) {
-        effects.add((W5Op.close, handle));
-      } else {
-        _handleLease[handle] = leaseId;
-        e.redundant.add(handle);
-      }
-    }
-    return effects;
+  /// Reconnect grace elapsed with no keeper → erase the encounter.
+  List<W5Effect> onGraceExpiry({required String leaseId}) {
+    final lease = _leases[leaseId];
+    if (lease == null || lease.keeper != null || !lease.inGrace) return const [];
+    _erase(leaseId);
+    return [(W5Op.ended, leaseId)];
   }
 
-  /// A link dropped. If it was the keeper, the encounter is down (reconnect
-  /// re-establishes); if it was the last handle, the encounter ends.
-  List<W5Effect> onLinkDown({required String handle}) {
-    final leaseId = _handleLease.remove(handle);
-    if (leaseId == null) return const [];
-    final e = _encounters[leaseId];
-    if (e == null) return const [];
-    final effects = <W5Effect>[];
-    if (e.keeper == handle) {
-      e.keeper = null;
-      for (final r in e.redundant) {
-        effects.add((W5Op.close, r));
-        _handleLease.remove(r);
-      }
-      e.redundant.clear();
-    } else {
-      e.redundant.remove(handle);
-    }
-    if (e.keeper == null && e.redundant.isEmpty) {
-      _encounters.remove(leaseId);
-      effects.add((W5Op.ended, leaseId));
-    }
-    return effects;
-  }
-
-  /// Explicit teardown: lease expiry, dropPeer, pass/reject. Erases identity.
+  /// Explicit teardown: reject/pass (dropPeer), lease expiry. Erases identity.
   List<W5Effect> onTeardown({required String leaseId}) {
-    final e = _encounters.remove(leaseId);
-    if (e == null) return const [];
+    final lease = _leases[leaseId];
+    if (lease == null) return const [];
     final effects = <W5Effect>[];
-    if (e.keeper != null) {
-      effects.add((W5Op.close, e.keeper!));
-      _handleLease.remove(e.keeper);
-    }
-    for (final r in e.redundant) {
-      effects.add((W5Op.close, r));
-      _handleLease.remove(r);
-    }
+    if (lease.keeper != null) effects.add((W5Op.close, lease.keeper!));
+    _erase(leaseId);
     effects.add((W5Op.ended, leaseId));
     return effects;
   }
 
-  /// A dial that never linked up (connect watchdog). Clears a negotiating
-  /// encounter so it does not block future dials.
-  List<W5Effect> onDialFailed({required String leaseId}) {
-    final e = _encounters[leaseId];
-    if (e != null && e.keeper == null && e.redundant.isEmpty) {
-      _encounters.remove(leaseId);
-      return [(W5Op.ended, leaseId)];
+  /// A dial that never handshook (connect watchdog): clear the provisional
+  /// lease so it does not wedge future dials.
+  List<W5Effect> onDialFailed({required String candidateId}) {
+    final lease = _leases[candidateId];
+    if (lease != null && lease.keeper == null) {
+      _erase(candidateId);
+      return [(W5Op.ended, candidateId)];
     }
     return const [];
   }
 
-  /// Beacon off: erase all encounter state (deterministic effect order).
+  /// Beacon OFF: erase every encounter (deterministic effect order).
   List<W5Effect> onBeaconOff() {
     final effects = <W5Effect>[];
-    final ids = _encounters.keys.toList()..sort();
-    for (final leaseId in ids) {
-      final e = _encounters[leaseId]!;
-      if (e.keeper != null) effects.add((W5Op.close, e.keeper!));
-      for (final r in e.redundant) {
-        effects.add((W5Op.close, r));
-      }
-      effects.add((W5Op.ended, leaseId));
+    for (final id in _leases.keys.toList()..sort()) {
+      final l = _leases[id]!;
+      if (l.keeper != null) effects.add((W5Op.close, l.keeper!));
+      effects.add((W5Op.ended, id));
     }
-    _encounters.clear();
-    _handleLease.clear();
+    _leases.clear();
+    _aliasToLease.clear();
+    _handleToLease.clear();
     return effects;
+  }
+
+  // ---- internals ----
+  void _rekey(_Lease lease, String newId) {
+    _leases.remove(lease.id);
+    final old = lease.id;
+    _aliasToLease.updateAll((k, v) => v == old ? newId : v);
+    _handleToLease.updateAll((k, v) => v == old ? newId : v);
+    lease.id = newId;
+    _leases[newId] = lease;
+  }
+
+  void _erase(String leaseId) {
+    _leases.remove(leaseId);
+    _aliasToLease.removeWhere((k, v) => v == leaseId);
+    _handleToLease.removeWhere((k, v) => v == leaseId);
   }
 }

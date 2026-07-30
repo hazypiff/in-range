@@ -1,148 +1,206 @@
-# W5 encounter-lease — design (fix for #7)
+# W5 encounter-lease — design v2 (fix for #7)
 
-**Status:** DRAFT for hazypiff review. Not merged; `INRANGE_W5_LINKS` stays
-default OFF. This replaces the ephemeral-value ownership that produced the
-deterministic session leak proven on 2026-07-30.
+**Status:** DRAFT for hazypiff review (incorporates the PR #9 protocol review).
+Not merged; `INRANGE_W5_LINKS` stays default OFF. Native Swift is the production
+authority; the Dart state machine is a reference oracle only.
 
-## Problem (proven)
+## Problem (proven, #7)
 
-W5 link ownership is decided by **rotating values**, and the ownership map only
-models **outbound** sessions keyed by `CBPeripheral.identifier`:
+W5 ownership was decided by rotating values and modelled only outbound sessions
+keyed by `CBPeripheral.identifier`; inbound subscriptions were untracked. A token
+flip made an inbound-only peer re-dial → a second live W5 keeper. Reproduced
+deterministically 2026-07-30.
 
-1. tiebreak `mine < peerToken` — both tokens rotate, so "who dials" flips;
-2. dedup keyed by `CBPeripheral.identifier` — churns with BLE address rotation;
-3. inbound subscriptions are not represented in ownership state at all.
+## Invariant (assert this literally)
 
-Result: a phone re-dials a peer it already holds an inbound link with →
-duplicate logical link. Reproduced deterministically (#7).
+> **Per local encounter, after the convergence bound, at most ONE confirmed
+> logical W5 keeper is producing keepalive/RSSI work** — counted across inbound
+> (peripheral) and outbound (central) roles — while distinct real peers each get
+> their own keeper (no global cap).
 
-## Invariant (the target)
+"Logical keeper" ≠ "never open a transient GATT connection." A transient
+connect/probe to resolve identity is allowed; it must be closed before promoting
+another keepalive.
 
-> **One logical link per encounter, counted across BOTH inbound (peripheral)
-> and outbound (central) roles — while allowing simultaneous links to multiple
-> _distinct_ peers.**
+## What this lease is / is not
 
-Explicitly rejected: a global one-session cap (breaks multi-peer); a permanent
-peer id; any identity derived by reversing HMAC tokens or a shared client
-secret.
+- **Is:** deduplication / convergence metadata. Random 128-bit values, strict
+  parsing, TTLs, bounded state, replay-safe transitions.
+- **Is not:** authentication, or proof of identity/proximity. No spoof-resistance
+  is claimed. Token→identity resolution stays server-side/HMAC, untouched.
+  CoreBluetooth encryption/bonding is a separate, un-approved product decision.
 
-## Core idea — a bounded, encounter-scoped lease
+## Identifiers (kept distinct)
 
-When two devices form a W5 connection they negotiate an **encounter lease**: a
-short-lived, shared `leaseId` that both sides derive **identically** from a
-fresh nonce exchange over that GATT connection. Ownership is keyed on `leaseId`,
-not on the rotating token or the peripheral identifier.
+| Name | Source | Lifetime | Role |
+|---|---|---|---|
+| Rotating **token/alias** | app crypto (existing) | ~15 min | on-air public id; maps to a lease |
+| `CBPeripheral`/`CBCentral.identifier` | CoreBluetooth, **local** | OS-controlled | connection handle only — never protocol identity |
+| **candidateId** | random 128-bit per outbound attempt | until convergence | picks the keeper in a race |
+| **leaseId** | = winning candidateId | while link healthy (+grace) | the encounter anchor |
 
-### Encounter nonce
+`CBPeripheral.identifier` and `CBCentral.identifier` are **not** assumed equal
+across roles and are never used as identity. Address privacy rotation means the
+link-layer address is not a stable app identity.
 
-Each device holds an **encounter nonce** — 16 random bytes, generated locally,
-exposed via a new read-only GATT characteristic (`CA6E`). Properties:
+## Wire format — versioned bidirectional control (`CA6E`)
 
-- **Not** the rotating token, **not** derived from any durable identity or
-  secret. Pure random.
-- Stable for a bounded **lease TTL** (proposed 15 min, aligned to token
-  rotation), then rotated. An active lease renews **in-band** before expiry
-  (over the live connection), so a live encounter survives nonce rotation
-  without a new connection or a duplicate.
-- Regenerated on beacon-off→on. Never persisted across encounters → no
-  cross-encounter linkability beyond one TTL window.
+`CA6E` is a control characteristic supporting **central→peripheral write WITH
+response** and **peripheral→central notify** (an explicit two-way exchange).
+Correctness never depends on repeated reads (iOS reads fail with `CBError 6`;
+Herald). Acknowledged writes double as the keepalive link-layer traffic.
 
-### Lease id (order-independent)
+Message = `ver(1) | type(1) | len(2) | body(len)`, parsed strictly; unknown
+`ver`/`type`, bad `len`, or oversize (> `maximumWriteValueLength(for:.withResponse)`)
+→ dropped, connection closed. Types:
 
-Both connections between the same physical pair derive the same id:
+- `HELLO` — body: `candidateId(16) | currentAlias(16) | prevAlias(16, optional)`.
+  Sent by the dialing central right after connect (write-with-response).
+- `HELLO_ACK` — peripheral → central notify: `peerCandidateId(16) | peerAlias(16)`.
+- `ALIAS_ROLL` — either side over the keeper before/at token rotation:
+  `newAlias(16)`. Atomic: receiver moves current→previous, sets new current.
+- `BYE` — graceful teardown (optional; loss is handled by grace timer).
+
+Backward compatibility: a peer without `CA6E` (older build) → fall back to
+today's token-read behavior for that peer; no lease, unchanged, never broken.
+
+## Ownership state model (native authority)
+
+Per encounter (`leaseId`):
 
 ```
-leaseId = SHA256( min(nonceA, nonceB) || max(nonceA, nonceB) )   // truncated 128-bit
+state ∈ { negotiating, confirmed, grace }
+keeper: LinkHandle?              // the one confirmed logical keeper
+keeperCandidate: 16 bytes
+aliases: { current, previous? } // token→lease map, previous kept for grace
+pendingByHandle: handle → candidateId   // links mid-handshake
+leaseRefreshedAt, graceDeadline
 ```
 
-Because it is symmetric in the two nonces, A→B and B→A independently compute the
-**same** `leaseId`. No secret involved; the value is meaningful only for the
-lifetime of the encounter.
+Decisions are produced by a pure state machine; CB delegates are adapters that
+translate callbacks into events and apply the returned effects. The **authoritative**
+implementation is Swift in `BackgroundBeacon.swift` (restoration-safe); the Dart
+`W5Ownership` is a reference oracle/property-test surface with identical rules.
 
-### Rotation-invariant initiator
+### Establishment (who dials)
 
-"Who is primary" is derived from the **leaseId/nonces**, not the rotating token:
-the device with the lexicographically smaller nonce is the canonical initiator.
-Nonces are stable for the encounter, so the choice **cannot flip mid-encounter**
-— fixing defect (1).
+The initial dialer is chosen by the **existing token ordering** (unchanged). This
+may be "wrong" after a rotation — that is fine, because convergence, not the dial
+choice, enforces the invariant. Each dial mints a fresh `candidateId`.
 
-### Identifier-churn immunity
+### Convergence (first-healthy-wins; candidate only for true races)
 
-Ownership is keyed on `leaseId`. If the peer's advertising address (hence
-`CBPeripheral.identifier`) churns, its encounter nonce is unchanged → same
-`leaseId` → recognized as the **same** encounter → no duplicate dial — fixing
-defects (2) and (3), since inbound and outbound both map to one `leaseId`.
+- A discovery whose alias maps to an **existing lease** → stand down (no dial).
+- On `HELLO`/`HELLO_ACK` completing for a link, if a **confirmed** keeper already
+  exists for this encounter (alias match) → close the new link (do **not**
+  displace a healthy keeper, regardless of candidate value).
+- Only when two links are simultaneously `negotiating` (no confirmed keeper yet)
+  do both sides deterministically keep `min(candidateA, candidateB)` and close
+  the other. Both sides see both candidates (own outbound + peer's HELLO), so
+  they pick the same link → converge. The kept candidate becomes `leaseId`.
+- Once a keeper is `confirmed` (handshake done + keepalive flowing), later probes
+  / lower-valued candidates **never** displace it.
 
-## Ownership state machine (CoreBluetooth-independent)
+### Token rotation (in-band, atomic)
 
-The decision logic is a pure state machine (`W5Ownership`, no CoreBluetooth
-imports) driven by adapter events; the CB delegates are thin adapters. Tested
-directly (see `EncounterOwnershipTests`).
+Before/at rotation, the rotating side sends `ALIAS_ROLL(newAlias)` over the
+keeper. Receiver atomically rolls current→previous, current←new. A discovery
+under either alias maps to the lease during the bounded grace. No new keeper.
 
-**Per-encounter state** (keyed by `leaseId`):
-`negotiating → active(roles) → renewing → closed`, with `roles ⊆ {outbound,
-inbound}` and a set of live link handles.
+### Identifier churn / probe resolution
 
-**Events → decisions:**
+A discovery carrying a **known** current/previous alias maps straight to its
+lease → no dial. If iOS hides enough advert data that the mapping is unknown, a
+transient connect+`HELLO` resolves identity; if it is the same encounter, close
+the probe before promoting any keepalive.
 
-| Event | Decision |
-|---|---|
-| `discovered(peer, myNonce, peerNonce)` | `dial` iff no active/negotiating lease for `leaseId` **and** I am canonical initiator; else `standDown` |
-| `linkUp(handle, leaseId, role)` | if lease already active in any role → `converge(keep oldest healthy handle, close this)`; else register role |
-| `leaseRenew(leaseId)` | extend TTL in place; no new handle |
-| `linkDown(handle)` | drop handle; if none remain → `endEncounter(leaseId)` |
-| `leaseExpired \| dropPeer \| beaconOff \| pass/reject` | `teardown(all handles of leaseId)`, erase encounter identity |
+### Lifetime / teardown (ratified)
 
-**Convergence (simultaneous open):** both A and B may dial before either lease
-completes. Both links resolve to the same `leaseId`; each side deterministically
-keeps the handle where it is the canonical initiator and closes the other →
-exactly one link, no oscillation.
+- Refresh `leaseRefreshedAt` on **confirmed W5 traffic** (acked write / RSSI).
+- **Erase immediately** on beacon OFF, explicit reject/pass (`dropPeer`), or
+  terminal teardown.
+- On **unplanned loss**, enter `grace` for **120 s** (configurable, tested); a
+  reconnect within grace resumes the same lease; expiry erases it.
+- The 15-min value governs **alias rotation only** — never forced teardown of a
+  healthy encounter. No RSSI/battery/model/changing-token value re-weights
+  ownership mid-encounter.
 
-## Behaviors covered
+## Sequence diagrams
 
-- **Multiple peers:** N distinct peers → N distinct `leaseId`s → N links. The
-  invariant is per-encounter, never global.
-- **Restoration/reconnect:** on CB state restoration, restored handles re-key by
-  re-reading the peer nonce and recomputing `leaseId`; ownership rebuilds exactly
-  once. A reconnect within TTL renegotiates or resumes the same `leaseId`.
-- **Teardown:** lease expiry, `dropPeer`, beacon-off, and pass/reject all erase
-  the encounter identity; no durable peer id survives.
+**Initial establishment**
+```
+A(central)                         B(peripheral)
+  connect ───────────────────────────▶
+  HELLO{candA, aliasA} (write w/resp) ▶
+                        ◀─ HELLO_ACK{candB, aliasB} (notify)
+  leaseId = min(candA,candB); map aliasB→lease; keeper=A→B; confirmed
+  keepalive (acked writes) ◀────────────▶  (refreshes lease)
+```
 
-## Versioning / compatibility
+**Simultaneous open (race)**
+```
+A→B (candA) negotiating        B→A (candB) negotiating
+both learn {candA,candB} via HELLO/HELLO_ACK on both links
+both keep min(candA,candB); both close the other → 1 keeper
+```
 
-- New characteristic `CA6E` + a 1-byte `leaseVersion` prefix in the nonce
-  exchange. A peer without `CA6E` (old build) → fall back to today's behavior
-  for that peer (no lease; unchanged) so an in-flight rollout never breaks.
-- `INRANGE_W5_LINKS` stays OFF by default; the lease path is only active when W5
-  is on.
+**Token rotation**
+```
+keeper A↔B healthy
+B rotates: A ◀─ ALIAS_ROLL{aliasB'} (over keeper)
+A: previous←aliasB, current←aliasB'  (atomic); keeper unchanged
+```
+
+**Identifier churn / probe**
+```
+A sees advert with aliasB (known) → maps to lease → stand down
+   else: transient connect + HELLO → same encounter? close probe : new lease
+```
+
+**Restoration (before Dart)**
+```
+iOS relaunch → willRestoreState: restored peripherals/centrals/subscriptions
+native rebuilds ownership from persisted {leaseId, keeperRole, aliases};
+re-attaches keeper; no duplicate promoted. Dart attaches later, reads state.
+```
+
+**Reconnect grace / expiry**
+```
+keeper lost → grace(120s). reconnect≤120s: resume lease. else: erase.
+```
+
+## Restoration / persistence (native)
+
+CoreBluetooth may wake a suspended app and restore central/peripheral state
+**before** app logic runs. So the lease map (`leaseId, keeperRole/handle mapping,
+aliases, grace deadlines`) persists natively and is rebuilt in
+`willRestoreState`/`didUpdateState`, so a restored keeper or restored inbound
+subscription is re-owned exactly once with no duplicate. (This is also why #8
+must isolate *diagnostic* restoration from *production* restoration — production
+restoration stays enabled.)
+
+## Versioning / migration
+
+`ver` byte on every control message. Unknown version → treat peer as
+lease-incapable (fall back to token-read). Rollout-safe: mixed old/new fleets
+never deadlock; an old peer simply gets today's behavior.
 
 ## Privacy / threat analysis
 
-- **Replay:** nonces are per-encounter random and short-lived; a replayed nonce
-  only lets an attacker join the *current* TTL window of a device physically in
-  range — no lasting identity, no cross-session correlation. Lease renewal
-  requires liveness on the existing connection.
-- **Spoofing:** the lease grants no authorization by itself — it only dedups
-  links. Token/identity resolution stays exactly as today (server-side,
-  HMAC-based), untouched. A spoofed nonce at worst causes a redundant
-  connect/close, bounded by `connectRetryFloor`.
-- **Cross-encounter linkability:** the encounter nonce is random, per-encounter,
-  TTL-bounded, never persisted → it is **not** a durable identifier. This is
-  strictly better than keying on `CBPeripheral.identifier` (which the OS may hold
-  stable longer than we want).
+- **Replay:** candidates/aliases are random and short-lived; a replayed message
+  only lets an in-range attacker cause a redundant connect/close within the
+  current window (bounded by `connectRetryFloor`), no lasting identity.
+- **Spoofing:** the lease authorizes nothing; it only dedups links. A spoofed
+  `HELLO` at worst forces a transient probe that is closed. No spoof-resistance
+  claimed.
+- **Linkability:** `leaseId` = random candidate, per-encounter, erased on
+  teardown/grace-expiry; aliases are the existing rotating tokens. Strictly
+  better than keying on `CBPeripheral.identifier`.
 
-## Open decisions for review (hazypiff)
+## Open decisions (still hazypiff's call)
 
-1. **Lease TTL / nonce lifetime** — 15 min (token-aligned) balances linkability
-   vs. renewal churn. Shorter = less linkable, more renewals.
-2. **`CA6E` vs. reusing `CA7E`** — separate characteristic is cleaner but adds a
-   GATT round-trip on connect; could piggyback the nonce on the existing token
-   read.
-3. **Renewal cadence** and what a failed renewal does (grace vs. immediate
-   teardown).
-4. Whether the initiator rule should also weight signal/role to minimize
-   connect churn.
-
-## Non-goals (out of scope, per brief)
-
-Fully-suspended cold discovery, wake-net, and unrelated CBError reconnect work.
+1. `CA6E` message set final shape / whether `prevAlias` rides `HELLO`.
+2. Grace = 120 s start — tune against real reconnect latency.
+3. Alias-roll timing relative to token rotation (lead time).
+4. Whether an unknown-advert probe is worth the connect cost vs. waiting for the
+   next alias-bearing advert.
