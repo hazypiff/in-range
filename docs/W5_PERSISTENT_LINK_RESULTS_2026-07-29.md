@@ -10,13 +10,19 @@ numbers corrected in the follow-up commit). Native events →
 `Documents/bb_wake_log.txt`; RSSI → `rssi_log(id,at_ms,correlation_id,
 rssi,power)`. RSSI is a **proximity proxy, not calibrated distance.**
 
-**Timestamp discipline (important):** `at_ms` is Unix epoch **UTC** ms.
-An initial audit query bounded the window with SQLite `strftime('%s','…
-22:25:00')`, which parses the literal as **UTC** → 18:25 EDT, and wrongly
-pulled 82 afternoon samples. Corrected: the both-locked test ran
-**22:24:57–22:34:57 America/New_York (EDT, UTC−4)** = epoch
-1785378297–1785378897. All ranging counts below use that epoch window and
-exclude post-unlock live-scan samples.
+**Timestamp discipline (important):** `at_ms` is Unix epoch **UTC** ms. A
+plain `BETWEEN` assigns no timezone — the bug was the *bound*: an initial
+query built it with `strftime('%s','2026-07-29 22:25:00')`, and that date
+function parses a naive literal as **UTC** (= 18:25 EDT), so it pulled 82
+unrelated afternoon samples. Corrected by bounding with **raw epoch
+integers**: the test ran **22:24:57–22:34:57 EDT (UTC−4) = 2026-07-30
+02:24:57–02:34:57 UTC = epoch 1785378297–1785378897** (ms:
+1785378297000–1785378897000). All counts below use those raw integer
+bounds against the native-capture `at_ms`, and exclude post-unlock
+live-scan samples (196 on the 14). No separate insertion-time column
+exists; capture-while-locked→flush is instead evidenced by each phone's
+flushed rows forming a **single contiguous `id` block** (bulk-inserted at
+foreground flush) carrying in-window `at_ms`.
 
 ## What W5 is
 
@@ -56,15 +62,26 @@ B then locked; both asleep for the 22:24:57–22:34:57 EDT window:
   - iPhone 14: **143 samples**, 22:25:00→22:34:54, 14–15/min every minute,
     max intersample gap 4.3 s (edge gaps: start→first 3.3 s, last→end
     2.4 s), median −39 dBm (−43..−35).
-  - iPhone 13: **110 samples**, 22:27:17→22:34:53 (started ~2 min into the
-    window — as Phone A it formed its own central→B link later), then
-    11–15/min, max gap 4.3 s, median −38 dBm (−45..−35).
+  - iPhone 13: **110 samples**, 22:27:17→22:34:53, then 11–15/min, max
+    intersample gap 4.3 s, median −38 dBm (−45..−35). **140-second
+    leading-edge coverage gap** (window start 22:24:57 → first sample
+    22:27:17): this is a full-window accounting item, NOT an intersample
+    dropout. Cause **undetermined** — notably it is NOT a late connection
+    (13's wake log shows continuous beats from `w5-beat-25` at 22:24:59)
+    and NOT buffer eviction (13's flushed block is 401 rows, under the
+    500 `bufferCap`, and pre-window samples survived). readRSSI samples
+    simply did not materialize for ~2 min despite active beats; not root-
+    caused.
 - Post-unlock live-scan samples (196 on the 14) were excluded from the
   counts above.
 
-This proves **awake-discovers-already-locked → both-locked link holds AND
-both phones collect RSSI proximity measurements of each other** — for one
-cold-established session.
+**Defensible statement:** for one cold-established session, both locked
+phones independently collected RSSI proximity measurements from the other.
+The iPhone 14 covered the full ten-minute window; the iPhone 13 was
+observed from 22:27:17 onward, giving ~8 minutes of overlapping
+bidirectional collection. After each phone's collection began, both
+directions had maximum intersample gaps of 4.3 s. RSSI is a proximity
+proxy, not calibrated distance.
 
 ## Explicitly NOT proven
 
