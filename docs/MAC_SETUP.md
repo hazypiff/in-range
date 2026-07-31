@@ -34,7 +34,30 @@ no iOS-specific server step. You are only building a second client.
 
 ## 1. Repo + secrets on the Mac
 
-- Clone/pull the repo.
+- Clone/pull the repo, then **check out the walk freeze tag — not a branch**:
+  ```bash
+  git fetch --all --tags
+  git checkout calib-freeze-2026-07-27          # = 0582633
+  git rev-parse --short HEAD                    # must print: 0582633
+  ```
+  **Do not build from `main`** (it predates the Tier-1 BLE work, so the
+  Android-advertiser → iPhone-observer direction is still broken there) **and do
+  not build from the branch tip** `feat/ble-prior-art-tier1` — commits after the
+  freeze are documentation only, but the build stamp comes from `HEAD`, so a tip
+  build gets a different `versionName` and both S9s plus the iPhone would no longer
+  be on one freeze.
+
+  Both S9s are already installed and verified at `0582633`, and the iOS build is
+  green at that exact commit on macos-latest. Building the iPhone from the same tag
+  is what keeps the walk one freeze.
+
+  If `git status` is not clean, the stamp gets a `-dirty` suffix and
+  `walk_capture.sh` **refuses it** — commit or stash before building.
+
+- **`flutter pub get` will change plugin versions on first run.** `flutter_blue_plus`
+  is pinned to `1.36.8` (licensing — see the comment in `pubspec.yaml`; do not bump
+  it to 2.x). Expect it to resolve `flutter_blue_plus_darwin 7.0.3`. If CocoaPods
+  complains after that, `cd ios && pod install --repo-update`.
 - **Copy `.env` from the Linux box.** It is **gitignored** — a clone will NOT
   have it, and without it the app has no backend config. It holds the prod
   Supabase URL + publishable key.
@@ -96,16 +119,35 @@ connected iPhone, and runs. For a two-phone BLE test where both phones roam, use
 - **Permissions never prompt (instant deny)** → the `permission_handler` macros in
   `ios/Podfile` handle this and are already set; if you ever regenerate the
   Podfile, keep the `GCC_PREPROCESSOR_DEFINITIONS` block.
-- **BLE won't scan/advertise with the phone locked** → expected today; the iOS
-  locked-phone stack is designed and ready to wire — see
-  `docs/IOS_BACKGROUND_BLE_WIRING.md` (W2 is the Mac/Xcode piece to start
-  with). Until it lands: **foreground BLE works now** — keep the iPhone screen
-  awake with the app open during walks. (The Androids do NOT need this — their
-  foreground service runs locked-in-pocket.)
-- **New Swift files (`WifiAssistPlugin.swift`, `BackgroundLocationCoordinator.swift`)**
-  have not been compiled on the Linux box. Run the build script once before any
-  field test to catch Xcode/Swift/API errors early; `flutter test` does not
-  cover native code.
+- **`--release` aborts with calibration logging on.** `scripts/build-install-ios.sh:35`
+  refuses a release build while `INRANGE_CALIB_SCAN=true` (it would ship a build
+  that logs GPS fixes and the whole advert stream to the console). For a walk that
+  is exactly what you want, so confirm it deliberately:
+  ```bash
+  INRANGE_FIELD_WALK=1 bash scripts/build-install-ios.sh --release
+  ```
+- **~~BLE won't scan/advertise with the phone locked~~ — STALE, ignore.** The
+  locked-phone stack has shipped: `BackgroundBeacon.swift` does state restoration,
+  `BGAppRefreshTask` chaining, GATT-read-wake scan bursts and buffered sightings.
+  The 2026-07-27 walk is a **locked-bridge** walk — keeping the screen awake would
+  defeat its purpose. Do not follow the old "keep the iPhone screen awake" advice.
+- **The Swift now compiles in CI**, on macos-latest — no warnings in
+  `BackgroundBeacon.swift`. But CI produces an **unsigned** IPA that cannot be
+  installed, so the Mac is still the only way to get it onto a phone.
+
+## Verify BOTH BLE directions before departing
+
+They are separate code paths and one can work while the other is dead — which is
+exactly what shipped broken until 2026-07-26. Test each explicitly and name them
+unambiguously:
+
+| Direction | Path | How to confirm |
+| --- | --- | --- |
+| **Android advertiser → iPhone observer** | The iPhone's `CBCentralManager` reads the token out of the Android's **manufacturer data** (`BackgroundBeacon.swift`, the B1 branch). This is the one that was broken outright — the iPhone saw the marker, found no service-UUID token, and fell into a connect that could never succeed | iPhone shows the Android as an encounter; iPhone log records a sighting with no connect attempt |
+| **iPhone advertiser → Android observer** | The Android scans, and for a **backgrounded** iPhone the token is not on the air at all — it comes from a native GATT read (`GattTokenReader.kt`), which is also the only thing that wakes the sleeping iPhone into scanning back | Android logcat shows `W3 GATT … → connecting` then a 16-byte read |
+
+Run both **foreground and locked**. A pass in one direction says nothing about the
+other, and a foreground pass says nothing about locked.
 
 ---
 

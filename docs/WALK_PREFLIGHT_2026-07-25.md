@@ -1,5 +1,30 @@
 # S22 ↔ iPhone Locked-Bridge Walk — Operator Checklist
 
+> # 🛑 STOP — read this before anything below it
+>
+> **Everything from here to the ADDENDUM describes the 2026-07-25 walk: a different
+> pair (S22 ↔ iPhone 15 Plus), a different freeze (`calib-freeze-2026-07-24b` =
+> `1a41d59`), and a different plan.** It is kept because its measured findings and
+> its "what this walk does NOT measure" section are still true *of that build*.
+>
+> **For the 2026-07-27 walk, jump to the ADDENDUM at the end of this file.**
+>
+> Four rules in the body below are **reversed** for today, and following them would
+> stage the wrong walk:
+>
+> | Body says | Today |
+> | --- | --- |
+> | Freeze is `calib-freeze-2026-07-24b` → `1a41d59` | Freeze is **`calib-freeze-2026-07-27` = `0582633`** |
+> | "Do not cut or install a build from current `main`" | A new freeze **was** cut; both S9s are already on it and `prep` passes |
+> | "This walk does not need … a new freeze" | It needed one — the old freeze is 9 commits behind the installed builds |
+> | Pair is S22 ↔ iPhone 15 Plus | Today's Android side is **two S9s running different A/B arms** |
+>
+> Do **not** bulk-edit the body to match today. Its verification claims
+> (`readRSSI` absent, `beacon_service.dart:60` hardcoding `AdvertPower.high`,
+> migration `0056` undeployed) were verified **at `1a41d59`** and several are no
+> longer true at the current freeze. Rewriting them would turn a true historical
+> record into a false current one.
+
 Walk date: 2026-07-25
 
 Freeze (installed apps): `calib-freeze-2026-07-24b` → `1a41d59`
@@ -508,3 +533,163 @@ accepting a cloud sequence gap.
 - [ ] no migration, cloud upload, residency, or new phone build introduced
 
 If any box is false, fix it at the desk rather than at the trailhead.
+
+---
+
+# ⚠️ ADDENDUM 2026-07-26/27 — the build changed. Read before using the gate above.
+
+## The freeze is `calib-freeze-2026-07-27` = `0582633`
+
+Verified at that exact commit: both S9s installed and `walk_capture.sh prep` passing
+with **no** `ALLOW_BUILD_MISMATCH`, `flutter analyze` clean, `flutter test` 183/183,
+Android unit tests 45/45, and the iOS build green on macos-latest.
+
+**If you rebuild, build from the tag, not from `HEAD`.**
+
+```bash
+git checkout calib-freeze-2026-07-27      # NOT the branch tip
+```
+
+Commits after the freeze are **documentation only** (verified: three files, all
+under `docs/`), but the build stamp comes from `git rev-parse --short HEAD`, so a
+rebuild from the branch tip produces a different `versionName` and `prep` will
+abort every phone. That abort is correct — it is the guard doing its job, not a
+bug to override.
+
+**The last box of the departure gate — "no migration, cloud upload, residency, or new
+phone build introduced" — is now FALSE by design.** Four commits landed on
+`feat/ble-prior-art-tier1` after this checklist was written. The gate's build
+references (`07-24b` → `1a41d59`) are stale. **Re-validate the build; do not assume
+it is the one this checklist was written against.**
+
+No migration, cloud-upload or residency change was introduced. The change is
+BLE-layer only, plus one dependency pin.
+
+## What changed, and why it matters to the walk
+
+| Change | Walk impact |
+| --- | --- |
+| **iPhone→Android detection restored** (B1) | This direction was **broken outright** before: the iPhone saw the Android's CAFE marker, found no token, and fell through to a connect that could never succeed. If prior walks showed a dead iPhone→Android direction, **that is expected and now fixed** — do not re-diagnose it |
+| **Scan restart 25 min → 8 min** | Shorter scan sessions. Segment boundaries move |
+| **`androidLegacy: true`** | Android now scans legacy-1M only, not both PHYs |
+| **Scan retry backoff + 4-per-30 s token bucket** | A scan-start storm can no longer silently wedge the radio |
+| **adapterState listener** | A Bluetooth toggle now recovers in seconds instead of up to 25 min |
+| **`discoverable` is now composed** | It means advertise-up **AND** receive-path-alive. The badge can now go false with no user action — that is correct, not a bug |
+| **flutter_blue_plus pinned 2.3.10 → 1.36.8** | Licensing. Behaviourally equivalent for our six entry points, but it **is** a different plugin build — worth one smoke check that scanning works before departure |
+
+## Instruments — set these or the walk produces less than it should
+
+All of W1–W9 are gated behind `AppConfig.calibScanMode`. **If calib mode is off, you
+get no instrument data at all.** Confirm it is on for both devices.
+
+**W8 is the one not to skip:** it logs scan-start outcomes and the gap since the last
+scan result *of any kind*. Before this, a dead scanner and an empty room were
+indistinguishable, so a silent scan death mid-walk read as "nobody around" and
+contaminated the whole segment. **Read W8 first when reviewing the data** — if it
+shows a scan death, every other number from that segment is suspect.
+
+**W10:** record the exact OS build of every device, per segment. Android's scan
+demotion is 30 min on ≤13 but **10 min on 14+**, where a filtered client is
+downgraded *stickily* for the scanner's life. Two handsets on one walk can therefore
+run at materially different duty cycles, and their RSSI and detection-rate numbers
+are **not comparable**. `platformInfo` on the `io.inrange.app/advert` channel returns
+this without touching the radio.
+
+## Run one leg on the OLD scan arm
+
+Two of the shipped changes were originally meant to be measured before shipping, and
+shipping them removed the baseline. To recover it, put **one handset on the old arm**:
+
+```
+INRANGE_SCAN_LEGACY_ONLY=false     # old: scan both PHYs
+INRANGE_SCAN_RESTART_MINUTES=25    # old cadence
+```
+
+Defaults are `true` / `8`. The resolved arm is logged unconditionally at every scan
+start (`BLE scan arm: …`), so any log can be attributed after the fact. Without an
+old-arm leg, W9's gap histogram can only show gaps are *absent* — equally consistent
+with the fix working and with the effect never existing on your hardware.
+
+### ⚠️ The two flags need DIFFERENT hardware. Do not set both on one phone.
+
+Verified 2026-07-26: the attached S9s (`SM-G960U`) report **API 29 / Android 10**.
+
+| Flag | Valid on | Why |
+| --- | --- | --- |
+| `INRANGE_SCAN_LEGACY_ONLY` | **S9 (API 29)** ✅ | `setLegacy`/`setPhy` are guarded at API ≥ 26, so dual-PHY scanning is active. And these are **Samsungs** — exactly the vendor upstream #938 reports the 4-second time-slicing on. The S9 is the *right* phone for this arm |
+| `INRANGE_SCAN_RESTART_MINUTES` | **S22 only** (API 34+) | AOSP's 10-minute demotion is **Android 14+**. On API 29 the timeout is **30 minutes**, which the old 25-minute restart already beat — so an 8-vs-25 comparison on an S9 measures **nothing**. The sticky `LOW_POWER` downgrade also only exists on 14+ |
+
+So: run the **legacy-only A/B across two S9s** (one `true`, one `false`, same room,
+same leg), and run the **restart-cadence A/B on the S22** if you have a second 14+
+handset — otherwise skip that arm and record that it was not testable, rather than
+collecting a null result and reading it as a pass.
+
+Also note API 29 puts the S9s in AOSP's **`last_wins`** bucket for duplicate Apple
+manufacturer ADs (`appleBlobSemantics`, from `platformInfo`), so any D3 offset
+observed on an S9 is the last-AD-wins case and does **not** transfer to Android 15+.
+
+## ⛔ Do not enable these during the walk
+
+- **The native Android scanner** (`AdvertScanner.startScan`). It is a **second**
+  `BluetoothLeScanner` registration; it charges the AOSP 5-per-30 s quota, and AOSP
+  delivers *no callback at all* when that trips. `platformInfo` and `classify` are
+  radio-free and safe. There is a banner in the file.
+- **The Apple overflow-bit scan filter.** `apple_overflow_bit.dart` is tested and
+  ready but deliberately unwired — it needs a bench measurement first (see
+  [`POST_WALK_UPGRADE_QUEUE.md`](POST_WALK_UPGRADE_QUEUE.md) item 1).
+
+## Pulling the data
+
+- Android calib logs: as per the existing capture flow in this document.
+- **iOS: `bb_wake_log.txt`** via USB pull from the app's Documents directory. It now
+  also carries central- and peripheral-manager state transitions (`central-state:…`,
+  `periph-state:…`), change-only. This is the only record of whether iOS granted
+  background windows at all, separately from whether anything was seen during them.
+
+## After the walk
+
+[`POST_WALK_UPGRADE_QUEUE.md`](POST_WALK_UPGRADE_QUEUE.md) is the ordered queue, with
+the specific instrument that gates each item. Three entries can be **cancelled** by
+the data rather than built — check those gates before writing code.
+
+## ⚠️ Decide before departure: local/USB data, or cloud correlation?
+
+**Verified against production 2026-07-27** via the Management API (read-only):
+
+```
+select max(version), count(*) from supabase_migrations.schema_migrations
+  -> max_version = 0055, n = 55
+select proname from pg_proc where proname in ('claim_token','claim_token_batch')
+  -> claim_token          (claim_token_batch is ABSENT)
+```
+
+So `supabase/migrations/0060_batch_token_preclaim.sql` **is not on prod.** Per-token
+`claim_token` still exists, so foreground claims work once there is network — but
+**batch preclaim will fail even with network restored**, so locked/background native
+slots cannot be preclaimed and cloud correlation across later slots is broken.
+
+Compounding it: **the attached S9s currently have no IP route and no DNS.** WiFi is
+enabled and airplane mode off, but they are associated with no AP, so
+`claim_token_batch` fails DNS lookup before it can fail on the missing RPC.
+
+**Two honest options. Pick one now and write it in the journal:**
+
+| Option | What you get | What it costs |
+| --- | --- | --- |
+| **Local / USB-only calibration walk** (recommended today) | Every W1–W10 instrument, RSSI distributions, gap histograms, the A/B arms, both BLE directions. All of it lands in logcat and SQLite and comes off over USB | No cloud correlation of later token slots. Accept and record it |
+| **Cloud-backed correlation** | Dark-phone correlation across slots | Requires applying migrations 0056–0060 to **production**, plus restoring the hotspot. **Do not rush five migrations onto prod on walk morning** — that is how a walk day becomes an incident |
+
+The instrument data this walk exists to collect does **not** depend on cloud. The
+default should be the local walk unless someone deliberately decides otherwise.
+
+## CI note
+
+The GitHub Actions **account owning the private repo (`inrangeai`) is under a
+spending-limit block** — jobs there start and die in ~3 s with a billing annotation,
+which looks like a code failure and is not. Public-repo minutes are free and work:
+
+```bash
+gh workflow run ios-build.yml --repo hazypiff/in-range --ref feat/ble-prior-art-tier1
+```
+
+That is how the current iOS build was verified green (run `30224433032`).

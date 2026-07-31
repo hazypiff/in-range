@@ -5,6 +5,7 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 
 /// WiFi AP scanning for venue co-location (docs/PROXIMITY_ALGORITHM.md L1).
@@ -41,6 +42,16 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+        // D5/D3 raw-advert classification (AdvertScanner.kt + AdvertParser.kt).
+        // Control on the MethodChannel, one-way advert stream on the
+        // EventChannel — a round trip per advert would not survive a crowded
+        // room. Inert until Dart calls startScan; classify/platformInfo need no
+        // radio at all.
+        val advertScanner = AdvertScanner(applicationContext)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, AdvertScanner.METHOD_CHANNEL)
+            .setMethodCallHandler { call, result -> advertScanner.handle(call, result) }
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, AdvertScanner.EVENT_CHANNEL)
+            .setStreamHandler(advertScanner)
     }
 
     /// Latest cached scan results: [{bssid, ssid, rssi, freq, ageMs}]
