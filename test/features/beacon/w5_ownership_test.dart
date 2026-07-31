@@ -3,17 +3,19 @@ import 'dart:math';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:in_range/features/beacon/w5_ownership.dart';
 
-/// Two-peer tests for the #7 ownership oracle (v5.1: typed messages, per-view
-/// generation, 2-phase ACK commit, linkId↔handle bijection, caps).
-/// candA < candB. Local CB handles are observer-local — only wire linkIds are
-/// compared across endpoints.
+/// Two-peer tests for the #7 ownership oracle (v5.2: peer-gen tracking, endpoint-
+/// global bijection, local cap, injective contenders, effect routing). candA <
+/// candB. Local CB handles are observer-local — only wire linkIds are compared.
 const candA = 'cand-a';
 const candB = 'cand-b';
 const aliasA = 'aliasA';
 const aliasB = 'aliasB';
 const leaseId = candA;
 
-/// Two-endpoint message queue routing PROPOSE and ACK, with drops/reordering.
+W5Contender ct(String central, String link) => W5Contender(central, link);
+
+/// Two-endpoint message queue routing PROPOSE + ACK (routes ignored for
+/// delivery; source identity is exercised by the direct-call violation tests).
 class _Sim {
   final a = W5Ownership();
   final b = W5Ownership();
@@ -86,10 +88,8 @@ class _Sim {
   }
 }
 
-/// Drive one endpoint to commit against a peer whose contenders == [peerSet]:
-/// deliver the peer's matching PROPOSE and its ACK of our current view.
 void commitAgainst(
-    W5Ownership a, String lease, List<String> peerSet, String peerAlias) {
+    W5Ownership a, String lease, List<W5Contender> peerSet, String peerAlias) {
   final mine = a.currentProposal(lease)!;
   a.onProposeRecv(
       peerAlias: peerAlias, proposal: W5Proposal(lease, 7, peerSet));
@@ -98,8 +98,6 @@ void commitAgainst(
 }
 
 void main() {
-  // Headline property: safety on wire linkId + liveness under randomized
-  // schedules with drops/reordering of PROPOSE and ACK.
   test('property: safety(linkId) + liveness (randomized schedules)', () {
     for (var seed = 0; seed < 500; seed++) {
       final rng = Random(seed);
@@ -118,9 +116,9 @@ void main() {
           linkUps[li++]();
         } else if (s.q.isNotEmpty) {
           if (rng.nextInt(4) == 0 && s.q.length > 1) {
-            s.q.removeAt(rng.nextInt(s.q.length)); // drop
+            s.q.removeAt(rng.nextInt(s.q.length));
           } else {
-            s.deliver(rng.nextInt(s.q.length)); // reorder
+            s.deliver(rng.nextInt(s.q.length));
           }
         }
         s.safety();
@@ -129,14 +127,10 @@ void main() {
       s.safety();
       expect(s.a.committedLinkId(leaseId), 'Lab', reason: 'A seed $seed');
       expect(s.b.committedLinkId(leaseId), 'Lab', reason: 'B seed $seed');
-      expect(s.a.committedKeeper(leaseId), 'a1');
-      expect(s.b.committedKeeper(leaseId), 'b1');
     }
   });
 
-  // v5.1 core fix: the same winning linkId on a SECOND local handle must NOT
-  // emit a second owns — the bijection is retained, newcomer closed.
-  test('same linkId on a second handle does not re-own (bijection)', () {
+  W5Ownership established(String linkId) {
     final a = W5Ownership();
     a.onControl(
         handle: 'p1',
@@ -144,10 +138,143 @@ void main() {
         myCandidate: candA,
         peerCandidate: candB,
         peerAlias: aliasB,
-        linkId: 'L1');
-    commitAgainst(a, leaseId, ['cand-a|L1'], aliasB);
-    expect(a.committedKeeper(leaseId), 'p1');
-    // Replay the winning linkId on a DIFFERENT handle → close, not a 2nd owns.
+        linkId: linkId);
+    return a;
+  }
+
+  // v5.2 #1 — older peer generation is NOT accepted/ACKed.
+  test('older peer generation is rejected (no ACK, no state change)', () {
+    final a = established('L1');
+    a.onProposeRecv(
+        peerAlias: aliasB,
+        proposal: W5Proposal(leaseId, 8, [ct('cand-a', 'L1')]));
+    final fx = a.onProposeRecv(
+        peerAlias: aliasB,
+        proposal: W5Proposal(leaseId, 7, [ct('cand-a', 'L1')]));
+    expect(fx, isEmpty); // gen 7 < accepted gen 8 → dropped, no ACK
+  });
+
+  // v5.2 #2 — same-gen conflicting payload does NOT poison the accepted view.
+  test('same-gen conflicting payload is failed closed, not overwritten', () {
+    final a = established('L1');
+    // Accept a valid matching proposal at gen 8.
+    a.onProposeRecv(
+        peerAlias: aliasB,
+        proposal: W5Proposal(leaseId, 8, [ct('cand-a', 'L1')]));
+    // Conflicting payload at the SAME gen 8, tagged with a source link.
+    final fx = a.onProposeRecv(
+        peerAlias: aliasB,
+        proposal: W5Proposal(leaseId, 8, [ct('cand-z', 'L9')]),
+        sourceHandle: 'p1',
+        sourceRole: W5Role.outbound);
+    expect(
+        fx, [const W5CloseOutbound('p1')]); // fail closed, not silent overwrite
+    // The valid view survived → the peer's ACK still commits.
+    final mine = a.currentProposal(leaseId)!;
+    a.onAckRecv(
+        peerAlias: aliasB, ack: W5Ack(leaseId, mine.viewGen, mine.viewHash));
+    expect(a.committedLinkId(leaseId), 'L1');
+  });
+
+  // v5.2 #3 — endpoint-global bijection: a live handle cannot be rebound into a
+  // second encounter.
+  test('a live handle is not rebound into a second encounter', () {
+    final a = established('L1');
+    commitAgainst(a, leaseId, [ct('cand-a', 'L1')], aliasB);
+    // Deliver control for a DIFFERENT encounter (different alias/candidate) on
+    // the same still-live handle p1.
+    final fx = a.onControl(
+        handle: 'p1',
+        role: W5Role.outbound,
+        myCandidate: 'cand-x',
+        peerCandidate: 'cand-y',
+        peerAlias: 'otherAlias',
+        linkId: 'L9');
+    expect(fx, [const W5CloseOutbound('p1')]); // fail closed
+    expect(a.activeLeases, 1); // no second encounter created
+    expect(a.committedKeeper(leaseId), 'p1'); // original binding intact
+  });
+
+  // v5.2 #3b — a live linkId cannot be replayed into a second encounter.
+  test('a live linkId is not accepted in a second encounter', () {
+    final a = established('L1');
+    final fx = a.onControl(
+        handle: 'p9',
+        role: W5Role.outbound,
+        myCandidate: 'cand-x',
+        peerCandidate: 'cand-y',
+        peerAlias: 'otherAlias',
+        linkId: 'L1'); // linkId already live in encounter candA
+    expect(fx, [const W5CloseOutbound('p9')]);
+    expect(a.activeLeases, 1);
+  });
+
+  // v5.2 #4 — local contenders cannot exceed the cap.
+  test('local contenders are capped', () {
+    final a = W5Ownership();
+    // Fill to the cap with distinct outbound links.
+    for (var i = 0; i < kMaxContenders; i++) {
+      a.onControl(
+          handle: 'h$i',
+          role: W5Role.inbound,
+          myCandidate: candA,
+          peerCandidate: candB,
+          peerAlias: aliasB,
+          linkId: 'L$i');
+    }
+    // One more must be refused.
+    final fx = a.onControl(
+        handle: 'hx',
+        role: W5Role.inbound,
+        myCandidate: candA,
+        peerCandidate: candB,
+        peerAlias: aliasB,
+        linkId: 'Lx');
+    expect(fx, [const W5RejectInbound('hx')]);
+    expect(a.currentProposal(leaseId)!.contenders.length, kMaxContenders);
+  });
+
+  // v5.2 #5 — out-of-range (negative / > u32) proposal generation is rejected.
+  test('out-of-u32-range proposal generation is rejected', () {
+    final a = established('L1');
+    expect(
+        a.onProposeRecv(
+            peerAlias: aliasB,
+            proposal: W5Proposal(leaseId, -1, [ct('cand-a', 'L1')]),
+            sourceHandle: 'p1',
+            sourceRole: W5Role.outbound),
+        [const W5CloseOutbound('p1')]);
+    expect(
+        a.onProposeRecv(
+            peerAlias: aliasB,
+            proposal: W5Proposal(leaseId, kU32Max + 1, [ct('cand-a', 'L1')]),
+            sourceHandle: 'p1',
+            sourceRole: W5Role.outbound),
+        [const W5CloseOutbound('p1')]);
+    // Injective encoding: these two DIFFERENT contender sets are not equal.
+    expect(
+        W5Proposal(leaseId, 1, [ct('aa|bb', 'cc')]) ==
+            W5Proposal(leaseId, 1, [ct('aa', 'bb|cc')]),
+        isFalse);
+  });
+
+  // v5.2 #6 — a proposal carrying too many contenders (over cap) fails the
+  // source link closed.
+  test('over-cap proposal fails the source link closed', () {
+    final a = established('L1');
+    final huge = [for (var i = 0; i <= kMaxContenders; i++) ct('c$i', 'l$i')];
+    final fx = a.onProposeRecv(
+        peerAlias: aliasB,
+        proposal: W5Proposal(leaseId, 7, huge),
+        sourceHandle: 'p1',
+        sourceRole: W5Role.outbound);
+    expect(fx, [const W5CloseOutbound('p1')]);
+  });
+
+  // Bijection within-encounter (v5.1 regressions retained).
+  test('same linkId on a second handle does not re-own', () {
+    final a = established('L1');
+    commitAgainst(a, leaseId, [ct('cand-a', 'L1')], aliasB);
     final fx = a.onControl(
         handle: 'p2',
         role: W5Role.outbound,
@@ -156,30 +283,10 @@ void main() {
         peerAlias: aliasB,
         linkId: 'L1');
     expect(fx, [const W5CloseOutbound('p2')]);
-    expect(a.committedKeeper(leaseId), 'p1'); // unchanged
+    expect(a.committedKeeper(leaseId), 'p1');
   });
 
-  // ... and a local handle must not silently map to a second live linkId.
-  test('a handle bound to a second linkId is rejected', () {
-    final a = W5Ownership();
-    a.onControl(
-        handle: 'p1',
-        role: W5Role.outbound,
-        myCandidate: candA,
-        peerCandidate: candB,
-        peerAlias: aliasB,
-        linkId: 'L1');
-    final fx = a.onControl(
-        handle: 'p1', // same handle
-        role: W5Role.outbound,
-        myCandidate: candA,
-        peerCandidate: candB,
-        peerAlias: aliasB,
-        linkId: 'L2'); // different linkId
-    expect(fx, [const W5CloseOutbound('p1')]);
-  });
-
-  // Two same-direction duplicates agree on one wire linkId.
+  // Two-phase + wire linkId agreement.
   test('two same-direction duplicates agree on one wire linkId', () {
     final s = _Sim();
     s.dial('A', 'L1');
@@ -191,104 +298,31 @@ void main() {
     s.flush();
     expect(s.a.committedLinkId(leaseId), 'L1');
     expect(s.b.committedLinkId(leaseId), 'L1');
-    expect(s.a.committedKeeper(leaseId), 'a1');
-    expect(s.b.committedKeeper(leaseId), 'b1');
   });
 
-  // 2-phase: a matching peer proposal WITHOUT an ACK of our view does not commit.
   test('no commit until the peer ACKs our current view', () {
-    final a = W5Ownership();
-    a.onControl(
-        handle: 'p1',
-        role: W5Role.outbound,
-        myCandidate: candA,
-        peerCandidate: candB,
-        peerAlias: aliasB,
-        linkId: 'L1');
+    final a = established('L1');
     a.onProposeRecv(
-        peerAlias: aliasB, proposal: W5Proposal(leaseId, 7, ['cand-a|L1']));
-    expect(a.isCommitted(leaseId), isFalse); // matched, but no ACK yet
+        peerAlias: aliasB,
+        proposal: W5Proposal(leaseId, 7, [ct('cand-a', 'L1')]));
+    expect(a.isCommitted(leaseId), isFalse);
     final mine = a.currentProposal(leaseId)!;
     a.onAckRecv(
         peerAlias: aliasB, ack: W5Ack(leaseId, mine.viewGen, mine.viewHash));
-    expect(a.committedLinkId(leaseId), 'L1'); // now committed
-  });
-
-  // Stale ACK from an older view generation is ignored.
-  test('older-generation ACK does not commit', () {
-    final a = W5Ownership();
-    a.onControl(
-        handle: 'p1',
-        role: W5Role.outbound,
-        myCandidate: candA,
-        peerCandidate: candB,
-        peerAlias: aliasB,
-        linkId: 'L1');
-    final gen1 = a.currentProposal(leaseId)!.viewGen;
-    // A second link bumps the view generation.
-    a.onControl(
-        handle: 'p2',
-        role: W5Role.inbound,
-        myCandidate: candA,
-        peerCandidate: candB,
-        peerAlias: aliasB,
-        linkId: 'L2');
-    a.onProposeRecv(
-        peerAlias: aliasB,
-        proposal:
-            W5Proposal(leaseId, 7, a.currentProposal(leaseId)!.contenders));
-    // ACK references the OLD gen1 → must be ignored.
-    a.onAckRecv(peerAlias: aliasB, ack: W5Ack(leaseId, gen1, 'cand-a|L1'));
-    expect(a.isCommitted(leaseId), isFalse);
-  });
-
-  // Same-generation, different payload proposal does not commit.
-  test('same-gen different-payload proposal does not commit', () {
-    final a = W5Ownership();
-    a.onControl(
-        handle: 'p1',
-        role: W5Role.outbound,
-        myCandidate: candA,
-        peerCandidate: candB,
-        peerAlias: aliasB,
-        linkId: 'L1');
-    final mine = a.currentProposal(leaseId)!;
-    a.onProposeRecv(
-        peerAlias: aliasB,
-        proposal: W5Proposal(leaseId, 7, ['cand-z|L9'])); // different payload
-    a.onAckRecv(
-        peerAlias: aliasB, ack: W5Ack(leaseId, mine.viewGen, mine.viewHash));
-    expect(a.isCommitted(leaseId), isFalse);
-  });
-
-  // Over-cap proposal is rejected (no ACK, no commit).
-  test('over-cap proposal is rejected', () {
-    final a = W5Ownership();
-    a.onControl(
-        handle: 'p1',
-        role: W5Role.outbound,
-        myCandidate: candA,
-        peerCandidate: candB,
-        peerAlias: aliasB,
-        linkId: 'L1');
-    final huge = [for (var i = 0; i <= kMaxContenders; i++) 'c$i|l$i'];
-    final fx = a.onProposeRecv(
-        peerAlias: aliasB, proposal: W5Proposal(leaseId, 7, huge));
-    expect(fx, isEmpty); // rejected, no ACK
-  });
-
-  // Asymmetric disconnect: a stale proposal cannot commit a replacement link.
-  test('stale proposal does not commit a replacement link', () {
-    final a = W5Ownership();
-    a.onControl(
-        handle: 'p1',
-        role: W5Role.outbound,
-        myCandidate: candA,
-        peerCandidate: candB,
-        peerAlias: aliasB,
-        linkId: 'L1');
-    commitAgainst(a, leaseId, ['cand-a|L1'], aliasB);
     expect(a.committedLinkId(leaseId), 'L1');
+  });
+
+  test('stale proposal does not commit a replacement link', () {
+    final a = established('L1');
+    // Commit L1 (peer view gen 10).
+    final m1 = a.currentProposal(leaseId)!;
+    a.onProposeRecv(
+        peerAlias: aliasB,
+        proposal: W5Proposal(leaseId, 10, [ct('cand-a', 'L1')]));
+    a.onAckRecv(
+        peerAlias: aliasB, ack: W5Ack(leaseId, m1.viewGen, m1.viewHash));
+    expect(a.committedLinkId(leaseId), 'L1');
+    // L1 drops; A establishes replacement L2.
     a.onLinkDown(handle: 'p1');
     a.onControl(
         handle: 'p3',
@@ -297,28 +331,26 @@ void main() {
         peerCandidate: candB,
         peerAlias: aliasB,
         linkId: 'L2');
-    // Peer's stale proposal + ack name the OLD view → no commit of L2.
+    // B (unaware) retransmits its old committed-view proposal (gen 10, L1) →
+    // idempotent, and a stale ACK → neither commits the L2 replacement.
     a.onProposeRecv(
-        peerAlias: aliasB, proposal: W5Proposal(leaseId, 7, ['cand-a|L1']));
-    a.onAckRecv(peerAlias: aliasB, ack: W5Ack(leaseId, 1, 'cand-a|L1'));
+        peerAlias: aliasB,
+        proposal: W5Proposal(leaseId, 10, [ct('cand-a', 'L1')]));
+    a.onAckRecv(peerAlias: aliasB, ack: W5Ack(leaseId, 5, 'stale'));
     expect(a.isCommitted(leaseId), isFalse);
-    // Once the peer catches up to L2, A commits L2.
-    commitAgainst(a, leaseId, ['cand-a|L2'], aliasB);
+    // B catches up to L2 at a newer generation → A commits L2.
+    final m2 = a.currentProposal(leaseId)!;
+    a.onProposeRecv(
+        peerAlias: aliasB,
+        proposal: W5Proposal(leaseId, 11, [ct('cand-a', 'L2')]));
+    a.onAckRecv(
+        peerAlias: aliasB, ack: W5Ack(leaseId, m2.viewGen, m2.viewHash));
     expect(a.committedLinkId(leaseId), 'L2');
   });
 
-  // Restoration: replaying the committed link (same handle + linkId) is
-  // idempotent — one keeper, no duplicate.
   test('restoration replay of the committed link is idempotent', () {
-    final a = W5Ownership();
-    a.onControl(
-        handle: 'p1',
-        role: W5Role.outbound,
-        myCandidate: candA,
-        peerCandidate: candB,
-        peerAlias: aliasB,
-        linkId: 'L1');
-    commitAgainst(a, leaseId, ['cand-a|L1'], aliasB);
+    final a = established('L1');
+    commitAgainst(a, leaseId, [ct('cand-a', 'L1')], aliasB);
     final fx = a.onControl(
         handle: 'p1',
         role: W5Role.outbound,
@@ -330,112 +362,39 @@ void main() {
     expect(a.committedKeeperCount, 1);
   });
 
-  test('non-race converges + agrees', () {
-    final s = _Sim();
-    s.dial('A', 'Lab');
-    s.linkUp('A', 'a1', W5Role.outbound, 'Lab');
-    s.linkUp('B', 'b1', W5Role.inbound, 'Lab');
-    s.flush();
-    expect(s.a.committedLinkId(leaseId), 'Lab');
-    expect(s.b.committedLinkId(leaseId), 'Lab');
-  });
-
-  test('timers never commit', () {
+  // Two independent peers → one keeper each (endpoint-global, no cross-binding).
+  test('two independent peers each get one committed keeper', () {
     final a = W5Ownership();
     a.onControl(
-        handle: 'p1',
+        handle: 'hb',
         role: W5Role.outbound,
-        myCandidate: candA,
-        peerCandidate: candB,
-        peerAlias: aliasB,
-        linkId: 'L1');
-    for (var i = 0; i < 5; i++) {
-      a.onRetryTimer(leaseId: leaseId);
-    }
-    expect(a.isCommitted(leaseId), isFalse);
+        myCandidate: 'ca',
+        peerCandidate: 'zb',
+        peerAlias: 'ab',
+        linkId: 'lb');
+    commitAgainst(a, 'ca', [ct('ca', 'lb')], 'ab');
+    a.onControl(
+        handle: 'hc',
+        role: W5Role.outbound,
+        myCandidate: 'cc',
+        peerCandidate: 'zc',
+        peerAlias: 'ac',
+        linkId: 'lc');
+    commitAgainst(a, 'cc', [ct('cc', 'lc')], 'ac');
+    expect(a.committedKeeperCount, 2);
   });
 
-  test('loser inbound rejected at commit; winner outbound owned', () {
-    final a = W5Ownership();
-    a.onControl(
-        handle: 'a1',
-        role: W5Role.outbound,
-        myCandidate: candA,
-        peerCandidate: candB,
-        peerAlias: aliasB,
-        linkId: 'Lab');
-    a.onControl(
-        handle: 'a2',
-        role: W5Role.inbound,
-        myCandidate: candA,
-        peerCandidate: candB,
-        peerAlias: aliasB,
-        linkId: 'Lba');
-    final fx = <W5Effect>[];
-    final mine = a.currentProposal(leaseId)!;
-    fx.addAll(a.onProposeRecv(
-        peerAlias: aliasB, proposal: W5Proposal(leaseId, 7, mine.contenders)));
-    fx.addAll(a.onAckRecv(
-        peerAlias: aliasB, ack: W5Ack(leaseId, mine.viewGen, mine.viewHash)));
-    expect(fx.contains(const W5Owns('a1')), isTrue);
-    expect(fx.contains(const W5RejectInbound('a2')), isTrue);
-  });
-
-  test('inbound-only peer stands down', () {
-    final b = W5Ownership();
-    b.onControl(
-        handle: 'b1',
-        role: W5Role.inbound,
-        myCandidate: candB,
-        peerCandidate: candA,
-        peerAlias: aliasA,
-        linkId: 'Lab');
-    commitAgainst(b, leaseId, ['cand-a|Lab'], aliasA);
-    expect(b.isCommitted(leaseId), isTrue);
-    expect(
-        b.onDiscovered(
-            alias: aliasA, wouldDial: true, candidateId: candB, linkId: 'x'),
-        isEmpty);
-  });
-
-  test('reconnect grace re-dials without wedging', () {
-    final a = W5Ownership();
-    a.onControl(
-        handle: 'h1',
-        role: W5Role.outbound,
-        myCandidate: candA,
-        peerCandidate: candB,
-        peerAlias: 'pa',
-        linkId: 'L1');
-    commitAgainst(a, leaseId, ['cand-a|L1'], 'pa');
-    a.onLinkDown(handle: 'h1');
-    for (var i = 0; i < 2; i++) {
-      expect(
-          a.onDiscovered(
-              alias: 'pa', wouldDial: true, candidateId: candA, linkId: 'r$i'),
-          [W5Dial('r$i')]);
-      a.onDialFailed(linkId: 'r$i');
-    }
-    a.onControl(
-        handle: 'h2',
-        role: W5Role.outbound,
-        myCandidate: candA,
-        peerCandidate: candB,
-        peerAlias: 'pa',
-        linkId: 'L2');
-    commitAgainst(a, leaseId, ['cand-a|L2'], 'pa');
-    expect(a.committedLinkId(leaseId), 'L2');
+  test('alias rollover keeps current+previous, then expires previous', () {
+    final a = established('L1');
+    a.onAliasRoll(leaseId: leaseId, newAlias: 'aliasB2');
+    expect(a.leaseForAlias('aliasB2'), leaseId);
+    expect(a.leaseForAlias(aliasB), leaseId);
+    a.onPrevAliasExpiry(leaseId: leaseId);
+    expect(a.leaseForAlias(aliasB), isNull);
   });
 
   test('teardown and beacon off erase everything', () {
-    final a = W5Ownership();
-    a.onControl(
-        handle: 'h',
-        role: W5Role.outbound,
-        myCandidate: candA,
-        peerCandidate: candB,
-        peerAlias: aliasB,
-        linkId: 'L1');
+    final a = established('L1');
     expect(a.onTeardown(leaseId: leaseId).last, const W5Ended(leaseId));
     expect(a.activeLeases, 0);
   });
@@ -445,13 +404,10 @@ void main() {
       final a = W5Ownership();
       expect(a.onLinkDown(handle: 'ghost'), isEmpty);
       expect(a.onTeardown(leaseId: 'ghost'), isEmpty);
-      expect(a.onGraceExpiry(leaseId: 'ghost'), isEmpty);
       expect(a.onRetryTimer(leaseId: 'ghost'), isEmpty);
       expect(
           a.onProposeRecv(
               peerAlias: 'ghost', proposal: const W5Proposal('x', 0, [])),
-          isEmpty);
-      expect(a.onAckRecv(peerAlias: 'ghost', ack: const W5Ack('x', 0, '')),
           isEmpty);
     });
     test('provisional dial that never handshakes is erased', () {

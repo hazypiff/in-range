@@ -1,38 +1,66 @@
 /// Encounter-lease ownership state machine — the #7 fix, as a pure Dart
-/// reference **oracle** that Swift mirrors (see docs/W5_ENCOUNTER_LEASE_DESIGN.md).
-/// Models ONE endpoint; distributed convergence is verified by a two-endpoint
-/// message-queue harness.
+/// **semantic** reference oracle (see docs/W5_ENCOUNTER_LEASE_DESIGN.md). It is
+/// NOT the binary wire codec: identifiers are opaque strings and `viewHash` is
+/// an injective canonical (length-prefixed) encoding, not the specified binary
+/// SHA-256. A separate codec-conformance suite (shared vectors, Dart + Swift)
+/// covers exact bytes. This oracle covers the ownership/agreement LOGIC that the
+/// native adapter mirrors.
 ///
-/// ## Identity
-/// - **encounter candidate** — random per endpoint per encounter attempt; the
-///   encounter anchor (`leaseId = min(candidateA, candidateB)` = `encounterId`).
-/// - **linkId** — random per OUTBOUND physical connection (central mints in
-///   HELLO, peripheral echoes in HELLO_ACK). Each endpoint keeps a strict
-///   **bijection linkId ↔ local handle**. Agreement is on contenders
-///   `(centralCandidate, linkId)`, never a reused candidate or a local handle.
+/// Identity: **encounter candidate** (per endpoint per attempt; anchors the
+/// encounter, `leaseId = encounterId = min(candidateA, candidateB)`) vs
+/// **linkId** (per outbound physical connection; central mints in HELLO,
+/// peripheral echoes in HELLO_ACK). A strict, **endpoint-global** bijection binds
+/// one live local handle to exactly one `(encounter, linkId)`.
 ///
-/// ## Commit = two-phase agreement bound to a view generation
-/// Each endpoint has a monotonic `viewGen`, bumped whenever its contender set
-/// changes (clearing any prior peer agreement). It PROPOSEs `{encounterId,
-/// viewGen, contenders}` and ACKs a peer proposal that matches its own set. It
-/// commits ONLY when the peer's current proposal matches its contenders AND the
-/// peer has ACKed its current `viewGen` — so a delayed proposal/ACK from an
-/// older view cannot commit a replacement link. Timers only RETRANSMIT.
+/// Commit = two-phase, generation-bound agreement (see the design). Timers only
+/// RETRANSMIT. All incoming messages are validated (u32 gen range, cap, injective
+/// contenders, encounter binding, generation monotonicity) and fail closed.
 library;
 
-const int kMaxContenders = 8; // bounded proposal payload
+const int kMaxContenders = 5; // reconciled with the ≤185-byte one-frame budget
+const int kU32Max = 0xFFFFFFFF;
 
-/// Canonical contender: `centralCandidate|linkId`.
-String w5Contender(String centralCandidate, String linkId) =>
-    '$centralCandidate|$linkId';
+/// A physical-link contender. `(central, linkId)` — compared/encoded injectively.
+class W5Contender implements Comparable<W5Contender> {
+  const W5Contender(this.central, this.linkId);
+  final String central;
+  final String linkId;
+  @override
+  int compareTo(W5Contender o) => central != o.central
+      ? central.compareTo(o.central)
+      : linkId.compareTo(o.linkId);
+  @override
+  bool operator ==(Object other) =>
+      other is W5Contender &&
+      other.central == central &&
+      other.linkId == linkId;
+  @override
+  int get hashCode => Object.hash(central, linkId);
+  String enc() => '${central.length}:$central:${linkId.length}:$linkId';
+}
+
+String w5ViewHash(List<W5Contender> contenders) =>
+    contenders.map((c) => c.enc()).join('|');
+
+typedef W5Route = ({String handle, W5Role role});
 
 class W5Proposal {
   const W5Proposal(this.encounterId, this.viewGen, this.contenders);
   final String encounterId;
   final int viewGen;
-  final List<String> contenders; // canonical, sorted, ≤ kMaxContenders
-  String get viewHash =>
-      contenders.join(','); // reference; prod: domain-sep SHA-256
+  final List<W5Contender> contenders; // canonical ascending, ≤ kMaxContenders
+  String get viewHash => w5ViewHash(contenders);
+  bool get validGen => viewGen >= 0 && viewGen <= kU32Max;
+  bool get validShape {
+    if (contenders.length > kMaxContenders) return false;
+    for (var i = 1; i < contenders.length; i++) {
+      if (contenders[i - 1].compareTo(contenders[i]) >= 0) {
+        return false; // sorted+unique
+      }
+    }
+    return validGen;
+  }
+
   @override
   bool operator ==(Object other) =>
       other is W5Proposal &&
@@ -46,7 +74,7 @@ class W5Proposal {
 class W5Ack {
   const W5Ack(this.encounterId, this.ackViewGen, this.viewHash);
   final String encounterId;
-  final int ackViewGen; // the peer viewGen being acknowledged
+  final int ackViewGen;
   final String viewHash;
   @override
   bool operator ==(Object other) =>
@@ -60,9 +88,6 @@ class W5Ack {
 
 enum W5Role { outbound, inbound }
 
-/// Typed effects the adapter applies. A peripheral cannot cancel a `CBCentral`:
-/// a losing/rejected INBOUND is `W5RejectInbound` (peer-central closes), a losing
-/// OUTBOUND is `W5CloseOutbound`. No keepalive/RSSI on a non-owned link.
 sealed class W5Effect {
   const W5Effect();
 }
@@ -105,23 +130,30 @@ class W5RejectInbound extends W5Effect {
   int get hashCode => handle.hashCode;
 }
 
+/// Broadcast a proposal over every negotiating link (`routes`).
 class W5SendPropose extends W5Effect {
-  const W5SendPropose(this.proposal);
+  const W5SendPropose(this.proposal, this.routes);
   final W5Proposal proposal;
+  final List<W5Route> routes;
   @override
   bool operator ==(Object other) =>
-      other is W5SendPropose && other.proposal == proposal;
+      other is W5SendPropose &&
+      other.proposal == proposal &&
+      _routesEq(other.routes, routes);
   @override
-  int get hashCode => proposal.hashCode;
+  int get hashCode => Object.hash(proposal, routes.length);
 }
 
+/// ACK is routed back over the specific link the proposal arrived on.
 class W5SendAck extends W5Effect {
-  const W5SendAck(this.ack);
+  const W5SendAck(this.ack, this.route);
   final W5Ack ack;
+  final W5Route route;
   @override
-  bool operator ==(Object other) => other is W5SendAck && other.ack == ack;
+  bool operator ==(Object other) =>
+      other is W5SendAck && other.ack == ack && other.route == route;
   @override
-  int get hashCode => ack.hashCode;
+  int get hashCode => Object.hash(ack, route);
 }
 
 class W5Ended extends W5Effect {
@@ -134,17 +166,26 @@ class W5Ended extends W5Effect {
   int get hashCode => leaseId.hashCode;
 }
 
+bool _routesEq(List<W5Route> a, List<W5Route> b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
+}
+
 class _Enc {
   _Enc(this.leaseId, this.aliasCurrent, this.myCandidate);
-  String leaseId; // = encounterId
+  String leaseId;
   final String myCandidate;
   final Map<String, (W5Role, String, String)> links =
       {}; // handle->(role,peer,linkId)
-  final Map<String, String> linkIdToHandle = {}; // bijection side
+  final Map<String, String> linkIdToHandle = {};
   final Set<String> pendingDials = {};
   int viewGen = 0;
   W5Proposal? peerProposal;
-  bool peerAckedMine = false; // peer ACKed my current viewGen
+  int? peerViewGen; // newest accepted peer generation
+  bool peerAckedMine = false;
   bool committed = false;
   bool inGrace = false;
   String aliasCurrent;
@@ -153,22 +194,25 @@ class _Enc {
   String _central(W5Role role, String peerCand) =>
       role == W5Role.outbound ? myCandidate : peerCand;
 
-  List<String> contenders() {
-    final c = <String>{};
-    links.forEach((_, v) => c.add(w5Contender(_central(v.$1, v.$2), v.$3)));
+  List<W5Contender> contenders() {
+    final c = <W5Contender>{};
+    links.forEach((_, v) => c.add(W5Contender(_central(v.$1, v.$2), v.$3)));
     for (final id in pendingDials) {
-      c.add(w5Contender(myCandidate, id));
+      c.add(W5Contender(myCandidate, id));
     }
     final l = c.toList()..sort();
     return l;
   }
 
-  String get viewHash => contenders().join(',');
+  String get viewHash => w5ViewHash(contenders());
+  List<W5Route> routes() =>
+      [for (final e in links.entries) (handle: e.key, role: e.value.$1)];
 
   (String linkId, String handle)? winner() {
-    String? best, bestLink, bestHandle;
+    W5Contender? best;
+    String? bestLink, bestHandle;
     links.forEach((handle, v) {
-      final c = w5Contender(_central(v.$1, v.$2), v.$3);
+      final c = W5Contender(_central(v.$1, v.$2), v.$3);
       if (best == null || c.compareTo(best!) < 0) {
         best = c;
         bestLink = v.$3;
@@ -182,7 +226,9 @@ class _Enc {
 class W5Ownership {
   final Map<String, _Enc> _enc = {};
   final Map<String, String> _aliasTo = {};
-  final Map<String, String> _handleTo = {};
+  final Map<String, String> _handleTo = {}; // ENDPOINT-GLOBAL handle -> leaseId
+  final Map<String, String> _linkIdToLease =
+      {}; // ENDPOINT-GLOBAL linkId -> leaseId
   final Map<String, String> _dialInFlight = {};
 
   // ---- observation ----
@@ -201,8 +247,6 @@ class W5Ownership {
   String? keeperOf(String leaseId) => _enc[leaseId]?.winner()?.$2;
   bool isCommitted(String leaseId) => _enc[leaseId]?.committed ?? false;
   String? leaseForAlias(String alias) => _aliasTo[alias];
-
-  /// This endpoint's current proposal (for tests / adapter introspection).
   W5Proposal? currentProposal(String leaseId) {
     final e = _enc[leaseId];
     return e == null ? null : W5Proposal(e.leaseId, e.viewGen, e.contenders());
@@ -218,6 +262,10 @@ class W5Ownership {
     final e = id == null ? null : _enc[id];
     if (e != null && !e.inGrace) return const [];
     if (!wouldDial) return const [];
+    // Cap: a dial that would exceed the contender budget is refused.
+    if (e != null && (e.contenders().length + 1) > kMaxContenders) {
+      return const [];
+    }
     if (e == null) {
       final ne = _Enc(candidateId, alias, candidateId);
       ne.pendingDials.add(linkId);
@@ -243,23 +291,37 @@ class W5Ownership {
     final realId = _minS(myCandidate, peerCandidate);
     var e = _locate(peerAlias, myCandidate);
 
+    // Endpoint-global bijection: a live handle or linkId already bound to a
+    // DIFFERENT encounter/link fails closed without mutating the binding.
+    final hLease = _handleTo[handle];
+    final lLease = _linkIdToLease[linkId];
+    final targetLease = e?.leaseId ?? realId;
+    if ((hLease != null && hLease != targetLease) ||
+        (lLease != null && lLease != targetLease) ||
+        (hLease == targetLease && lLease != null && lLease != targetLease)) {
+      return [_closeLoser(handle, role)];
+    }
+
     if (e != null && e.committed) {
       _aliasTo[peerAlias] = e.leaseId;
       final w = e.winner();
-      // Idempotence requires BOTH the winning linkId AND its bound handle.
       if (w != null && w.$1 == linkId && w.$2 == handle) {
         return [W5Owns(handle)];
       }
-      // linkId already live on another handle, or handle already bound to a
-      // different linkId → fail closed (keep the bijection), close newcomer.
-      if (e.linkIdToHandle.containsKey(linkId) || e.links.containsKey(handle)) {
+      // Same-encounter collision (linkId on another handle, or handle to another
+      // linkId) → fail closed.
+      if (e.linkIdToHandle.containsKey(linkId) &&
+              e.linkIdToHandle[linkId] != handle ||
+          (e.links.containsKey(handle) && e.links[handle]!.$3 != linkId)) {
         return [_closeLoser(handle, role)];
       }
-      final newC = w5Contender(e._central(role, peerCandidate), linkId);
-      final wC = w == null
-          ? null
-          : w5Contender(e._central(e.links[w.$2]!.$1, e.links[w.$2]!.$2), w.$1);
-      if (wC != null && newC.compareTo(wC) > 0) {
+      final newC = W5Contender(e._central(role, peerCandidate), linkId);
+      final wl = e.links[w!.$2]!;
+      final wC = W5Contender(e._central(wl.$1, wl.$2), w.$1);
+      if (newC.compareTo(wC) > 0) {
+        if (e.links.length + 1 > kMaxContenders) {
+          return [_closeLoser(handle, role)];
+        }
         _map(e, handle, role, peerCandidate, linkId);
         _bumpView(e);
         return [_propose(e), _closeLoser(handle, role)];
@@ -274,39 +336,65 @@ class W5Ownership {
     } else if (e.leaseId != realId) {
       _rekey(e, realId);
     }
-    e.inGrace = false;
-    _aliasTo[peerAlias] = e.leaseId;
-    e.aliasCurrent = peerAlias;
-    // Bijection guard.
-    if (e.linkIdToHandle.containsKey(linkId) &&
-            e.linkIdToHandle[linkId] != handle ||
+    // Same-encounter collision + cap guards.
+    if ((e.linkIdToHandle.containsKey(linkId) &&
+            e.linkIdToHandle[linkId] != handle) ||
         (e.links.containsKey(handle) && e.links[handle]!.$3 != linkId)) {
       return [_closeLoser(handle, role)];
     }
+    final wouldBe = e.contenders().where((c) => c.linkId != linkId).length + 1;
+    if (!e.links.containsKey(handle) && wouldBe > kMaxContenders) {
+      return [_closeLoser(handle, role)];
+    }
+    e.inGrace = false;
+    _aliasTo[peerAlias] = e.leaseId;
+    e.aliasCurrent = peerAlias;
     _map(e, handle, role, peerCandidate, linkId);
     if (role == W5Role.outbound) {
       e.pendingDials.remove(linkId);
       _dialInFlight.remove(linkId);
     }
     _bumpView(e);
-    final fx = <W5Effect>[_propose(e)];
-    fx.addAll(_maybeCommit(e));
-    return fx;
+    if (e.viewGen > kU32Max) {
+      return _saturate(e); // generation overflow → teardown
+    }
+    return [_propose(e), ..._maybeCommit(e)];
   }
 
+  /// [sourceHandle]/[sourceRole] identify the physical link the proposal arrived
+  /// on, so a protocol violation fails that exact link closed.
   List<W5Effect> onProposeRecv({
     required String peerAlias,
     required W5Proposal proposal,
+    String? sourceHandle,
+    W5Role? sourceRole,
   }) {
     final id = _aliasTo[peerAlias];
     final e = id == null ? null : _enc[id];
     if (e == null || proposal.encounterId != e.leaseId) return const [];
-    if (proposal.contenders.length > kMaxContenders) return const []; // cap
+    if (!proposal.validShape) {
+      return _failSource(sourceHandle, sourceRole); // gen/cap/shape
+    }
+    final pg = e.peerViewGen;
+    if (pg != null) {
+      if (proposal.viewGen < pg) return const []; // stale generation → drop
+      if (proposal.viewGen == pg) {
+        // idempotent iff identical; conflicting payload at same gen fails closed
+        // and never overwrites the accepted view.
+        if (e.peerProposal != null && e.peerProposal != proposal) {
+          return _failSource(sourceHandle, sourceRole);
+        }
+      }
+    }
+    e.peerViewGen = proposal.viewGen;
     e.peerProposal = proposal;
     final fx = <W5Effect>[];
-    // ACK the peer's view iff it matches our current contender set.
     if (_listEq(proposal.contenders, e.contenders())) {
-      fx.add(W5SendAck(W5Ack(e.leaseId, proposal.viewGen, proposal.viewHash)));
+      final r = sourceHandle == null
+          ? (handle: e.winner()?.$2 ?? '', role: sourceRole ?? W5Role.inbound)
+          : (handle: sourceHandle, role: sourceRole ?? W5Role.inbound);
+      fx.add(
+          W5SendAck(W5Ack(e.leaseId, proposal.viewGen, proposal.viewHash), r));
     }
     fx.addAll(_maybeCommit(e));
     return fx;
@@ -360,12 +448,15 @@ class W5Ownership {
     if (e == null) return const [];
     final wasWinner = e.winner()?.$2 == handle;
     final link = e.links.remove(handle);
-    if (link != null) e.linkIdToHandle.remove(link.$3);
+    if (link != null) {
+      e.linkIdToHandle.remove(link.$3);
+      _linkIdToLease.remove(link.$3);
+    }
     if (wasWinner) {
       e.committed = false;
       e.inGrace = true;
     }
-    _bumpView(e); // view changed → clear prior agreement
+    _bumpView(e);
     return const [];
   }
 
@@ -413,6 +504,7 @@ class W5Ownership {
     _enc.clear();
     _aliasTo.clear();
     _handleTo.clear();
+    _linkIdToLease.clear();
     _dialInFlight.clear();
     return fx;
   }
@@ -431,27 +523,34 @@ class W5Ownership {
     e.links[handle] = (role, peerCand, linkId);
     e.linkIdToHandle[linkId] = handle;
     _handleTo[handle] = e.leaseId;
+    _linkIdToLease[linkId] = e.leaseId;
   }
 
-  /// A contender-set change: new view generation, and any prior peer agreement
-  /// is stale until the peer re-ACKs this generation.
   void _bumpView(_Enc e) {
     e.viewGen++;
-    e.peerAckedMine = false;
+    e.peerAckedMine = false; // our view changed → peer must re-ACK
   }
 
-  W5Effect _propose(_Enc e) =>
-      W5SendPropose(W5Proposal(e.leaseId, e.viewGen, e.contenders()));
+  List<W5Effect> _saturate(_Enc e) {
+    final id = e.leaseId;
+    _erase(id);
+    return [W5Ended(id)];
+  }
+
+  W5Effect _propose(_Enc e) => W5SendPropose(
+      W5Proposal(e.leaseId, e.viewGen, e.contenders()), e.routes());
 
   List<W5Effect> _maybeCommit(_Enc e) {
     if (e.committed || e.links.isEmpty || e.pendingDials.isNotEmpty) {
       return const [];
     }
     final pp = e.peerProposal;
-    if (pp == null || !_listEq(pp.contenders, e.contenders())) return const [];
-    if (!e.peerAckedMine) {
-      return const []; // require the peer to have ACKed our view
+    if (pp == null ||
+        pp.encounterId != e.leaseId ||
+        !_listEq(pp.contenders, e.contenders())) {
+      return const [];
     }
+    if (!e.peerAckedMine) return const [];
     e.committed = true;
     final w = e.winner()!;
     final fx = <W5Effect>[W5Owns(w.$2)];
@@ -461,11 +560,14 @@ class W5Ownership {
     return fx;
   }
 
+  List<W5Effect> _failSource(String? handle, W5Role? role) =>
+      handle == null ? const [] : [_closeLoser(handle, role ?? W5Role.inbound)];
+
   W5Effect _closeLoser(String handle, W5Role role) => role == W5Role.outbound
       ? W5CloseOutbound(handle)
       : W5RejectInbound(handle);
 
-  bool _listEq(List<String> a, List<String> b) {
+  bool _listEq(List<W5Contender> a, List<W5Contender> b) {
     if (a.length != b.length) return false;
     for (var i = 0; i < a.length; i++) {
       if (a[i] != b[i]) return false;
@@ -478,8 +580,12 @@ class W5Ownership {
     _enc.remove(old);
     _aliasTo.updateAll((k, v) => v == old ? newId : v);
     _handleTo.updateAll((k, v) => v == old ? newId : v);
+    _linkIdToLease.updateAll((k, v) => v == old ? newId : v);
     _dialInFlight.updateAll((k, v) => v == old ? newId : v);
     e.leaseId = newId;
+    e.peerProposal = null; // peer proposals were bound to the old encounterId
+    e.peerViewGen = null;
+    e.peerAckedMine = false;
     _enc[newId] = e;
   }
 
@@ -487,6 +593,7 @@ class W5Ownership {
     _enc.remove(leaseId);
     _aliasTo.removeWhere((k, v) => v == leaseId);
     _handleTo.removeWhere((k, v) => v == leaseId);
+    _linkIdToLease.removeWhere((k, v) => v == leaseId);
     _dialInFlight.removeWhere((k, v) => v == leaseId);
   }
 }

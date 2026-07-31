@@ -1,8 +1,34 @@
-# W5 encounter-lease — design v5.1 (fix for #7)
+# W5 encounter-lease — design v5.2 (fix for #7)
 
-**Status:** DRAFT for hazypiff review (incorporates PR #9 review rounds 1–5).
+**Status:** DRAFT for hazypiff review (incorporates PR #9 review rounds 1–6).
 Not merged; `INRANGE_W5_LINKS` stays default OFF. Native Swift is the production
-authority; the Dart state machine is a reference oracle only.
+authority; the Dart state machine is a **semantic** reference oracle.
+
+## v5.2 corrections (PR #9 round 6)
+
+- **Peer-generation tracking.** Each encounter remembers the newest accepted
+  `(peerViewGen, payload)`. Older generation → dropped, no ACK. Same generation +
+  identical payload → idempotent. Same generation + **different** payload → fail
+  closed (never overwrite the accepted view). Peer state is cleared on rekey.
+- **Endpoint-global bijection.** One live local handle maps to exactly one
+  `(encounterId, linkId)` across the whole authority (`_handleTo`,
+  `_linkIdToLease`). A handle/linkId already bound to a different encounter fails
+  closed without mutating the established binding.
+- **Local cap enforced** (not just inbound): a dial or link that would exceed
+  `MAX_CONTENDERS` is refused with a role-correct effect, so an endpoint can
+  never build an unsendable view. `MAX_CONTENDERS = 5` (see Constants).
+- **Injective contenders + validation.** Contenders are `(central, linkId)`
+  value objects with a length-prefixed canonical encoding (so `('aa|bb','cc')` ≠
+  `('aa','bb|cc')`); proposal generations are validated to `uint32` range and the
+  local `viewGen` **saturates → teardown** rather than wrapping.
+- **Effect/route identity.** `PROPOSE` broadcasts over every negotiating link
+  (`W5SendPropose.routes`); an `ACK` is routed back over the source link
+  (`W5SendAck.route`); receive events carry the source `(handle, role)` so a
+  protocol violation fails **that** physical link closed.
+- **Scope honesty.** The Dart oracle is explicitly a **semantic** model (opaque
+  string ids, canonical-string `viewHash`), **not** the binary wire codec. The
+  exact `uint32`/16-byte/SHA-256 frame encoding is a separate codec-conformance
+  suite with vectors shared by Dart and Swift.
 
 > **Normative model = v5/v5.1 below + `lib/features/beacon/w5_ownership.dart`.**
 > Earlier convergence prose (v3 "first-healthy/candidate-min", v4 pre-ACK
@@ -27,7 +53,12 @@ authority; the Dart state machine is a reference oracle only.
 
 ## Constants & encoding (normative)
 
-- `MAX_CONTENDERS = 8`; a `PROPOSE` with more is rejected.
+- `MAX_CONTENDERS = 5` (reconciled with the ≤185-byte one-frame budget:
+  `4 header + 16 encounterId + 4 viewGen + 1 count + 32·N` ≤ 185 ⟹ N ≤ 5). Both
+  a **local** contender count (known links + pending dials) and an **inbound**
+  `PROPOSE` count are bounded; over-count fails closed (role-correct
+  close/reject, or token-read fallback if a peer's MTU cannot hold a bounded
+  frame). Byte-size and count are separate checks.
 - All ids (`encounterId`, `candidateId`, `linkId`) are **16 bytes**; `viewGen` is
   a **uint32, big-endian**, and **saturates** at `2^32−1` (never wraps into an
   older value) — on saturation the encounter is torn down and re-established.
