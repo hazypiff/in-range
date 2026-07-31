@@ -1,8 +1,45 @@
-# W5 encounter-lease — design v5 (fix for #7)
+# W5 encounter-lease — design v5.1 (fix for #7)
 
-**Status:** DRAFT for hazypiff review (incorporates PR #9 review rounds 1–4).
+**Status:** DRAFT for hazypiff review (incorporates PR #9 review rounds 1–5).
 Not merged; `INRANGE_W5_LINKS` stays default OFF. Native Swift is the production
 authority; the Dart state machine is a reference oracle only.
+
+> **Normative model = v5/v5.1 below + `lib/features/beacon/w5_ownership.dart`.**
+> Earlier convergence prose (v3 "first-healthy/candidate-min", v4 pre-ACK
+> set-equality) is **superseded** — kept only as change history, not as
+> implementation guidance. One source of truth for the Swift mirror.
+
+## v5.1 corrections (PR #9 round 5)
+
+- **`linkId ↔ local handle` bijection.** Idempotent `owns` requires BOTH the
+  winning `linkId` AND its already-bound handle to match; a live `linkId` on a
+  second handle (or a handle rebound to a second `linkId`) fails closed (close
+  the newcomer). Fixes duplicate `owns` / duplicate keeper work.
+- **Two-phase, generation-bound commit (now executable, not just prose).** Each
+  endpoint has a monotonic `viewGen` (bumped on any contender-set change, which
+  clears prior peer agreement). It `PROPOSE`s `{encounterId, viewGen,
+  contenders}` and `PROPOSE_ACK`s a peer proposal matching its set. It commits
+  **only** when the peer's current proposal matches its contenders **and** the
+  peer has ACKed its current `viewGen`. Stale/old-gen/wrong-payload/wrong-
+  encounter/over-cap messages are rejected deterministically.
+- The oracle + tests now use typed `W5Proposal`/`W5Ack`/effects, generations,
+  ACK path, cap, and bijection (the doc protocol is executable).
+
+## Constants & encoding (normative)
+
+- `MAX_CONTENDERS = 8`; a `PROPOSE` with more is rejected.
+- All ids (`encounterId`, `candidateId`, `linkId`) are **16 bytes**; `viewGen` is
+  a **uint32, big-endian**, and **saturates** at `2^32−1` (never wraps into an
+  older value) — on saturation the encounter is torn down and re-established.
+- `viewHash` / `setHash` = **SHA-256** over the domain-separated encoding
+  `"W5-VIEW-v1" || encounterId || u32(viewGen) || Σ(central(16) || linkId(16))`
+  with contenders in ascending `(central, linkId)` byte order; the low 16 bytes
+  are carried on the wire. (The Dart reference uses the canonical string as the
+  hash — identical equality semantics.)
+- Min usable control payload ≤ 185 B (a conservative post-handshake ATT MTU floor
+  of 3+20 fields); `PROPOSE` bodies stay within one write/notify. If a peer's
+  `maximumWriteValueLength` / `CBCentral.maximumUpdateValueLength` cannot hold a
+  bounded `PROPOSE`, fall back to token-read for that peer (no fragmentation).
 
 ## v5 corrections (PR #9 round 4)
 

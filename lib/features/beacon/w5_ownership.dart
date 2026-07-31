@@ -1,47 +1,150 @@
 /// Encounter-lease ownership state machine — the #7 fix, as a pure Dart
-/// reference **oracle** (production authority is native Swift; see
-/// docs/W5_ENCOUNTER_LEASE_DESIGN.md). Models ONE endpoint; distributed
-/// convergence is verified by a two-endpoint message-queue harness.
+/// reference **oracle** that Swift mirrors (see docs/W5_ENCOUNTER_LEASE_DESIGN.md).
+/// Models ONE endpoint; distributed convergence is verified by a two-endpoint
+/// message-queue harness.
 ///
-/// ## Identity (v5): encounter vs physical link
-/// - **encounter candidate** — one random 128-bit value per endpoint per
-///   encounter attempt (stable across this endpoint's roles/retries). Anchors
-///   the encounter; `leaseId = min(candidateA, candidateB)`.
-/// - **linkId** — a fresh random 128-bit id minted per OUTBOUND physical
-///   connection attempt. The central sends it in `HELLO`; the peripheral echoes
-///   it in `HELLO_ACK`. Both roles map the SAME `linkId` to their own (different,
-///   observer-local) CoreBluetooth handle. Agreement is on `linkId`, never on a
-///   local handle, so duplicate same-direction connections and replacement links
-///   are unambiguous.
+/// ## Identity
+/// - **encounter candidate** — random per endpoint per encounter attempt; the
+///   encounter anchor (`leaseId = min(candidateA, candidateB)` = `encounterId`).
+/// - **linkId** — random per OUTBOUND physical connection (central mints in
+///   HELLO, peripheral echoes in HELLO_ACK). Each endpoint keeps a strict
+///   **bijection linkId ↔ local handle**. Agreement is on contenders
+///   `(centralCandidate, linkId)`, never a reused candidate or a local handle.
 ///
-/// ## Safety = agreement, not time
-/// A keeper commits ONLY when this endpoint's set of **contenders**
-/// `(centralCandidate, linkId)` equals the peer's most-recently-proposed set AND
-/// all of this endpoint's own dials have handshaked. Equal contender sets ⇒ both
-/// endpoints elect the same winning `linkId` (min contender) and own the SAME
-/// physical link (each via its local handle). Timers only RETRANSMIT.
+/// ## Commit = two-phase agreement bound to a view generation
+/// Each endpoint has a monotonic `viewGen`, bumped whenever its contender set
+/// changes (clearing any prior peer agreement). It PROPOSEs `{encounterId,
+/// viewGen, contenders}` and ACKs a peer proposal that matches its own set. It
+/// commits ONLY when the peer's current proposal matches its contenders AND the
+/// peer has ACKed its current `viewGen` — so a delayed proposal/ACK from an
+/// older view cannot commit a replacement link. Timers only RETRANSMIT.
 library;
+
+const int kMaxContenders = 8; // bounded proposal payload
+
+/// Canonical contender: `centralCandidate|linkId`.
+String w5Contender(String centralCandidate, String linkId) =>
+    '$centralCandidate|$linkId';
+
+class W5Proposal {
+  const W5Proposal(this.encounterId, this.viewGen, this.contenders);
+  final String encounterId;
+  final int viewGen;
+  final List<String> contenders; // canonical, sorted, ≤ kMaxContenders
+  String get viewHash =>
+      contenders.join(','); // reference; prod: domain-sep SHA-256
+  @override
+  bool operator ==(Object other) =>
+      other is W5Proposal &&
+      other.encounterId == encounterId &&
+      other.viewGen == viewGen &&
+      other.viewHash == viewHash;
+  @override
+  int get hashCode => Object.hash(encounterId, viewGen, viewHash);
+}
+
+class W5Ack {
+  const W5Ack(this.encounterId, this.ackViewGen, this.viewHash);
+  final String encounterId;
+  final int ackViewGen; // the peer viewGen being acknowledged
+  final String viewHash;
+  @override
+  bool operator ==(Object other) =>
+      other is W5Ack &&
+      other.encounterId == encounterId &&
+      other.ackViewGen == ackViewGen &&
+      other.viewHash == viewHash;
+  @override
+  int get hashCode => Object.hash(encounterId, ackViewGen, viewHash);
+}
 
 enum W5Role { outbound, inbound }
 
-/// Effects the adapter applies. A peripheral cannot cancel a `CBCentral`: a
-/// losing INBOUND link is `rejectInbound` (peer-central closes); a losing
-/// OUTBOUND is `closeOutbound`. `owns`/close/reject carry the LOCAL handle;
-/// `propose` carries the canonical contender-set string. No keepalive/RSSI on a
-/// non-owned link.
-enum W5Op { dial, owns, closeOutbound, rejectInbound, propose, ended }
+/// Typed effects the adapter applies. A peripheral cannot cancel a `CBCentral`:
+/// a losing/rejected INBOUND is `W5RejectInbound` (peer-central closes), a losing
+/// OUTBOUND is `W5CloseOutbound`. No keepalive/RSSI on a non-owned link.
+sealed class W5Effect {
+  const W5Effect();
+}
 
-typedef W5Effect = (W5Op op, String arg);
+class W5Dial extends W5Effect {
+  const W5Dial(this.linkId);
+  final String linkId;
+  @override
+  bool operator ==(Object other) => other is W5Dial && other.linkId == linkId;
+  @override
+  int get hashCode => linkId.hashCode;
+}
+
+class W5Owns extends W5Effect {
+  const W5Owns(this.handle);
+  final String handle;
+  @override
+  bool operator ==(Object other) => other is W5Owns && other.handle == handle;
+  @override
+  int get hashCode => handle.hashCode;
+}
+
+class W5CloseOutbound extends W5Effect {
+  const W5CloseOutbound(this.handle);
+  final String handle;
+  @override
+  bool operator ==(Object other) =>
+      other is W5CloseOutbound && other.handle == handle;
+  @override
+  int get hashCode => handle.hashCode;
+}
+
+class W5RejectInbound extends W5Effect {
+  const W5RejectInbound(this.handle);
+  final String handle;
+  @override
+  bool operator ==(Object other) =>
+      other is W5RejectInbound && other.handle == handle;
+  @override
+  int get hashCode => handle.hashCode;
+}
+
+class W5SendPropose extends W5Effect {
+  const W5SendPropose(this.proposal);
+  final W5Proposal proposal;
+  @override
+  bool operator ==(Object other) =>
+      other is W5SendPropose && other.proposal == proposal;
+  @override
+  int get hashCode => proposal.hashCode;
+}
+
+class W5SendAck extends W5Effect {
+  const W5SendAck(this.ack);
+  final W5Ack ack;
+  @override
+  bool operator ==(Object other) => other is W5SendAck && other.ack == ack;
+  @override
+  int get hashCode => ack.hashCode;
+}
+
+class W5Ended extends W5Effect {
+  const W5Ended(this.leaseId);
+  final String leaseId;
+  @override
+  bool operator ==(Object other) =>
+      other is W5Ended && other.leaseId == leaseId;
+  @override
+  int get hashCode => leaseId.hashCode;
+}
 
 class _Enc {
   _Enc(this.leaseId, this.aliasCurrent, this.myCandidate);
-  String leaseId; // = min(candidate) anchor
+  String leaseId; // = encounterId
   final String myCandidate;
-  // local handle -> (role, peerCandidate, linkId)
-  final Map<String, (W5Role, String, String)> links = {};
-  final Map<String, String> linkIdToHandle = {}; // linkId -> local handle
-  final Set<String> pendingDials = {}; // linkIds dialed, not yet handshook
-  String? peerProposedSet; // peer's latest proposed contender set
+  final Map<String, (W5Role, String, String)> links =
+      {}; // handle->(role,peer,linkId)
+  final Map<String, String> linkIdToHandle = {}; // bijection side
+  final Set<String> pendingDials = {};
+  int viewGen = 0;
+  W5Proposal? peerProposal;
+  bool peerAckedMine = false; // peer ACKed my current viewGen
   bool committed = false;
   bool inGrace = false;
   String aliasCurrent;
@@ -50,25 +153,22 @@ class _Enc {
   String _central(W5Role role, String peerCand) =>
       role == W5Role.outbound ? myCandidate : peerCand;
 
-  /// Canonical contender set: `central|linkId` for every known link PLUS my
-  /// pending dials (central = my candidate). Sorted, comma-joined.
-  String setStr() {
+  List<String> contenders() {
     final c = <String>{};
-    links.forEach((_, v) => c.add('${_central(v.$1, v.$2)}|${v.$3}'));
+    links.forEach((_, v) => c.add(w5Contender(_central(v.$1, v.$2), v.$3)));
     for (final id in pendingDials) {
-      c.add('$myCandidate|$id');
+      c.add(w5Contender(myCandidate, id));
     }
     final l = c.toList()..sort();
-    return l.join(',');
+    return l;
   }
 
-  /// Winning contender among KNOWN links (min `central|linkId`).
+  String get viewHash => contenders().join(',');
+
   (String linkId, String handle)? winner() {
-    String? best;
-    String? bestLink;
-    String? bestHandle;
+    String? best, bestLink, bestHandle;
     links.forEach((handle, v) {
-      final c = '${_central(v.$1, v.$2)}|${v.$3}';
+      final c = w5Contender(_central(v.$1, v.$2), v.$3);
       if (best == null || c.compareTo(best!) < 0) {
         best = c;
         bestLink = v.$3;
@@ -80,22 +180,19 @@ class _Enc {
 }
 
 class W5Ownership {
-  final Map<String, _Enc> _enc = {}; // leaseId -> encounter
-  final Map<String, String> _aliasTo = {}; // alias -> leaseId
-  final Map<String, String> _handleTo = {}; // local handle -> leaseId
-  final Map<String, String> _dialInFlight = {}; // dialed linkId -> leaseId
+  final Map<String, _Enc> _enc = {};
+  final Map<String, String> _aliasTo = {};
+  final Map<String, String> _handleTo = {};
+  final Map<String, String> _dialInFlight = {};
 
   // ---- observation ----
   int get activeLeases => _enc.length;
   int get committedKeeperCount => _enc.values.where((e) => e.committed).length;
-
-  /// The COMMITTED winning wire linkId (compare THIS across endpoints).
   String? committedLinkId(String leaseId) {
     final e = _enc[leaseId];
     return (e != null && e.committed) ? e.winner()?.$1 : null;
   }
 
-  /// The local handle the committed winner maps to on THIS endpoint.
   String? committedKeeper(String leaseId) {
     final e = _enc[leaseId];
     return (e != null && e.committed) ? e.winner()?.$2 : null;
@@ -105,9 +202,12 @@ class W5Ownership {
   bool isCommitted(String leaseId) => _enc[leaseId]?.committed ?? false;
   String? leaseForAlias(String alias) => _aliasTo[alias];
 
-  /// Discovery of an advert carrying [alias]. Dial iff no live/negotiating
-  /// encounter (or in grace) AND token order says dial. [linkId] is the freshly
-  /// minted id for this outbound attempt.
+  /// This endpoint's current proposal (for tests / adapter introspection).
+  W5Proposal? currentProposal(String leaseId) {
+    final e = _enc[leaseId];
+    return e == null ? null : W5Proposal(e.leaseId, e.viewGen, e.contenders());
+  }
+
   List<W5Effect> onDiscovered({
     required String alias,
     required bool wouldDial,
@@ -116,7 +216,7 @@ class W5Ownership {
   }) {
     final id = _aliasTo[alias];
     final e = id == null ? null : _enc[id];
-    if (e != null && !e.inGrace) return const []; // engaged / negotiating
+    if (e != null && !e.inGrace) return const [];
     if (!wouldDial) return const [];
     if (e == null) {
       final ne = _Enc(candidateId, alias, candidateId);
@@ -126,12 +226,12 @@ class W5Ownership {
       _dialInFlight[linkId] = candidateId;
     } else {
       e.pendingDials.add(linkId);
+      _bumpView(e);
       _dialInFlight[linkId] = e.leaseId;
     }
-    return [(W5Op.dial, linkId)];
+    return [W5Dial(linkId)];
   }
 
-  /// A bidirectional control handshake completed on local [handle] for [linkId].
   List<W5Effect> onControl({
     required String handle,
     required W5Role role,
@@ -146,20 +246,23 @@ class W5Ownership {
     if (e != null && e.committed) {
       _aliasTo[peerAlias] = e.leaseId;
       final w = e.winner();
-      if (w != null && w.$1 == linkId) {
-        _map(e, handle, role, peerCandidate,
-            linkId); // idempotent (same wire link)
-        return [(W5Op.owns, handle)];
+      // Idempotence requires BOTH the winning linkId AND its bound handle.
+      if (w != null && w.$1 == linkId && w.$2 == handle) {
+        return [W5Owns(handle)];
       }
-      final newC = '${e._central(role, peerCandidate)}|$linkId';
+      // linkId already live on another handle, or handle already bound to a
+      // different linkId → fail closed (keep the bijection), close newcomer.
+      if (e.linkIdToHandle.containsKey(linkId) || e.links.containsKey(handle)) {
+        return [_closeLoser(handle, role)];
+      }
+      final newC = w5Contender(e._central(role, peerCandidate), linkId);
       final wC = w == null
           ? null
-          : '${e._central(e.links[w.$2]!.$1, e.links[w.$2]!.$2)}|${w.$1}';
-      // A legit later loser (larger contender) is added (keeps our set in sync)
-      // then closed; a smaller-contender intruder never displaces the winner.
+          : w5Contender(e._central(e.links[w.$2]!.$1, e.links[w.$2]!.$2), w.$1);
       if (wC != null && newC.compareTo(wC) > 0) {
         _map(e, handle, role, peerCandidate, linkId);
-        return [(W5Op.propose, e.setStr()), _closeLoser(handle, role)];
+        _bumpView(e);
+        return [_propose(e), _closeLoser(handle, role)];
       }
       return [_closeLoser(handle, role)];
     }
@@ -174,31 +277,58 @@ class W5Ownership {
     e.inGrace = false;
     _aliasTo[peerAlias] = e.leaseId;
     e.aliasCurrent = peerAlias;
+    // Bijection guard.
+    if (e.linkIdToHandle.containsKey(linkId) &&
+            e.linkIdToHandle[linkId] != handle ||
+        (e.links.containsKey(handle) && e.links[handle]!.$3 != linkId)) {
+      return [_closeLoser(handle, role)];
+    }
     _map(e, handle, role, peerCandidate, linkId);
     if (role == W5Role.outbound) {
       e.pendingDials.remove(linkId);
       _dialInFlight.remove(linkId);
     }
-    return _proposeAndMaybeCommit(e);
+    _bumpView(e);
+    final fx = <W5Effect>[_propose(e)];
+    fx.addAll(_maybeCommit(e));
+    return fx;
   }
 
   List<W5Effect> onProposeRecv({
     required String peerAlias,
-    required String setStr,
+    required W5Proposal proposal,
   }) {
     final id = _aliasTo[peerAlias];
     final e = id == null ? null : _enc[id];
-    if (e == null) return const [];
-    e.peerProposedSet = setStr;
+    if (e == null || proposal.encounterId != e.leaseId) return const [];
+    if (proposal.contenders.length > kMaxContenders) return const []; // cap
+    e.peerProposal = proposal;
+    final fx = <W5Effect>[];
+    // ACK the peer's view iff it matches our current contender set.
+    if (_listEq(proposal.contenders, e.contenders())) {
+      fx.add(W5SendAck(W5Ack(e.leaseId, proposal.viewGen, proposal.viewHash)));
+    }
+    fx.addAll(_maybeCommit(e));
+    return fx;
+  }
+
+  List<W5Effect> onAckRecv({
+    required String peerAlias,
+    required W5Ack ack,
+  }) {
+    final id = _aliasTo[peerAlias];
+    final e = id == null ? null : _enc[id];
+    if (e == null || ack.encounterId != e.leaseId) return const [];
+    if (ack.ackViewGen == e.viewGen && ack.viewHash == e.viewHash) {
+      e.peerAckedMine = true;
+    }
     return _maybeCommit(e);
   }
 
-  /// Retry: RETRANSMIT the current proposal (never commits). A committed endpoint
-  /// keeps announcing so a peer that missed the proposal still converges.
   List<W5Effect> onRetryTimer({required String leaseId}) {
     final e = _enc[leaseId];
     if (e == null || e.links.isEmpty) return const [];
-    return [(W5Op.propose, e.setStr())];
+    return [_propose(e)];
   }
 
   void onAliasRoll({required String leaseId, required String newAlias}) {
@@ -233,9 +363,9 @@ class W5Ownership {
     if (link != null) e.linkIdToHandle.remove(link.$3);
     if (wasWinner) {
       e.committed = false;
-      e.peerProposedSet = null;
       e.inGrace = true;
     }
+    _bumpView(e); // view changed → clear prior agreement
     return const [];
   }
 
@@ -243,7 +373,7 @@ class W5Ownership {
     final e = _enc[leaseId];
     if (e == null || !e.inGrace || e.winner() != null) return const [];
     _erase(leaseId);
-    return [(W5Op.ended, leaseId)];
+    return [W5Ended(leaseId)];
   }
 
   List<W5Effect> onDialFailed({required String linkId}) {
@@ -252,9 +382,10 @@ class W5Ownership {
     final e = _enc[leaseId];
     if (e == null) return const [];
     e.pendingDials.remove(linkId);
+    _bumpView(e);
     if (e.links.isEmpty && !e.committed && !e.inGrace) {
       _erase(leaseId);
-      return [(W5Op.ended, leaseId)];
+      return [W5Ended(leaseId)];
     }
     e.inGrace = true;
     return const [];
@@ -267,7 +398,7 @@ class W5Ownership {
     final w = e.winner();
     if (w != null) fx.add(_closeLoser(w.$2, e.links[w.$2]!.$1));
     _erase(leaseId);
-    fx.add((W5Op.ended, leaseId));
+    fx.add(W5Ended(leaseId));
     return fx;
   }
 
@@ -277,7 +408,7 @@ class W5Ownership {
       final e = _enc[id]!;
       final w = e.winner();
       if (w != null) fx.add(_closeLoser(w.$2, e.links[w.$2]!.$1));
-      fx.add((W5Op.ended, id));
+      fx.add(W5Ended(id));
     }
     _enc.clear();
     _aliasTo.clear();
@@ -302,22 +433,28 @@ class W5Ownership {
     _handleTo[handle] = e.leaseId;
   }
 
-  List<W5Effect> _proposeAndMaybeCommit(_Enc e) {
-    final fx = <W5Effect>[(W5Op.propose, e.setStr())];
-    fx.addAll(_maybeCommit(e));
-    return fx;
+  /// A contender-set change: new view generation, and any prior peer agreement
+  /// is stale until the peer re-ACKs this generation.
+  void _bumpView(_Enc e) {
+    e.viewGen++;
+    e.peerAckedMine = false;
   }
+
+  W5Effect _propose(_Enc e) =>
+      W5SendPropose(W5Proposal(e.leaseId, e.viewGen, e.contenders()));
 
   List<W5Effect> _maybeCommit(_Enc e) {
     if (e.committed || e.links.isEmpty || e.pendingDials.isNotEmpty) {
       return const [];
     }
-    if (e.peerProposedSet == null || e.peerProposedSet != e.setStr()) {
-      return const [];
+    final pp = e.peerProposal;
+    if (pp == null || !_listEq(pp.contenders, e.contenders())) return const [];
+    if (!e.peerAckedMine) {
+      return const []; // require the peer to have ACKed our view
     }
     e.committed = true;
     final w = e.winner()!;
-    final fx = <W5Effect>[(W5Op.owns, w.$2)];
+    final fx = <W5Effect>[W5Owns(w.$2)];
     for (final entry in e.links.entries) {
       if (entry.key != w.$2) fx.add(_closeLoser(entry.key, entry.value.$1));
     }
@@ -325,8 +462,16 @@ class W5Ownership {
   }
 
   W5Effect _closeLoser(String handle, W5Role role) => role == W5Role.outbound
-      ? (W5Op.closeOutbound, handle)
-      : (W5Op.rejectInbound, handle);
+      ? W5CloseOutbound(handle)
+      : W5RejectInbound(handle);
+
+  bool _listEq(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
 
   void _rekey(_Enc e, String newId) {
     final old = e.leaseId;
