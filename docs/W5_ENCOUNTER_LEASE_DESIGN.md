@@ -72,6 +72,28 @@ authority; the Dart state machine is a **semantic** reference oracle.
   `maximumWriteValueLength` / `CBCentral.maximumUpdateValueLength` cannot hold a
   bounded `PROPOSE`, fall back to token-read for that peer (no fragmentation).
 
+### Codec normative details (implemented; pinned by shared vectors)
+
+Implemented in `lib/features/beacon/w5_codec.dart` + `ios/Runner/W5Codec.swift`;
+both are pinned byte-for-byte by `test/features/beacon/w5_codec_vectors.json`
+(consumed by the Dart suite AND the RunnerTests XCTest suite; the `setHash`
+anchor in the vectors is independently computed with python hashlib, so the two
+codecs cannot share a systematic hash error).
+
+- Frame header `len` is a **u16 big-endian** body length; a frame must be
+  exactly `4 + len` bytes (trailing bytes = violation).
+- Type codes (v1): `HELLO=0x01, HELLO_ACK=0x02, PROPOSE=0x03, PROPOSE_ACK=0x04,
+  REJECT=0x05, ALIAS_ROLL=0x06, BYE=0x07`.
+- `setHash` truncation = the **leading** 16 bytes of the SHA-256 digest.
+- `HELLO.prevAlias` = all-zero 16 bytes when absent.
+- A `PROPOSE` at the cap (5 contenders) is exactly 185 bytes — the one-frame
+  budget is tight by construction (vector-asserted).
+- Decode contract: unknown `ver` → legacy fallback result (never a close);
+  unknown type / bad len / over-cap / non-canonically-ordered contenders /
+  oversize on a supported `ver` → violation (drop + close). Encoders refuse
+  out-of-contract input at the source (over-cap, non-ascending, non-16-byte
+  ids, out-of-u32 generations).
+
 ## v5 corrections (PR #9 round 4)
 
 - **Physical-link identity ≠ encounter identity.** A fresh 128-bit **`linkId`**
