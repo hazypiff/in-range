@@ -1,0 +1,10 @@
+# CF Pages header rules. The bare "/*" line below is the global path
+# selector, not a comment — every indented header under it applies site-wide.
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: geolocation=(), camera=(), microphone=()
+
+/img/*
+  Cache-Control: public, max-age=86400

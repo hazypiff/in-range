@@ -4,7 +4,24 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>In Range — you crossed paths with someone today</title>
-<meta name="description" content="In Range introduces you to people you've actually crossed paths with — verified by your phone, not your photos. Claim founder access.">
+<meta name="description" content="Dates, friends, gym partners — In Range introduces you to people you've actually crossed paths with, verified by your phone. Founding list open.">
+<link rel="canonical" href="https://inrange.life/">
+<meta name="theme-color" content="#0B0B0C">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="In Range">
+<meta property="og:url" content="https://inrange.life/">
+<meta property="og:title" content="You crossed paths with someone today.">
+<meta property="og:description" content="Dates, friends, gym partners, people into what you're into — In Range introduces you to the people you actually pass in real life. Founding list open.">
+<meta property="og:image" content="https://inrange.life/img/og.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="In Range — you crossed paths with someone today. Founding list open at inrange.life">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="You crossed paths with someone today.">
+<meta name="twitter:description" content="The app that introduces you to people you actually pass in real life — for dating, friends, and everything you're into. Founding list open.">
+<meta name="twitter:image" content="https://inrange.life/img/og.jpg">
+<link rel="apple-touch-icon" href="/img/apple-touch-icon.png">
+<link rel="preload" as="image" href="/img/hero.jpg" fetchpriority="high">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230B0B0C'/%3E%3Ccircle cx='32' cy='32' r='22' fill='none' stroke='%23FFD60A' stroke-width='4'/%3E%3Ccircle cx='32' cy='32' r='11' fill='none' stroke='%23FFD60A' stroke-width='4' opacity='.55'/%3E%3Ccircle cx='32' cy='32' r='4.5' fill='%23E5352B'/%3E%3C/svg%3E">
 <style>
   :root {
@@ -218,6 +235,54 @@
   footer a:hover { color: var(--yellow); }
   footer .copy { flex-basis: 100%; color: #55555e; font-size: .78rem; }
 
+  /* ---------- lanes ---------- */
+  section.lanes {
+    max-width: 46rem; margin: 0 auto;
+    padding: clamp(2rem, 5vw, 3.5rem) clamp(1rem, 4vw, 2.5rem);
+    text-align: center;
+  }
+  .lanes h2 { font-size: clamp(1.5rem, 3.4vw, 2.2rem); letter-spacing: -.02em; margin: 0 0 .4rem; }
+  .lanes .h2sub { color: var(--grey); margin: 0 auto 2rem; max-width: 34rem; }
+  .lanes .h2sub strong { color: var(--white); }
+  .chips { display: flex; flex-wrap: wrap; justify-content: center; gap: .6rem; }
+  .chip {
+    font-size: .92rem; font-weight: 700;
+    padding: .55rem 1.1rem; border-radius: 999px;
+    background: var(--ink); border: 1.5px solid #2c2c33; color: var(--grey);
+  }
+  .chip.hot { border-color: var(--yellow); color: var(--yellow); }
+  .chip.red { border-color: var(--red); color: var(--white); }
+  .lanes .foot { font-size: .85rem; color: #6a6a75; margin: 1.6rem auto 0; max-width: 30rem; }
+
+  /* ---------- FAQ ---------- */
+  section.faq {
+    max-width: 46rem; margin: 0 auto;
+    padding: clamp(2rem, 5vw, 3.5rem) clamp(1rem, 4vw, 2.5rem);
+  }
+  .faq h2 { text-align: center; font-size: clamp(1.5rem, 3.4vw, 2.2rem); letter-spacing: -.02em; margin: 0 0 2rem; }
+  .faq details {
+    background: var(--ink); border: 1px solid #222228; border-radius: 14px;
+    margin-bottom: .7rem; overflow: hidden;
+  }
+  .faq summary {
+    cursor: pointer; list-style: none; display: flex; align-items: center; gap: .8rem;
+    padding: 1rem 1.2rem; font-weight: 700; font-size: .98rem;
+  }
+  .faq summary::-webkit-details-marker { display: none; }
+  .faq summary::after {
+    content: "+"; margin-left: auto; color: var(--yellow);
+    font-size: 1.3rem; font-weight: 800; line-height: 1; transition: transform .2s;
+  }
+  .faq details[open] summary::after { transform: rotate(45deg); }
+  .faq details p { margin: 0; padding: 0 1.2rem 1.1rem; color: var(--grey); font-size: .93rem; }
+  .faq details p a { color: var(--yellow); }
+
+  /* ---------- scroll reveal ---------- */
+  @media (prefers-reduced-motion: no-preference) {
+    .reveal { opacity: 0; transform: translateY(18px); transition: opacity .6s ease, transform .6s ease; }
+    .reveal.in { opacity: 1; transform: none; }
+  }
+
   @media (max-width: 640px) {
     .signup form { flex-direction: column; }
     .signup button { width: 100%; }
@@ -249,7 +314,8 @@
   <h1>You crossed paths with someone <em>today</em>.</h1>
   <p class="sub">At the coffee shop. At the gym. On the platform. You'll never know —
   <strong>unless your phone was paying attention.</strong> In Range introduces you to the
-  people you actually pass in real life. No swiping across the city. No strangers from nowhere.</p>
+  people you actually pass in real life — for dating, new friends, or whatever you're into.
+  No swiping across the city. No strangers from nowhere.</p>
 
   <div class="signup" data-source="hero">
     <form novalidate>
@@ -259,6 +325,9 @@
     <div class="done"></div>
     <div class="msg"></div>
     <p class="note">Free to join. First cities get access first. No spam — launch news only.</p>
+    <noscript><p class="note">JavaScript is off — email
+    <a href="mailto:privacy@inrange.life" style="color:var(--yellow)">privacy@inrange.life</a>
+    to join the list.</p></noscript>
   </div>
 </header>
 </div>
@@ -282,7 +351,7 @@
         <h3>You live your day</h3>
         <p>Order the latte. Lift the weights. Catch the train. Your phone stays in your
         pocket — screen off, doing its quiet thing.</p>
-        <img class="photo" src="/img/day.jpg" alt="Someone walking a sunny city sidewalk with an iced coffee, phone in pocket" loading="lazy">
+        <img class="photo" width="768" height="480" decoding="async" src="/img/day.jpg" alt="Someone walking a sunny city sidewalk with an iced coffee, phone in pocket" loading="lazy">
       </div>
     </div>
 
@@ -300,7 +369,7 @@
         <h3>Your phones say hello</h3>
         <p>When another In Range phone comes near, the two of them swap an anonymous,
         constantly-changing hello. Nobody's name, face, or location is in it.</p>
-        <img class="photo" src="/img/coffee.jpg" alt="Two strangers standing near each other in a coffee shop, both on their phones" loading="lazy">
+        <img class="photo" width="768" height="480" decoding="async" src="/img/coffee.jpg" alt="Two strangers standing near each other in a coffee shop, both on their phones" loading="lazy">
       </div>
     </div>
 
@@ -322,7 +391,7 @@
         <p>Later, you both see it: <em style="color:var(--white); font-style:normal">"You crossed
         paths at 6:40 tonight."</em> Only real encounters show up — both phones have to agree
         it happened, so nobody can fake their way into your feed.</p>
-        <img class="photo" src="/img/train.jpg" alt="Two people noticing each other on a subway platform as a train passes" loading="lazy">
+        <img class="photo" width="768" height="480" decoding="async" src="/img/train.jpg" alt="Two people noticing each other on a subway platform as a train passes" loading="lazy">
       </div>
     </div>
 
@@ -337,12 +406,38 @@
       <div>
         <span class="num">Stop 4</span>
         <h3>Like back — it's a match</h3>
-        <p>If you both tap like, you're in. And the icebreaker writes itself — you were
-        literally in the same room. <a href="#founder" style="color:var(--yellow); font-weight:700; text-decoration:none">Get in line before your city opens →</a></p>
-        <img class="photo" src="/img/match.jpg" alt="Two people laughing together at a table under string lights at night" loading="lazy">
+        <p>If you both tap like, you're in. A date, a lifting partner, a new best friend —
+        that part is up to you. And the icebreaker writes itself: you were literally in the
+        same room. <a href="#founder" style="color:var(--yellow); font-weight:700; text-decoration:none">Get in line before your city opens →</a></p>
+        <img class="photo" width="768" height="480" decoding="async" src="/img/match.jpg" alt="Two people laughing together at a table under string lights at night" loading="lazy">
       </div>
     </div>
   </div>
+</section>
+
+<section class="lanes" id="lanes">
+  <h2>Not just dating. Pick what you're In&nbsp;Range for.</h2>
+  <p class="h2sub">Tell In Range what you're about, and who you meet leans that way.
+  <strong>Dating is one lane — not the whole road.</strong></p>
+  <div class="chips" aria-label="Things you can be In Range for">
+    <span class="chip red">Dating</span>
+    <span class="chip hot">New friends</span>
+    <span class="chip">Fitness</span>
+    <span class="chip">Coffee</span>
+    <span class="chip">Music</span>
+    <span class="chip">Hiking</span>
+    <span class="chip">Food</span>
+    <span class="chip">Art</span>
+    <span class="chip">Travel</span>
+    <span class="chip">Gaming</span>
+    <span class="chip">Movies</span>
+    <span class="chip">Dogs</span>
+    <span class="chip">Cats</span>
+    <span class="chip">Tech</span>
+    <span class="chip hot">+ your own</span>
+  </div>
+  <p class="foot">Your picks shape who you meet — the gym regular you nod at, the person
+  reading the same author on your train. Same places, same interests, finally introduced.</p>
 </section>
 
 <section class="founder" id="founder">
@@ -403,6 +498,54 @@
   </div>
 </section>
 
+<section class="faq" id="faq">
+  <h2>Fair questions</h2>
+  <details>
+    <summary>Is this only a dating app?</summary>
+    <p>No. Dating is one lane. You pick what you're In Range for — new friends, gym
+    partners, people into your music, your dog park crew — and your picks shape who
+    you're introduced to.</p>
+  </details>
+  <details>
+    <summary>Is my phone constantly tracking me?</summary>
+    <p>No. The app uses low-energy Bluetooth to notice when another In Range phone is
+    physically near — the signal it sends is anonymous and changes constantly, and it never
+    contains your name, face, or location. Precise location is only used to double-check an
+    encounter, then purged within 24 hours — automatically, not on request.</p>
+  </details>
+  <details>
+    <summary>What does it do to my battery?</summary>
+    <p>It's built on Bluetooth Low Energy — the same power-sipping radio your earbuds use.
+    Your phone broadcasts a tiny rotating code and listens briefly for others; there's no GPS
+    polling loop running in the background. Designed to sip, not gulp.</p>
+  </details>
+  <details>
+    <summary>Can someone fake being near me?</summary>
+    <p>No. An encounter only exists when <em>both</em> phones agree it happened, in person.
+    There's no GPS check-in to spoof, no way to bot your way into someone's feed.</p>
+  </details>
+  <details>
+    <summary>When does it launch? Which cities?</summary>
+    <p>Cities unlock in signup order — the more people in line where you are, the sooner
+    yours opens. That's the whole reason to <a href="#founder">get in line early</a>.</p>
+  </details>
+  <details>
+    <summary>iPhone or Android?</summary>
+    <p>Both. Crossed paths work between the two — an iPhone and an Android can find each
+    other just fine.</p>
+  </details>
+  <details>
+    <summary>What does it cost?</summary>
+    <p>Free to join and free to match. When premium features arrive later, founding members
+    get them at a rate that never goes up.</p>
+  </details>
+  <details>
+    <summary>What if I want out?</summary>
+    <p>One request wipes your account and everything attached to it — <a
+    href="/delete-account.html">no app required</a>. Delete means delete.</p>
+  </details>
+</section>
+
 <footer>
   <svg class="mark" viewBox="0 0 64 64" aria-hidden="true">
     <rect width="64" height="64" rx="14" fill="#0B0B0C" stroke="#2a2a30"/>
@@ -413,6 +556,8 @@
   <span style="font-weight:800">In&nbsp;Range</span>
   <span class="spacer" style="flex:1"></span>
   <div class="flinks">
+    <a href="/privacy">Privacy policy</a>
+    <a href="/terms">Terms of use</a>
     <a href="/report.html">Report intimate-image abuse</a>
     <a href="/delete-account.html">Delete account &amp; data</a>
     <a href="mailto:privacy@inrange.life">privacy@inrange.life</a>
@@ -471,7 +616,7 @@
       if (navigator.share) {
         navigator.share({
           title: 'In Range',
-          text: 'I’m #' + d.position + ' in line for In Range — the dating app that only shows people you actually cross paths with. Join behind me (or don’t 😏):',
+          text: 'I’m #' + d.position + ' in line for In Range — the app that only introduces you to people you actually cross paths with. Dates, friends, gym partners. Join behind me (or don’t 😏):',
           url: shareUrl
         }).catch(function () {});
       } else {
@@ -544,6 +689,53 @@
     boxes.forEach(function (box) { submit(box, savedEmail, true); });
   }
 })();
+</script>
+
+<script>
+(function () {
+  if (!('IntersectionObserver' in window)) return;
+  var els = document.querySelectorAll('.stop, .lanes, .founder-card, .trust .inner > div, .faq details');
+  els.forEach(function (el) { el.classList.add('reveal'); });
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (en) {
+      if (en.isIntersecting) { en.target.classList.add('in'); io.unobserve(en.target); }
+    });
+  }, { rootMargin: '0px 0px -8% 0px' });
+  els.forEach(function (el) { io.observe(el); });
+})();
+</script>
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "name": "In Range",
+      "url": "https://inrange.life/",
+      "logo": "https://inrange.life/img/apple-touch-icon.png",
+      "email": "privacy@inrange.life"
+    },
+    {
+      "@type": "WebSite",
+      "name": "In Range",
+      "url": "https://inrange.life/"
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        { "@type": "Question", "name": "Is In Range only a dating app?", "acceptedAnswer": { "@type": "Answer", "text": "No. Dating is one lane. You pick what you're In Range for — new friends, gym partners, people into your music — and your picks shape who you're introduced to." } },
+        { "@type": "Question", "name": "Is my phone constantly tracking me?", "acceptedAnswer": { "@type": "Answer", "text": "No. The app uses low-energy Bluetooth to notice when another In Range phone is physically near — the signal is anonymous, constantly changing, and never contains your name, face, or location. Precise location is only used to double-check an encounter, then purged within 24 hours." } },
+        { "@type": "Question", "name": "What does In Range do to my battery?", "acceptedAnswer": { "@type": "Answer", "text": "It's built on the same low-energy Bluetooth your earbuds and watch use, working in the background with the screen off. Designed to sip, not gulp." } },
+        { "@type": "Question", "name": "Can someone fake being near me?", "acceptedAnswer": { "@type": "Answer", "text": "No. An encounter only exists when both phones agree it happened, in person. There's no GPS check-in to spoof and no way to bot into someone's feed." } },
+        { "@type": "Question", "name": "When does In Range launch and in which cities?", "acceptedAnswer": { "@type": "Answer", "text": "Cities unlock in signup order — the more people in line where you are, the sooner yours opens." } },
+        { "@type": "Question", "name": "Does In Range work between iPhone and Android?", "acceptedAnswer": { "@type": "Answer", "text": "Yes — crossed paths work between the two platforms." } },
+        { "@type": "Question", "name": "What does In Range cost?", "acceptedAnswer": { "@type": "Answer", "text": "Free to join and free to match. When premium features arrive, founding members get them at a rate that never goes up." } },
+        { "@type": "Question", "name": "How do I delete my data?", "acceptedAnswer": { "@type": "Answer", "text": "One request wipes your account and everything attached to it — in the app, or via inrange.life/delete-account with no app required." } }
+      ]
+    }
+  ]
+}
 </script>
 
 </body>

@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy — In Range</title>
+<meta name="description" content="What In Range collects, why, how long it's kept, and the choices you have. Precise location is purged within 24 hours. No ads, no data sales.">
+<link rel="canonical" href="https://inrange.life/privacy">
+<meta name="theme-color" content="#0B0B0C">
+<link rel="apple-touch-icon" href="/img/apple-touch-icon.png">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230B0B0C'/%3E%3Ccircle cx='32' cy='32' r='22' fill='none' stroke='%23FFD60A' stroke-width='4'/%3E%3Ccircle cx='32' cy='32' r='11' fill='none' stroke='%23FFD60A' stroke-width='4' opacity='.55'/%3E%3Ccircle cx='32' cy='32' r='4.5' fill='%23E5352B'/%3E%3C/svg%3E">
+<!-- Draft — pending counsel review. Facts verified against repo evidence 2026-07-31.
+     [TODO: counsel] items: legal entity name + postal address; effective date at
+     publication; state-rights paragraph + appeal mechanics; launch-email provider
+     for the subprocessor list before the first campaign. -->
+<style>
+  :root { --yellow:#FFD60A; --red:#E5352B; --black:#0B0B0C; --ink:#141416; --white:#fff; --grey:#9C9CA6; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.7 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--black); color:var(--white); }
+  nav { position:sticky; top:0; z-index:10; display:flex; align-items:center; gap:.7rem;
+    padding:.85rem clamp(1rem,4vw,2.5rem); background:rgba(11,11,12,.88); backdrop-filter:blur(8px); border-bottom:1px solid #1e1e22; }
+  nav .mark { width:30px; height:30px; flex:none; }
+  nav .word { font-weight:800; font-size:1.15rem; letter-spacing:-.02em; color:var(--white); text-decoration:none; }
+  nav .spacer { flex:1; }
+  nav a.back { font-size:.85rem; color:var(--grey); text-decoration:none; }
+  nav a.back:hover { color:var(--yellow); }
+  main { max-width:44rem; margin:0 auto; padding:clamp(2rem,5vw,3.5rem) clamp(1rem,4vw,2.5rem) 4rem; }
+  h1 { font-size:clamp(1.8rem,4.5vw,2.6rem); letter-spacing:-.02em; line-height:1.1; margin:0 0 .4rem; }
+  .meta { color:var(--grey); font-size:.9rem; margin:0 0 2rem; }
+  h2 { font-size:1.25rem; letter-spacing:-.01em; margin:2.2rem 0 .6rem; color:var(--yellow); }
+  h3 { font-size:1.02rem; margin:1.4rem 0 .3rem; }
+  p, li { color:#c9c9d2; font-size:.96rem; }
+  strong { color:var(--white); }
+  a { color:var(--yellow); }
+  .tldr { background:var(--ink); border:2px solid var(--yellow); border-radius:16px; padding:1.2rem 1.4rem; margin:1.6rem 0; }
+  .tldr p { margin:.3rem 0; }
+  ul { padding-left:1.2rem; }
+  li { margin:.35rem 0; }
+  footer { border-top:1px solid #1e1e22; max-width:44rem; margin:0 auto; padding:1.4rem clamp(1rem,4vw,2.5rem) 2.4rem;
+    font-size:.82rem; color:#55555e; }
+  footer a { color:var(--grey); text-decoration:none; margin-right:1rem; }
+  footer a:hover { color:var(--yellow); }
+</style>
+</head>
+<body>
+<nav>
+  <svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="#0B0B0C" stroke="#2a2a30"/><circle cx="32" cy="32" r="21" fill="none" stroke="#FFD60A" stroke-width="4"/><circle cx="32" cy="32" r="11" fill="none" stroke="#FFD60A" stroke-width="4" opacity=".5"/><circle cx="32" cy="32" r="4.5" fill="#E5352B"/></svg>
+  <a class="word" href="/">In&nbsp;Range</a>
+  <span class="spacer"></span>
+  <a class="back" href="/">← Back to inrange.life</a>
+</nav>
+<main>
+<h1>In Range Privacy Policy</h1>
+<p class="meta">Last updated: July 31, 2026 · Contact: <a href="mailto:privacy@inrange.life">privacy@inrange.life</a></p>
+
+<p>In Range introduces you only to people your phone was physically near — for dating, new
+friends, and shared interests. This policy explains what we collect, why, how long we keep it,
+and the choices you have. If you live in Washington State, also read our
+<a href="/privacy/health-data">Consumer Health Data Privacy Policy</a>, which is a separate
+document.</p>
+
+<div class="tldr">
+  <p><strong>The short version.</strong></p>
+  <p>Your precise location is deleted from our servers within 24 hours.</p>
+  <p>The Bluetooth codes your phone broadcasts rotate constantly and contain no name, face, or location.</p>
+  <p>An encounter is recorded only when both phones agree it happened.</p>
+  <p>We never sell your data and we show no advertising.</p>
+  <p>You can delete everything — account and data — from the app or by email, <a href="/delete-account.html">no app required</a>.</p>
+</div>
+
+<h2>What we collect and why</h2>
+<h3>Account and profile</h3>
+<p>Email address (sign-in), and the profile you create: name, date of birth, gender, who you're
+interested in, bio, and interests. Gender and romantic preference are sensitive information; we
+use them only to suggest people you might want to meet.</p>
+<h3>Photos</h3>
+<p>Profile photos are required to be shown to others. Location metadata (EXIF/GPS) is stripped
+from every photo before it leaves your phone. Photos are checked against our safety rules.</p>
+<h3>Bluetooth proximity signals</h3>
+<p>Your phone broadcasts a rotating anonymous code and listens for other members' codes. Codes
+rotate roughly every 15 minutes and are meaningless to anyone else. Signal sightings (the code
+seen, signal strength, time) are uploaded to confirm encounters.</p>
+<h3>Precise location (GPS)</h3>
+<p>Used to confirm an encounter really happened and to improve distance accuracy.
+<strong>Deleted from our servers within 24 hours, enforced by automated purge.</strong></p>
+<h3>Background location (optional — off unless you enable it)</h3>
+<p>Occasional location checks while the app is closed so your phone can wake to detect nearby
+members and recognize venues. Only a coarse area (about a 3-mile cell) is stored — never a
+continuous trail — and checks stop the moment you turn the beacon off.</p>
+<h3>WiFi and venue signals</h3>
+<p>WiFi network identifiers (BSSIDs) are cryptographically hashed <strong>on your device and
+never uploaded</strong>; only coarse venue hints leave the phone.</p>
+<h3>Encounters</h3>
+<p>When both phones agree you crossed paths, we record the encounter — the time and a
+neighborhood-level place, <strong>never coordinates</strong>.</p>
+<h3>Messages</h3>
+<p>Messages you send other members, kept until you delete your account; the text of your
+messages is redacted when you delete.</p>
+<h3>Push tokens</h3>
+<p>A device token so we can notify you about matches and encounters (Apple Push Notification
+service on iOS, Firebase Cloud Messaging on Android).</p>
+<h3>Waitlist (this website)</h3>
+<p>If you join the waitlist at inrange.life, we store your email, when you joined, your position
+and referral code, and which page section you came from. We do not store your IP address
+(rate-limit counters keep only a self-pruning hash). The site stores your email and referral
+code in your own browser's local storage to recognize you on return; that never reaches us
+beyond your signup.</p>
+<h3>Safety reports</h3>
+<p>If you file an intimate-image report, we keep the report, your email (used only to handle
+the report), and resolution records as the law requires.</p>
+
+<h2>What we do NOT do</h2>
+<p>No advertising. No sale or rental of personal data. No data brokers. No advertising SDKs and
+no cross-app tracking. No analytics built on your location: consent is purpose-scoped — consent
+for proximity matching does not cover analytics or advertising, and we collect no such consent
+because we do no such processing.</p>
+
+<h2>How encounters are verified (and why that's a privacy feature)</h2>
+<p>An encounter exists only when <strong>both phones agree</strong>: the two devices exchange
+rotating codes and independently confirm proximity with reciprocal evidence, with server-side
+abuse detection for relays and forged sightings. Nobody can invent an encounter with you, and
+nobody's feed contains anyone they weren't actually near.</p>
+
+<h2>Retention</h2>
+<ul>
+  <li>Precise GPS: <strong>24 hours</strong>, automated purge</li>
+  <li>Proximity sightings: <strong>24 hours</strong>, automated purge</li>
+  <li>Rotating codes/token history: valid ~15–20 minutes; server copies purged within 24 hours</li>
+  <li>Encounters (neighborhood only): until you delete your account</li>
+  <li>Profile, photos, messages, email, push tokens: until you delete your account</li>
+  <li>Deleted accounts: content erased immediately; the account record is kept up to
+      <strong>30 days</strong> as protection against mistaken or malicious deletion, then
+      permanently purged</li>
+  <li>Safety/legal records (e.g., intimate-image reports): as long as the law requires</li>
+  <li>Anonymous, de-identified statistics: indefinitely, never linked back to you</li>
+</ul>
+
+<h2>Who processes your data</h2>
+<p>Supabase (database, authentication, photo storage, server functions), Cloudflare (website
+hosting), Apple (app distribution, Push Notification service), and Google (Play distribution,
+Firebase Cloud Messaging). We do not otherwise share personal data except when the law requires
+it (for example, reports to NCMEC or law enforcement).</p>
+
+<h2>Your rights and choices</h2>
+<ul>
+  <li><strong>Access and export:</strong> download your data in the app (Settings → Download my data).</li>
+  <li><strong>Correction:</strong> edit your profile in the app.</li>
+  <li><strong>Consent withdrawal:</strong> every consent is a separate toggle in Settings —
+      withdrawal is as easy as granting, applies immediately, and stopping Bluetooth proximity
+      consent stops the beacon on your device, not just on our servers. We honor revocations
+      within 15 days at the latest (most are instant).</li>
+  <li><strong>Deletion:</strong> in the app (Settings → Delete my account), or by email to
+      <a href="mailto:privacy@inrange.life">privacy@inrange.life</a> from your account address —
+      no app required. See <a href="/delete-account.html">what is erased and what is kept</a>.</li>
+  <li><strong>Pause instead:</strong> pausing hides you from new encounters and is reversible.</li>
+  <li><strong>Waitlist only:</strong> email <a href="mailto:privacy@inrange.life">privacy@inrange.life</a>
+      and we'll remove you from the list.</li>
+</ul>
+<p>Depending on your state, you may have additional statutory rights, including the right to
+appeal if we decline a request; we honor those and will tell you how to appeal in any denial.</p>
+
+<h2>Children</h2>
+<p>In Range is strictly 18+. We do not knowingly collect data from anyone under 18, and we
+terminate accounts discovered to belong to minors.</p>
+
+<h2>Security</h2>
+<p>Rotating ephemeral identifiers, on-device hashing of WiFi identifiers, EXIF stripping,
+encrypted transport, row-level access controls on every table, and device-integrity
+protections (rolling out).</p>
+
+<h2>Changes and contact</h2>
+<p>We'll post changes here and, for material changes, notify you in the app or by email before
+they take effect. Contact: <a href="mailto:privacy@inrange.life">privacy@inrange.life</a>.</p>
+</main>
+<footer>
+  <a href="/">Home</a>
+  <a href="/privacy/health-data">Consumer health data policy</a>
+  <a href="/terms">Terms of use</a>
+  <a href="/report.html">Report intimate-image abuse</a>
+  <a href="/delete-account.html">Delete account &amp; data</a>
+</footer>
+</body>
+</html>
