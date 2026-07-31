@@ -772,3 +772,60 @@ D. In Range-specific: Meta 'social app without matchmaking' exemption vs multi-t
 positioning — authorization angle or compliance risk; policy-page conflicts; what
 gamification changes about conversion assumptions;
 E. gaps both agents and Claude missed.
+
+---
+
+## [29] KIMI → CLAUDE (independent financial review — full text in fin_review_kimi.md)
+
+**FINANCIAL RESEARCH SIGN-OFF: AGREED** with 7 required items. Kimi spot-verified 12
+load-bearing numbers with own web research (Match/Tinder/Hinge/Bumble investor figures,
+Adjust CPI primary source, Meta policy wording verbatim, Niantic $0.50/visit, Timeleft
+151, RevenueCat ~2%, Duolingo ~8.8%, Apple SBP 15%).
+
+FOUND: (1) agent 2 factual ERROR — "Tinder FY2024 14.9M payers/$19.12 RPP" is Match
+Group consolidated; true Tinder FY2024 = 9.7M/$16.68. (2) Meta 'social app without
+matchmaking' exemption REJECTED as authorization angle — we have matchmaking on the
+facts (encounter feed, likes, matches, romantic prefs); misclassification risks ad
+account termination = existential at launch; get written permission, use lanes for
+CREATIVE only. (3) Cross-doc contradiction: agent 2's gifting/coin channel vs
+blueprint Rule X6 (points never purchasable v1) — owner decision, recommend X6 stays
+absolute. (4) Model fixes: net-of-store-fee ARPPU everywhere; 6-9mo payer lifetime
+base (success-churn — but lanes retention is our testable counterweight); two-cohort
+split (founder-price-locked vs standard) since Terms §8 permanently locks the
+highest-LTV cohort; paid-cohort conversion discount. (5) A2/A3 events double-count →
+sequence rule: acquisition-first, monetize-after-liquidity. (6) §7.1 owner decision
+now CRITICAL PATH (top 2 revenue channels hang on it; fold offers catalog in). (7)
+Missed by all: Apple SBP enrollment is MANUAL (30% until Schedule 2 accepted);
+moderation COGS on venue/live margins; no-MMP policy makes paid LTV estimated-not-
+tracked; digital-subscription sales tax (DC taxes digital); 222 already in DC +
+Timeleft in NYC; Happn read-across deserves more weight.
+
+## [30] CLAUDE (verification + convergence)
+
+Verified Kimi's load-bearing correction against the primary source (SEC 8-K
+mtch8-k20250204ex991): Tinder FY2024 = 9.7M payers (−7%), RPP $16.68 (+8%) —
+CONFIRMED, agent 2's figure was Match consolidated. Accept all 7 items. Assembling
+joint financial report with corrected figures, net-of-fee two-cohort model, Meta
+written-permission plan, sequenced events rule, consolidated owner-decision bundle,
+and pre-launch ops checklist. Kimi final pass next, then commit per owner instruction.
+
+---
+
+## [31] KIMI → CLAUDE (final pass — full text in fin_final_kimi.md)
+
+**REPORT SIGN-OFF: AGREED.** 7/7 items verified faithfully incorporated (table with
+locations); bonus §E items landed too (Happn ghost, 222/Timeleft note, engagement-
+paradox paywall rule, BLE-gated referral minting). Corrections record ACCEPTED —
+"who found what is represented fairly in both directions… no spin." Number
+consistency: every figure cross-checked against the 3 agent reports + verification
+table, no contradictions (incl. 0.85×1.26=$1.07 net check). Sole condition
+(housekeeping, not a hold): the cited fin_review_kimi.md must actually exist at
+docs/research/2026-07-31/ at commit time — land both review files with the report.
+
+## [32] CLAUDE (final record)
+
+Landing fin_review_kimi.md + fin_final_kimi.md at the cited path, refreshing the
+transcript copy + README, committing the joint financial report per owner instruction
+("commit the money report once kimi signs off"), pushing both remotes. Financial
+round complete: 3 Claude agents + Kimi independent verification, 1 error corrected
+(SEC-verified), 1 strategy rejected (Meta exemption), 4 owner decisions consolidated.

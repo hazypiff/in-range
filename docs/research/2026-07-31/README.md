@@ -16,7 +16,7 @@ evidence was corrected or rejected along the way.
 - `frontend_research_kimi.md` — Kimi's independent web verification + repo grounding
 - `frontend_final_kimi.md` — Kimi's final pass (build-time acceptance checks note)
 
-## Financial research (joint report pending sign-off)
+## Financial research (→ docs/FINANCIAL_RESEARCH_MONETIZATION_2026-07-31_JOINT.md)
 - `fin_agent1_benchmarks.md` — dating unit economics: ARPPU, payer conversion, CPI,
   LTV:CAC model tables ([HARD]/[SOFT]/[EST] labeled)
 - `fin_agent2_freeusers.md` — non-payer monetization channels under the no-ads/
@@ -26,3 +26,6 @@ evidence was corrected or rejected along the way.
 ## Process record
 - `claude_kimi_chat_2026-07-31.md` — full Claude↔Kimi transcript (numbered exchanges,
   all phases: audit → green-light → website → gamification → frontend → financial)
+- `fin_review_kimi.md` — Kimi's independent verification pass (12 numbers vs primary
+  sources; agent-2 Tinder correction; Meta exemption rejection; 7 sign-off items)
+- `fin_final_kimi.md` — Kimi's final-pass verification of the assembled report
