@@ -348,6 +348,24 @@ void main() {
     expect(a.committedLinkId(leaseId), 'L2');
   });
 
+  test('restoration replay of a pending (uncommitted) link is idempotent', () {
+    final a = established('L1');
+    // iOS may re-deliver the restored link's control exchange before Dart
+    // attaches: same handle+linkId replay mid-negotiation must not duplicate
+    // the contender or wedge the later commit.
+    a.onControl(
+        handle: 'p1',
+        role: W5Role.outbound,
+        myCandidate: candA,
+        peerCandidate: candB,
+        peerAlias: aliasB,
+        linkId: 'L1');
+    expect(a.currentProposal(leaseId)!.contenders, [ct('cand-a', 'L1')]);
+    expect(a.isCommitted(leaseId), isFalse);
+    commitAgainst(a, leaseId, [ct('cand-a', 'L1')], aliasB);
+    expect(a.committedLinkId(leaseId), 'L1');
+  });
+
   test('restoration replay of the committed link is idempotent', () {
     final a = established('L1');
     commitAgainst(a, leaseId, [ct('cand-a', 'L1')], aliasB);
