@@ -428,7 +428,8 @@ void main() {
   test('viewGen saturation tears down instead of wrapping', () {
     final a = established('L1');
     a.debugSetViewGen(leaseId, kU32Max);
-    // Overflow via a new inbound link.
+    // Overflow via a new inbound link. R7 contract: W5Ended is preceded by a
+    // role-correct close for EVERY live link.
     final fx = a.onControl(
         handle: 'p2',
         role: W5Role.inbound,
@@ -436,13 +437,119 @@ void main() {
         peerCandidate: candB,
         peerAlias: aliasB,
         linkId: 'L2');
-    expect(fx, [const W5Ended(leaseId)]);
+    expect(fx, [
+      const W5CloseOutbound('p1'),
+      const W5RejectInbound('p2'),
+      const W5Ended(leaseId),
+    ]);
     expect(a.activeLeases, 0);
     // Overflow via link-down (a non-onControl bump site).
     final b = established('L1');
     b.debugSetViewGen(leaseId, kU32Max);
     expect(b.onLinkDown(handle: 'p1'), [const W5Ended(leaseId)]);
     expect(b.activeLeases, 0);
+  });
+
+  // R7 probe 4 — rotation during grace with the ALIAS_ROLL lost: rediscovery
+  // must re-join the in-grace encounter (never silently replace it) and the
+  // HELLO's prevAlias must resolve into the SAME lease, which then re-commits.
+  test('R7: rotation-during-grace rediscovery rejoins, prevAlias resolves', () {
+    final a = W5Ownership();
+    // Committed single-link encounter, then the keeper drops → grace.
+    a.onControl(
+        handle: 'p1',
+        role: W5Role.outbound,
+        myCandidate: candA,
+        peerCandidate: candB,
+        peerAlias: aliasB,
+        linkId: 'L1');
+    commitAgainst(a, leaseId, [ct('cand-a', 'L1')], aliasB);
+    a.onLinkDown(handle: 'p1');
+    final genInGrace = a.currentProposal(leaseId)!.viewGen;
+    expect(genInGrace, greaterThan(0));
+    // Peer rotated (aliasB → aliasB2); ALIAS_ROLL died with the keeper.
+    // Rediscovery under the NEW alias with the SAME candidate: must not stomp.
+    final fx = a.onDiscovered(
+        alias: 'aliasB2', wouldDial: true, candidateId: candA, linkId: 'L3');
+    expect(fx, [const W5Dial('L3')]);
+    expect(a.activeLeases, 1); // no replacement encounter
+    expect(a.currentProposal(leaseId)!.viewGen, greaterThan(genInGrace),
+        reason: 'generation continues — never resets to 0');
+    // HELLO_ACK lands; control resolves through prevAlias to the same lease.
+    a.onControl(
+        handle: 'p3',
+        role: W5Role.outbound,
+        myCandidate: candA,
+        peerCandidate: candB,
+        peerAlias: 'aliasB2',
+        linkId: 'L3',
+        peerPrevAlias: aliasB);
+    expect(a.activeLeases, 1);
+    expect(a.leaseForAlias('aliasB2'), leaseId);
+    // Re-commit on the replacement link at the CONTINUED generation.
+    final m = a.currentProposal(leaseId)!;
+    a.onProposeRecv(
+        peerAlias: 'aliasB2',
+        proposal: W5Proposal(leaseId, 11, [ct('cand-a', 'L3')]));
+    a.onAckRecv(
+        peerAlias: 'aliasB2', ack: W5Ack(leaseId, m.viewGen, m.viewHash));
+    expect(a.committedLinkId(leaseId), 'L3');
+  });
+
+  // R7 fix #2 — rekey onto a key held by a DIFFERENT live encounter fails the
+  // incoming link closed instead of stomping.
+  test('R7: rekey onto an occupied lease key fails closed', () {
+    final a = W5Ownership();
+    a.onControl(
+        handle: 'h1',
+        role: W5Role.outbound,
+        myCandidate: 'cand-a',
+        peerCandidate: 'cand-z',
+        peerAlias: 'aliasZ',
+        linkId: 'L1'); // lease cand-a
+    a.onDiscovered(
+        alias: 'aliasY', wouldDial: true, candidateId: 'cand-y', linkId: 'L2');
+    // Control for the cand-y encounter whose realId collapses onto cand-a.
+    final fx = a.onControl(
+        handle: 'h2',
+        role: W5Role.outbound,
+        myCandidate: 'cand-y',
+        peerCandidate: 'cand-a',
+        peerAlias: 'aliasY',
+        linkId: 'L2');
+    expect(fx, [const W5CloseOutbound('h2')]);
+    expect(a.activeLeases, 2); // both encounters intact, nothing stomped
+    expect(a.keeperOf('cand-a'), 'h1');
+  });
+
+  // R7 contract — every erase-ender closes ALL live links before W5Ended.
+  test('R7: teardown and beacon-off close every live link before Ended', () {
+    final a = established('L1');
+    a.onControl(
+        handle: 'p2',
+        role: W5Role.inbound,
+        myCandidate: candA,
+        peerCandidate: candB,
+        peerAlias: aliasB,
+        linkId: 'L2');
+    expect(a.onTeardown(leaseId: leaseId), [
+      const W5CloseOutbound('p1'),
+      const W5RejectInbound('p2'),
+      const W5Ended(leaseId),
+    ]);
+    final b = established('L1');
+    b.onControl(
+        handle: 'p2',
+        role: W5Role.inbound,
+        myCandidate: candA,
+        peerCandidate: candB,
+        peerAlias: aliasB,
+        linkId: 'L2');
+    expect(b.onBeaconOff(), [
+      const W5CloseOutbound('p1'),
+      const W5RejectInbound('p2'),
+      const W5Ended(leaseId),
+    ]);
   });
 
   test('alias rollover keeps current+previous, then expires previous', () {

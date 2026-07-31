@@ -102,7 +102,11 @@ enum W5Effect: Equatable {
 private final class W5Enc {
   var leaseId: String
   let myCandidate: String
-  var links: [String: (role: W5Role, peerCand: String, linkId: String)] = [:]
+  // handle -> (role, centralCand, linkId). centralCand is what the WIRE
+  // carried for this link (HELLO's central candidate) — NOT myCandidate: a
+  // grace-rejoin under a fresh candidate must advertise the value the peer
+  // actually saw, or the two contender views can never match (R7 vector 2).
+  var links: [String: (role: W5Role, centralCand: String, linkId: String)] = [:]
   var linkIdToHandle: [String: String] = [:]
   var pendingDials: Set<String> = []
   var viewGen = 0
@@ -120,14 +124,10 @@ private final class W5Enc {
     self.myCandidate = myCandidate
   }
 
-  func central(_ role: W5Role, _ peerCand: String) -> String {
-    role == .outbound ? myCandidate : peerCand
-  }
-
   func contenders() -> [W5Contender] {
     var set = Set<W5Contender>()
     for (_, v) in links {
-      set.insert(W5Contender(central: central(v.role, v.peerCand), linkId: v.linkId))
+      set.insert(W5Contender(central: v.centralCand, linkId: v.linkId))
     }
     for id in pendingDials {
       set.insert(W5Contender(central: myCandidate, linkId: id))
@@ -149,7 +149,7 @@ private final class W5Enc {
     var bestLink: String?
     var bestHandle: String?
     for (handle, v) in links {
-      let c = W5Contender(central: central(v.role, v.peerCand), linkId: v.linkId)
+      let c = W5Contender(central: v.centralCand, linkId: v.linkId)
       if best == nil || c.cmp(best!) < 0 {
         best = c
         bestLink = v.linkId
@@ -196,12 +196,18 @@ final class W5Ownership {
     alias: String, wouldDial: Bool, candidateId: String, linkId: String
   ) -> [W5Effect] {
     let id = aliasTo[alias]
-    let e = id.flatMap { enc[$0] }
+    var e = id.flatMap { enc[$0] }
+    // R7 fix #1: an unknown alias can still target a LIVE encounter keyed by
+    // this candidate (rotation during grace, ALIAS_ROLL lost with the
+    // keeper). NEVER silently replace it: healthy → no dial; in grace → the
+    // discovery re-joins the existing encounter and the alias maps to it.
+    if e == nil { e = enc[candidateId] }
     if let e, !e.inGrace { return [] }
     if !wouldDial { return [] }
     // Cap: a dial that would exceed the contender budget is refused.
     if let e, e.contenders().count + 1 > kW5MaxContenders { return [] }
     if let e {
+      aliasTo[alias] = e.leaseId  // rediscovery alias joins the lease
       e.pendingDials.insert(linkId)
       bumpView(e)
       if e.viewGen > kW5U32Max { return saturate(e) }
@@ -218,10 +224,17 @@ final class W5Ownership {
 
   func onControl(
     handle: String, role: W5Role, myCandidate: String, peerCandidate: String,
-    peerAlias: String, linkId: String
+    peerAlias: String, linkId: String, peerPrevAlias: String? = nil
   ) -> [W5Effect] {
     let realId = minS(myCandidate, peerCandidate)
     var e = locate(peerAlias, myCandidate)
+    // R7 fix #3 (prevAlias is load-bearing): a rediscovery during grace under
+    // a rotated alias resolves through HELLO's prevAlias to the SAME lease —
+    // ALIAS_ROLL alone cannot cover keeper-down rotation because the channel
+    // it rides is exactly what is down.
+    if e == nil, let prev = peerPrevAlias, let prevId = aliasTo[prev] {
+      e = enc[prevId]
+    }
 
     // Endpoint-global bijection: a live handle or linkId already bound to a
     // DIFFERENT encounter/link fails closed without mutating the binding.
@@ -235,7 +248,7 @@ final class W5Ownership {
     }
 
     if let ec = e, ec.committed {
-      aliasTo[peerAlias] = ec.leaseId
+      bindAlias(ec, peerAlias)
       let w = ec.winner()
       if let w, w.linkId == linkId, w.handle == handle {
         return [.owns(handle: handle)]
@@ -246,14 +259,16 @@ final class W5Ownership {
         || (ec.links[handle] != nil && ec.links[handle]!.linkId != linkId) {
         return [closeLoser(handle, role)]
       }
-      let newC = W5Contender(central: ec.central(role, peerCandidate), linkId: linkId)
+      let newC = W5Contender(
+        central: role == .outbound ? myCandidate : peerCandidate, linkId: linkId)
       let wl = ec.links[w!.handle]!
-      let wC = W5Contender(central: ec.central(wl.role, wl.peerCand), linkId: w!.linkId)
+      let wC = W5Contender(central: wl.centralCand, linkId: w!.linkId)
       if newC.cmp(wC) > 0 {
         if ec.links.count + 1 > kW5MaxContenders {
           return [closeLoser(handle, role)]
         }
-        map(ec, handle, role, peerCandidate, linkId)
+        map(ec, handle, role,
+            role == .outbound ? myCandidate : peerCandidate, linkId)
         bumpView(ec)
         if ec.viewGen > kW5U32Max { return saturate(ec) }
         return [propose(ec), closeLoser(handle, role)]
@@ -265,7 +280,11 @@ final class W5Ownership {
     let ec: W5Enc
     if let existing = e {
       ec = existing
-      if ec.leaseId != realId { rekey(ec, realId) }
+      if ec.leaseId != realId {
+        // R7 fix #2: rekeying onto a key held by a DIFFERENT live encounter
+        // would stomp it — fail the incoming link closed instead.
+        if !rekey(ec, realId) { return [closeLoser(handle, role)] }
+      }
     } else {
       ec = W5Enc(realId, peerAlias, myCandidate)
       enc[realId] = ec
@@ -280,9 +299,9 @@ final class W5Ownership {
       return [closeLoser(handle, role)]
     }
     ec.inGrace = false
-    aliasTo[peerAlias] = ec.leaseId
-    ec.aliasCurrent = peerAlias
-    map(ec, handle, role, peerCandidate, linkId)
+    bindAlias(ec, peerAlias)
+    map(ec, handle, role,
+        role == .outbound ? myCandidate : peerCandidate, linkId)
     if role == .outbound {
       ec.pendingDials.remove(linkId)
       dialInFlight.removeValue(forKey: linkId)
@@ -409,22 +428,16 @@ final class W5Ownership {
 
   func onTeardown(leaseId: String) -> [W5Effect] {
     guard let e = enc[leaseId] else { return [] }
-    var fx: [W5Effect] = []
-    if let w = e.winner() {
-      fx.append(closeLoser(w.handle, e.links[w.handle]!.role))
-    }
+    let fx = closeAllLinks(e)
     erase(leaseId)
-    fx.append(.ended(leaseId: leaseId))
-    return fx
+    return fx + [.ended(leaseId: leaseId)]
   }
 
   func onBeaconOff() -> [W5Effect] {
     var fx: [W5Effect] = []
     for id in enc.keys.sorted(by: { w5Cmp($0, $1) < 0 }) {
       let e = enc[id]!
-      if let w = e.winner() {
-        fx.append(closeLoser(w.handle, e.links[w.handle]!.role))
-      }
+      fx.append(contentsOf: closeAllLinks(e))
       fx.append(.ended(leaseId: id))
     }
     enc.removeAll()
@@ -452,13 +465,26 @@ final class W5Ownership {
   }
 
   private func map(
-    _ e: W5Enc, _ handle: String, _ role: W5Role, _ peerCand: String,
+    _ e: W5Enc, _ handle: String, _ role: W5Role, _ centralCand: String,
     _ linkId: String
   ) {
-    e.links[handle] = (role, peerCand, linkId)
+    e.links[handle] = (role, centralCand, linkId)
     e.linkIdToHandle[linkId] = handle
     handleTo[handle] = e.leaseId
     linkIdToLease[linkId] = e.leaseId
+  }
+
+  /// Binding a control alias is a ROLL when it differs from the current one:
+  /// current→previous, never more than one generation retained.
+  private func bindAlias(_ e: W5Enc, _ peerAlias: String) {
+    aliasTo[peerAlias] = e.leaseId
+    if e.aliasCurrent == peerAlias { return }
+    let twoAgo = e.aliasPrevious
+    e.aliasPrevious = e.aliasCurrent
+    e.aliasCurrent = peerAlias
+    if let twoAgo, twoAgo != e.aliasCurrent, twoAgo != e.aliasPrevious {
+      aliasTo.removeValue(forKey: twoAgo)
+    }
   }
 
   private func bumpView(_ e: W5Enc) {
@@ -466,10 +492,19 @@ final class W5Ownership {
     e.peerAckedMine = false // our view changed → peer must re-ACK
   }
 
+  /// CONTRACT (round 7): a `.ended` is always preceded, in the same effect
+  /// list, by a role-correct close for EVERY live link of that encounter —
+  /// the adapter never infers closes from an erase.
+  private func closeAllLinks(_ e: W5Enc) -> [W5Effect] {
+    e.links.sorted { w5Cmp($0.key, $1.key) < 0 }
+      .map { closeLoser($0.key, $0.value.role) }
+  }
+
   private func saturate(_ e: W5Enc) -> [W5Effect] {
     let id = e.leaseId
+    let fx = closeAllLinks(e)
     erase(id)
-    return [.ended(leaseId: id)]
+    return fx + [.ended(leaseId: id)]
   }
 
   private func propose(_ e: W5Enc) -> W5Effect {
@@ -503,7 +538,9 @@ final class W5Ownership {
     role == .outbound ? .closeOutbound(handle: handle) : .rejectInbound(handle: handle)
   }
 
-  private func rekey(_ e: W5Enc, _ newId: String) {
+  @discardableResult
+  private func rekey(_ e: W5Enc, _ newId: String) -> Bool {
+    if let occupant = enc[newId], occupant !== e { return false }
     let old = e.leaseId
     enc.removeValue(forKey: old)
     aliasTo = aliasTo.mapValues { $0 == old ? newId : $0 }
@@ -515,6 +552,7 @@ final class W5Ownership {
     e.peerViewGen = nil
     e.peerAckedMine = false
     enc[newId] = e
+    return true
   }
 
   private func erase(_ leaseId: String) {

@@ -51,6 +51,9 @@ final class W5LinkController {
   private var pendingControl: [(Data, CBCentral)] = []
   private var lastAdvertisedToken: String?
   private var myPrevTokenHex: String?
+  /// R7 ratification hardening: HELLO carries prevAlias only during the
+  /// recovery window after a rotation; after that it goes back to all-zero.
+  private var myPrevTokenTimer: Timer?
 
   static let reconnectGrace: TimeInterval = 120
   static let retransmit: TimeInterval = 8
@@ -305,15 +308,14 @@ final class W5LinkController {
       }
       notifyControl(ack, to: central)
       let handle = inHandle(key)
+      // R7 fix #3: prevAlias (all-zero = absent) resolves a grace-window
+      // rediscovery under a rotated alias into the SAME lease.
+      let zero = hex(Data(repeating: 0, count: 16))
       let fx = ownership.onControl(
         handle: handle, role: .inbound, myCandidate: myCand,
-        peerCandidate: hex(centralCand), peerAlias: aliasHex, linkId: linkHex)
+        peerCandidate: hex(centralCand), peerAlias: aliasHex, linkId: linkHex,
+        peerPrevAlias: prevHex == zero ? nil : prevHex)
       leaseByHandle[handle] = ownership.leaseForAlias(aliasHex)
-      if prevHex != hex(Data(repeating: 0, count: 16)),
-        let lease = leaseByHandle[handle] {
-        ownership.onAliasRoll(leaseId: lease, newAlias: aliasHex)
-        _ = prevHex  // previous alias mapping rides the oracle's alias table
-      }
       bb.logWake("w5c-in-hello")
       apply(fx)
       sweepTimers()
@@ -427,6 +429,10 @@ final class W5LinkController {
     guard newHex != lastAdvertisedToken else { return }
     myPrevTokenHex = lastAdvertisedToken
     lastAdvertisedToken = newHex
+    myPrevTokenTimer?.invalidate()
+    myPrevTokenTimer = Timer.scheduledTimer(
+      withTimeInterval: Self.reconnectGrace, repeats: false
+    ) { [weak self] _ in self?.myPrevTokenHex = nil }
     guard let new = BackgroundBeacon.hexToData(newHex),
       let frame = try? w5Encode(.aliasRoll(newAlias: new))
     else { return }
@@ -582,7 +588,18 @@ final class W5LinkController {
     retryTimers.removeValue(forKey: lease)?.invalidate()
     graceTimers.removeValue(forKey: lease)?.invalidate()
     prevAliasTimers.removeValue(forKey: lease)?.invalidate()
-    for (h, l) in leaseByHandle where l == lease { leaseByHandle.removeValue(forKey: h) }
+    // R7 contract: the oracle now emits role-correct closes for every live
+    // link BEFORE ended — this sweep is the defensive belt for any handle the
+    // close effects already consumed (idempotent) or bookkeeping drift.
+    for (h, l) in leaseByHandle where l == lease {
+      leaseByHandle.removeValue(forKey: h)
+      if h.hasPrefix("out:"), let id = uuidOf(h), outLinks[id] != nil {
+        outLinks.removeValue(forKey: id)
+        bb.w5End(id)
+      } else if h.hasPrefix("in:") {
+        inLinks.removeValue(forKey: String(h.dropFirst(3)))
+      }
+    }
   }
 
   /// Beacon OFF / stopEverything: erase everything, per the owner rule.

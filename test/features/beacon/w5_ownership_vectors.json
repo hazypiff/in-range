@@ -1,0 +1,150 @@
+{
+  "version": 1,
+  "comment": "Shared Dart+Swift OWNERSHIP conformance vectors (round-7 fix #4). Hand-written — pins semantics, not an implementation's output. Events run against a fresh oracle per vector; expectEffects is an exact ordered list ({kind} matches any payload for sendPropose/sendAck; other kinds carry their key field). finalObs asserts end-state.",
+  "vectors": [
+    {
+      "name": "R7 probe 4: rotation during grace — rediscovery rejoins, generation continues, re-commits",
+      "steps": [
+        {
+          "event": "control",
+          "handle": "p1", "role": "outbound",
+          "myCandidate": "cand-a", "peerCandidate": "cand-b",
+          "peerAlias": "aliasB", "linkId": "L1",
+          "expectEffects": [{"kind": "sendPropose"}]
+        },
+        {
+          "event": "proposeRecv", "peerAlias": "aliasB",
+          "encounterId": "cand-a", "viewGen": 7,
+          "contenders": [["cand-a", "L1"]],
+          "expectEffects": [{"kind": "sendAck"}]
+        },
+        {
+          "event": "ackCurrent", "peerAlias": "aliasB",
+          "expectEffects": [{"kind": "owns", "handle": "p1"}]
+        },
+        {"event": "linkDown", "handle": "p1", "expectEffects": []},
+        {
+          "event": "discovered",
+          "alias": "aliasB2", "wouldDial": true,
+          "candidateId": "cand-a", "linkId": "L3",
+          "expectEffects": [{"kind": "dial", "linkId": "L3"}]
+        },
+        {
+          "event": "control",
+          "handle": "p3", "role": "outbound",
+          "myCandidate": "cand-a", "peerCandidate": "cand-b",
+          "peerAlias": "aliasB2", "linkId": "L3", "peerPrevAlias": "aliasB",
+          "expectEffects": [{"kind": "sendPropose"}]
+        },
+        {
+          "event": "proposeRecv", "peerAlias": "aliasB2",
+          "encounterId": "cand-a", "viewGen": 11,
+          "contenders": [["cand-a", "L3"]],
+          "expectEffects": [{"kind": "sendAck"}]
+        },
+        {
+          "event": "ackCurrent", "peerAlias": "aliasB2",
+          "expectEffects": [{"kind": "owns", "handle": "p3"}]
+        }
+      ],
+      "finalObs": {
+        "activeLeases": 1,
+        "committed": {"cand-a": "L3"},
+        "leaseForAlias": {"aliasB2": "cand-a", "aliasB": "cand-a"},
+        "viewGenAtLeast": {"cand-a": 3}
+      }
+    },
+    {
+      "name": "R7 fix 3: prevAlias resolves a fresh-candidate rediscovery into the SAME lease (rekey moves the anchor)",
+      "steps": [
+        {
+          "event": "control",
+          "handle": "p1", "role": "outbound",
+          "myCandidate": "cand-a", "peerCandidate": "cand-b",
+          "peerAlias": "aliasB", "linkId": "L1",
+          "expectEffects": [{"kind": "sendPropose"}]
+        },
+        {"event": "linkDown", "handle": "p1", "expectEffects": []},
+        {
+          "event": "control",
+          "handle": "p3", "role": "outbound",
+          "myCandidate": "cand-x", "peerCandidate": "cand-b",
+          "peerAlias": "aliasB2", "linkId": "L3", "peerPrevAlias": "aliasB",
+          "expectEffects": [{"kind": "sendPropose"}]
+        },
+        {
+          "event": "proposeRecv", "peerAlias": "aliasB2",
+          "encounterId": "cand-b", "viewGen": 9,
+          "contenders": [["cand-x", "L3"]],
+          "expectEffects": [{"kind": "sendAck"}]
+        },
+        {
+          "event": "ackCurrent", "peerAlias": "aliasB2",
+          "expectEffects": [{"kind": "owns", "handle": "p3"}]
+        }
+      ],
+      "finalObs": {
+        "activeLeases": 1,
+        "committed": {"cand-b": "L3"},
+        "leaseForAlias": {"aliasB2": "cand-b"}
+      }
+    },
+    {
+      "name": "R7 fix 2: rekey onto an occupied lease key fails the incoming link closed",
+      "steps": [
+        {
+          "event": "control",
+          "handle": "h1", "role": "outbound",
+          "myCandidate": "cand-a", "peerCandidate": "cand-z",
+          "peerAlias": "aliasZ", "linkId": "L1",
+          "expectEffects": [{"kind": "sendPropose"}]
+        },
+        {
+          "event": "discovered",
+          "alias": "aliasY", "wouldDial": true,
+          "candidateId": "cand-y", "linkId": "L2",
+          "expectEffects": [{"kind": "dial", "linkId": "L2"}]
+        },
+        {
+          "event": "control",
+          "handle": "h2", "role": "outbound",
+          "myCandidate": "cand-y", "peerCandidate": "cand-a",
+          "peerAlias": "aliasY", "linkId": "L2",
+          "expectEffects": [{"kind": "closeOutbound", "handle": "h2"}]
+        }
+      ],
+      "finalObs": {
+        "activeLeases": 2,
+        "keeperOf": {"cand-a": "h1"}
+      }
+    },
+    {
+      "name": "R7 contract: teardown closes EVERY live link, role-correct, before ended",
+      "steps": [
+        {
+          "event": "control",
+          "handle": "p1", "role": "outbound",
+          "myCandidate": "cand-a", "peerCandidate": "cand-b",
+          "peerAlias": "aliasB", "linkId": "L1",
+          "expectEffects": [{"kind": "sendPropose"}]
+        },
+        {
+          "event": "control",
+          "handle": "p2", "role": "inbound",
+          "myCandidate": "cand-a", "peerCandidate": "cand-b",
+          "peerAlias": "aliasB", "linkId": "L2",
+          "expectEffects": [{"kind": "sendPropose"}]
+        },
+        {
+          "event": "teardown", "leaseId": "cand-a",
+          "expectEffects": [
+            {"kind": "closeOutbound", "handle": "p1"},
+            {"kind": "rejectInbound", "handle": "p2"},
+            {"kind": "ended", "leaseId": "cand-a"}
+          ]
+        }
+      ],
+      "finalObs": {"activeLeases": 0}
+    }
+  ]
+}

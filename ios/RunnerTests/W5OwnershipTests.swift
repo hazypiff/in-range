@@ -412,13 +412,89 @@ final class W5OwnershipTests: XCTestCase {
     let fx = a.onControl(
       handle: "p2", role: .inbound, myCandidate: candA, peerCandidate: candB,
       peerAlias: aliasB, linkId: "L2")
-    XCTAssertEqual(fx, [.ended(leaseId: leaseId)])
+    // R7 contract: W5Ended is preceded by a close for EVERY live link.
+    XCTAssertEqual(
+      fx,
+      [
+        .closeOutbound(handle: "p1"), .rejectInbound(handle: "p2"),
+        .ended(leaseId: leaseId),
+      ])
     XCTAssertEqual(a.activeLeases, 0)
     // Overflow via link-down (a non-onControl bump site).
     let b = established("L1")
     b.debugSetViewGen(leaseId, kW5U32Max)
     XCTAssertEqual(b.onLinkDown(handle: "p1"), [.ended(leaseId: leaseId)])
     XCTAssertEqual(b.activeLeases, 0)
+  }
+
+  // R7 probe 4 — rotation during grace with the ALIAS_ROLL lost.
+  func testR7RotationDuringGraceRediscoveryRejoinsPrevAliasResolves() {
+    let a = W5Ownership()
+    _ = a.onControl(
+      handle: "p1", role: .outbound, myCandidate: candA, peerCandidate: candB,
+      peerAlias: aliasB, linkId: "L1")
+    commitAgainst(a, leaseId, [ct("cand-a", "L1")], aliasB)
+    _ = a.onLinkDown(handle: "p1")
+    let genInGrace = a.currentProposal(leaseId)!.viewGen
+    XCTAssertGreaterThan(genInGrace, 0)
+    let fx = a.onDiscovered(
+      alias: "aliasB2", wouldDial: true, candidateId: candA, linkId: "L3")
+    XCTAssertEqual(fx, [.dial(linkId: "L3")])
+    XCTAssertEqual(a.activeLeases, 1)  // no replacement encounter
+    XCTAssertGreaterThan(a.currentProposal(leaseId)!.viewGen, genInGrace)
+    _ = a.onControl(
+      handle: "p3", role: .outbound, myCandidate: candA, peerCandidate: candB,
+      peerAlias: "aliasB2", linkId: "L3", peerPrevAlias: aliasB)
+    XCTAssertEqual(a.activeLeases, 1)
+    XCTAssertEqual(a.leaseForAlias("aliasB2"), leaseId)
+    let m = a.currentProposal(leaseId)!
+    _ = a.onProposeRecv(
+      peerAlias: "aliasB2",
+      proposal: W5Proposal(encounterId: leaseId, viewGen: 11, contenders: [ct("cand-a", "L3")]))
+    _ = a.onAckRecv(
+      peerAlias: "aliasB2",
+      ack: W5Ack(encounterId: leaseId, ackViewGen: m.viewGen, viewHash: m.viewHash))
+    XCTAssertEqual(a.committedLinkId(leaseId), "L3")
+  }
+
+  // R7 fix #2 — rekey onto an occupied lease key fails closed.
+  func testR7RekeyOntoOccupiedLeaseKeyFailsClosed() {
+    let a = W5Ownership()
+    _ = a.onControl(
+      handle: "h1", role: .outbound, myCandidate: "cand-a", peerCandidate: "cand-z",
+      peerAlias: "aliasZ", linkId: "L1")
+    _ = a.onDiscovered(
+      alias: "aliasY", wouldDial: true, candidateId: "cand-y", linkId: "L2")
+    let fx = a.onControl(
+      handle: "h2", role: .outbound, myCandidate: "cand-y", peerCandidate: "cand-a",
+      peerAlias: "aliasY", linkId: "L2")
+    XCTAssertEqual(fx, [.closeOutbound(handle: "h2")])
+    XCTAssertEqual(a.activeLeases, 2)
+    XCTAssertEqual(a.keeperOf("cand-a"), "h1")
+  }
+
+  // R7 contract — every erase-ender closes ALL live links before Ended.
+  func testR7TeardownAndBeaconOffCloseEveryLiveLinkBeforeEnded() {
+    let a = established("L1")
+    _ = a.onControl(
+      handle: "p2", role: .inbound, myCandidate: candA, peerCandidate: candB,
+      peerAlias: aliasB, linkId: "L2")
+    XCTAssertEqual(
+      a.onTeardown(leaseId: leaseId),
+      [
+        .closeOutbound(handle: "p1"), .rejectInbound(handle: "p2"),
+        .ended(leaseId: leaseId),
+      ])
+    let b = established("L1")
+    _ = b.onControl(
+      handle: "p2", role: .inbound, myCandidate: candA, peerCandidate: candB,
+      peerAlias: aliasB, linkId: "L2")
+    XCTAssertEqual(
+      b.onBeaconOff(),
+      [
+        .closeOutbound(handle: "p1"), .rejectInbound(handle: "p2"),
+        .ended(leaseId: leaseId),
+      ])
   }
 
   func testAliasRolloverKeepsCurrentPlusPreviousThenExpires() {

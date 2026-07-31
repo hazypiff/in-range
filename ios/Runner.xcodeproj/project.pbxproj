@@ -11,9 +11,11 @@
 		1D5D796CDE5E573CF93AD5AD /* W5Ownership.swift in Sources */ = {isa = PBXBuildFile; fileRef = C536136C02CC816DE0F902C8 /* W5Ownership.swift */; };
 		20D1FDA977A94261F5BBD45D /* ReleaseIsolationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2F1AE50F9AED8ED2D1B72F8 /* ReleaseIsolationTests.swift */; };
 		210BCA184DC4B36765A5EBBD /* W5OwnershipTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0DDD56893B45D823A63196F /* W5OwnershipTests.swift */; };
+		27115E58A33E22CF8A1A8950 /* W5OwnershipVectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E48A683406742C850EB14A1 /* W5OwnershipVectorTests.swift */; };
 		331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807B294A618700263BE5 /* RunnerTests.swift */; };
 		3B3967161E833CAA004F5970 /* AppFrameworkInfo.plist in Resources */ = {isa = PBXBuildFile; fileRef = 3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */; };
 		45EB553EEE99C8F286FD526F /* W5LinkController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 598A86B3693CF1494482B6E4 /* W5LinkController.swift */; };
+		6771B1168BA4E96FC1431CD3 /* w5_ownership_vectors.json in Resources */ = {isa = PBXBuildFile; fileRef = 6050FFDD9F31701406C99703 /* w5_ownership_vectors.json */; };
 		69430F77CCFD8B350655823E /* W5Codec.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE99188F4754602D6DC1B25D /* W5Codec.swift */; };
 		74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74858FAE1ED2DC5600515810 /* AppDelegate.swift */; };
 		78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */ = {isa = PBXBuildFile; productRef = 78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */; };
@@ -63,12 +65,14 @@
 		3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = AppFrameworkInfo.plist; path = Flutter/AppFrameworkInfo.plist; sourceTree = "<group>"; };
 		4CC0FC048A3AEF352FAE375F /* Pods-RunnerTests.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RunnerTests.release.xcconfig"; path = "Target Support Files/Pods-RunnerTests/Pods-RunnerTests.release.xcconfig"; sourceTree = "<group>"; };
 		598A86B3693CF1494482B6E4 /* W5LinkController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = W5LinkController.swift; sourceTree = "<group>"; };
+		6050FFDD9F31701406C99703 /* w5_ownership_vectors.json */ = {isa = PBXFileReference; includeInIndex = 1; name = w5_ownership_vectors.json; path = ../../test/features/beacon/w5_ownership_vectors.json; sourceTree = "<group>"; };
 		6C04DCDA59CA6A672B49510C /* Pods_Runner.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Runner.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Runner-Bridging-Header.h"; sourceTree = "<group>"; };
 		74858FAE1ED2DC5600515810 /* AppDelegate.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		78E0A7A72DC9AD7400C4905E /* FlutterGeneratedPluginSwiftPackage */ = {isa = PBXFileReference; lastKnownFileType = wrapper; name = FlutterGeneratedPluginSwiftPackage; path = Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage; sourceTree = "<group>"; };
 		7AFA3C8E1D35360C0083082E /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Release.xcconfig; path = Flutter/Release.xcconfig; sourceTree = "<group>"; };
 		7C94AE4109581327E7DB0E51 /* Pods-Runner.release-diag.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.release-diag.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.release-diag.xcconfig"; sourceTree = "<group>"; };
+		7E48A683406742C850EB14A1 /* W5OwnershipVectorTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = W5OwnershipVectorTests.swift; sourceTree = "<group>"; };
 		837FA7795BAD78E9D0098154 /* Pods-Runner.debug-diag.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.debug-diag.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.debug-diag.xcconfig"; sourceTree = "<group>"; };
 		84895F336D9CBA39C4C90D56 /* Pods_RunnerTests.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_RunnerTests.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		8DA99931991E9B555B6901DE /* W5CodecTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = W5CodecTests.swift; sourceTree = "<group>"; };
@@ -131,6 +135,8 @@
 				8DA99931991E9B555B6901DE /* W5CodecTests.swift */,
 				B6A71666D91D92A314920F59 /* w5_codec_vectors.json */,
 				A2F1AE50F9AED8ED2D1B72F8 /* ReleaseIsolationTests.swift */,
+				7E48A683406742C850EB14A1 /* W5OwnershipVectorTests.swift */,
+				6050FFDD9F31701406C99703 /* w5_ownership_vectors.json */,
 			);
 			path = RunnerTests;
 			sourceTree = "<group>";
@@ -318,6 +324,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				8D1B946E2DE574F34DDC70A3 /* w5_codec_vectors.json in Resources */,
+				6771B1168BA4E96FC1431CD3 /* w5_ownership_vectors.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -439,6 +446,7 @@
 				210BCA184DC4B36765A5EBBD /* W5OwnershipTests.swift in Sources */,
 				CF68FE831AE11560F7E33F32 /* W5CodecTests.swift in Sources */,
 				20D1FDA977A94261F5BBD45D /* ReleaseIsolationTests.swift in Sources */,
+				27115E58A33E22CF8A1A8950 /* W5OwnershipVectorTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

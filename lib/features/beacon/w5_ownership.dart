@@ -178,8 +178,11 @@ class _Enc {
   _Enc(this.leaseId, this.aliasCurrent, this.myCandidate);
   String leaseId;
   final String myCandidate;
-  final Map<String, (W5Role, String, String)> links =
-      {}; // handle->(role,peer,linkId)
+  // handle -> (role, centralCand, linkId). centralCand is what the WIRE
+  // carried for this link (HELLO's central candidate) — NOT e.myCandidate:
+  // a grace-rejoin under a fresh candidate must advertise the value the peer
+  // actually saw, or the two contender views can never match (R7 vector 2).
+  final Map<String, (W5Role, String, String)> links = {};
   final Map<String, String> linkIdToHandle = {};
   final Set<String> pendingDials = {};
   int viewGen = 0;
@@ -191,12 +194,9 @@ class _Enc {
   String aliasCurrent;
   String? aliasPrevious;
 
-  String _central(W5Role role, String peerCand) =>
-      role == W5Role.outbound ? myCandidate : peerCand;
-
   List<W5Contender> contenders() {
     final c = <W5Contender>{};
-    links.forEach((_, v) => c.add(W5Contender(_central(v.$1, v.$2), v.$3)));
+    links.forEach((_, v) => c.add(W5Contender(v.$2, v.$3)));
     for (final id in pendingDials) {
       c.add(W5Contender(myCandidate, id));
     }
@@ -212,7 +212,7 @@ class _Enc {
     W5Contender? best;
     String? bestLink, bestHandle;
     links.forEach((handle, v) {
-      final c = W5Contender(_central(v.$1, v.$2), v.$3);
+      final c = W5Contender(v.$2, v.$3);
       if (best == null || c.compareTo(best!) < 0) {
         best = c;
         bestLink = v.$3;
@@ -259,7 +259,12 @@ class W5Ownership {
     required String linkId,
   }) {
     final id = _aliasTo[alias];
-    final e = id == null ? null : _enc[id];
+    var e = id == null ? null : _enc[id];
+    // R7 fix #1: an unknown alias can still target a LIVE encounter keyed by
+    // this candidate (rotation during grace, ALIAS_ROLL lost with the
+    // keeper). NEVER silently replace it: healthy → no dial; in grace → the
+    // discovery re-joins the existing encounter and the alias maps to it.
+    e ??= _enc[candidateId];
     if (e != null && !e.inGrace) return const [];
     if (!wouldDial) return const [];
     // Cap: a dial that would exceed the contender budget is refused.
@@ -273,6 +278,7 @@ class W5Ownership {
       _aliasTo[alias] = candidateId;
       _dialInFlight[linkId] = candidateId;
     } else {
+      _aliasTo[alias] = e.leaseId; // rediscovery alias joins the lease
       e.pendingDials.add(linkId);
       _bumpView(e);
       if (e.viewGen > kU32Max) return _saturate(e);
@@ -288,9 +294,18 @@ class W5Ownership {
     required String peerCandidate,
     required String peerAlias,
     required String linkId,
+    String? peerPrevAlias,
   }) {
     final realId = _minS(myCandidate, peerCandidate);
     var e = _locate(peerAlias, myCandidate);
+    // R7 fix #3 (prevAlias is load-bearing): a rediscovery during grace under
+    // a rotated alias resolves through HELLO's prevAlias to the SAME lease —
+    // ALIAS_ROLL alone cannot cover keeper-down rotation because the channel
+    // it rides is exactly what is down.
+    if (e == null && peerPrevAlias != null) {
+      final prevId = _aliasTo[peerPrevAlias];
+      if (prevId != null) e = _enc[prevId];
+    }
 
     // Endpoint-global bijection: a live handle or linkId already bound to a
     // DIFFERENT encounter/link fails closed without mutating the binding.
@@ -304,7 +319,7 @@ class W5Ownership {
     }
 
     if (e != null && e.committed) {
-      _aliasTo[peerAlias] = e.leaseId;
+      _bindAlias(e, peerAlias);
       final w = e.winner();
       if (w != null && w.$1 == linkId && w.$2 == handle) {
         return [W5Owns(handle)];
@@ -316,14 +331,16 @@ class W5Ownership {
           (e.links.containsKey(handle) && e.links[handle]!.$3 != linkId)) {
         return [_closeLoser(handle, role)];
       }
-      final newC = W5Contender(e._central(role, peerCandidate), linkId);
+      final newC = W5Contender(
+          role == W5Role.outbound ? myCandidate : peerCandidate, linkId);
       final wl = e.links[w!.$2]!;
-      final wC = W5Contender(e._central(wl.$1, wl.$2), w.$1);
+      final wC = W5Contender(wl.$2, w.$1);
       if (newC.compareTo(wC) > 0) {
         if (e.links.length + 1 > kMaxContenders) {
           return [_closeLoser(handle, role)];
         }
-        _map(e, handle, role, peerCandidate, linkId);
+        _map(e, handle, role,
+            role == W5Role.outbound ? myCandidate : peerCandidate, linkId);
         _bumpView(e);
         if (e.viewGen > kU32Max) return _saturate(e);
         return [_propose(e), _closeLoser(handle, role)];
@@ -336,7 +353,9 @@ class W5Ownership {
       e = _Enc(realId, peerAlias, myCandidate);
       _enc[realId] = e;
     } else if (e.leaseId != realId) {
-      _rekey(e, realId);
+      // R7 fix #2: rekeying onto a key held by a DIFFERENT live encounter
+      // would stomp it — fail the incoming link closed instead.
+      if (!_rekey(e, realId)) return [_closeLoser(handle, role)];
     }
     // Same-encounter collision + cap guards.
     if ((e.linkIdToHandle.containsKey(linkId) &&
@@ -349,9 +368,9 @@ class W5Ownership {
       return [_closeLoser(handle, role)];
     }
     e.inGrace = false;
-    _aliasTo[peerAlias] = e.leaseId;
-    e.aliasCurrent = peerAlias;
-    _map(e, handle, role, peerCandidate, linkId);
+    _bindAlias(e, peerAlias);
+    _map(e, handle, role, role == W5Role.outbound ? myCandidate : peerCandidate,
+        linkId);
     if (role == W5Role.outbound) {
       e.pendingDials.remove(linkId);
       _dialInFlight.remove(linkId);
@@ -489,20 +508,16 @@ class W5Ownership {
   List<W5Effect> onTeardown({required String leaseId}) {
     final e = _enc[leaseId];
     if (e == null) return const [];
-    final fx = <W5Effect>[];
-    final w = e.winner();
-    if (w != null) fx.add(_closeLoser(w.$2, e.links[w.$2]!.$1));
+    final fx = _closeAllLinks(e);
     _erase(leaseId);
-    fx.add(W5Ended(leaseId));
-    return fx;
+    return [...fx, W5Ended(leaseId)];
   }
 
   List<W5Effect> onBeaconOff() {
     final fx = <W5Effect>[];
     for (final id in _enc.keys.toList()..sort()) {
       final e = _enc[id]!;
-      final w = e.winner();
-      if (w != null) fx.add(_closeLoser(w.$2, e.links[w.$2]!.$1));
+      fx.addAll(_closeAllLinks(e));
       fx.add(W5Ended(id));
     }
     _enc.clear();
@@ -529,11 +544,26 @@ class W5Ownership {
   }
 
   void _map(
-      _Enc e, String handle, W5Role role, String peerCand, String linkId) {
-    e.links[handle] = (role, peerCand, linkId);
+      _Enc e, String handle, W5Role role, String centralCand, String linkId) {
+    e.links[handle] = (role, centralCand, linkId);
     e.linkIdToHandle[linkId] = handle;
     _handleTo[handle] = e.leaseId;
     _linkIdToLease[linkId] = e.leaseId;
+  }
+
+  /// Binding a control alias is a ROLL when it differs from the current one:
+  /// current→previous, never more than one generation retained.
+  void _bindAlias(_Enc e, String peerAlias) {
+    _aliasTo[peerAlias] = e.leaseId;
+    if (e.aliasCurrent == peerAlias) return;
+    final twoAgo = e.aliasPrevious;
+    e.aliasPrevious = e.aliasCurrent;
+    e.aliasCurrent = peerAlias;
+    if (twoAgo != null &&
+        twoAgo != e.aliasCurrent &&
+        twoAgo != e.aliasPrevious) {
+      _aliasTo.remove(twoAgo);
+    }
   }
 
   void _bumpView(_Enc e) {
@@ -541,10 +571,20 @@ class W5Ownership {
     e.peerAckedMine = false; // our view changed → peer must re-ACK
   }
 
+  /// CONTRACT (round 7): a `W5Ended` is always preceded, in the same effect
+  /// list, by a role-correct close for EVERY live link of that encounter —
+  /// the adapter never infers closes from an erase.
+  List<W5Effect> _closeAllLinks(_Enc e) {
+    final entries = e.links.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+    return [for (final en in entries) _closeLoser(en.key, en.value.$1)];
+  }
+
   List<W5Effect> _saturate(_Enc e) {
     final id = e.leaseId;
+    final fx = _closeAllLinks(e);
     _erase(id);
-    return [W5Ended(id)];
+    return [...fx, W5Ended(id)];
   }
 
   W5Effect _propose(_Enc e) => W5SendPropose(
@@ -585,7 +625,8 @@ class W5Ownership {
     return true;
   }
 
-  void _rekey(_Enc e, String newId) {
+  bool _rekey(_Enc e, String newId) {
+    if (_enc.containsKey(newId) && !identical(_enc[newId], e)) return false;
     final old = e.leaseId;
     _enc.remove(old);
     _aliasTo.updateAll((k, v) => v == old ? newId : v);
@@ -597,6 +638,7 @@ class W5Ownership {
     e.peerViewGen = null;
     e.peerAckedMine = false;
     _enc[newId] = e;
+    return true;
   }
 
   void _erase(String leaseId) {
