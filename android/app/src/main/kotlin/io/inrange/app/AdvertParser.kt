@@ -423,6 +423,30 @@ object AdvertParser {
         val bitmap = overflow?.value
         val nearbyInfo = apple.firstOrNull { it.type == APPLE_NEARBY_INFO }
 
+        // The D9 redaction must hold for the raw `manufacturer[].data` bytes
+        // too, or the same payload the `apple` list nulls rides the channel
+        // verbatim one key over. Zero the sensitive TLVs' value bytes inside
+        // each Apple AD's data copy; type/length bytes stay, matching the
+        // skeleton the `apple` list exposes. Keyed by position among the
+        // Apple ADs — the same filtered order appleAds() walked.
+        val sensitiveRanges = HashMap<Int, MutableList<IntRange>>()
+        run {
+            var blobBase = 0
+            val bases = ArrayList<Int>(4)
+            for (ad in mfg) {
+                if (ad.companyId != COMPANY_APPLE) continue
+                bases.add(blobBase)
+                blobBase += ad.data.size
+            }
+            for (tlv in apple) {
+                if (tlv.type !in TRACKING_SENSITIVE_APPLE_TYPES || tlv.value.isEmpty()) continue
+                val local = tlv.payloadBlobOffset - bases[tlv.adIndex]
+                sensitiveRanges.getOrPut(tlv.adIndex) { ArrayList(2) }
+                    .add(local until local + tlv.value.size)
+            }
+        }
+        var appleAdIndex = -1
+
         return mapOf(
             "recordLen" to (record?.size ?: 0),
             "adCount" to ads.size,
@@ -430,11 +454,19 @@ object AdvertParser {
             // PDU order, duplicates preserved — the D5 evidence in one field.
             "companyIds" to mfg.map { it.companyId },
             "manufacturer" to mfg.map {
+                val data = if (it.companyId != COMPANY_APPLE) it.data else {
+                    appleAdIndex += 1
+                    val ranges = sensitiveRanges[appleAdIndex]
+                    if (ranges == null) it.data
+                    else it.data.copyOf().also { copy ->
+                        for (r in ranges) for (j in r) copy[j] = 0
+                    }
+                }
                 mapOf(
                     "companyId" to it.companyId,
                     "len" to it.data.size,
                     "recordOffset" to it.recordOffset,
-                    "data" to it.data,
+                    "data" to data,
                 )
             },
             "apple" to apple.map {

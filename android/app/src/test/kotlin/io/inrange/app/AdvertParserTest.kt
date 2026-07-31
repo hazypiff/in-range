@@ -838,10 +838,79 @@ class AdvertParserTest {
         }
         assertEquals(listOf(0x0C, 0x0D), apple.map { it["type"] })
 
+        // The redaction must hold for the WHOLE map, not just the `apple`
+        // list: `manufacturer[].data` carries the same bytes one key over.
+        // Walk every ByteArray anywhere in the summary and assert the
+        // sensitive payloads appear nowhere.
+        val summary = AdvertParser.summarize(TRACKING_SENSITIVE)
+        for (bytes in byteArraysIn(summary)) {
+            assertFalse(
+                "Handoff payload leaked in a ByteArray on the channel",
+                containsSubsequence(bytes, b(0xAA, 0xBB)))
+            assertFalse(
+                "Tethering Source payload leaked in a ByteArray on the channel",
+                containsSubsequence(bytes, b(0xCC, 0xDD)))
+        }
+        // The skeleton survives redaction: type/length bytes intact, values
+        // zeroed, size unchanged.
+        @Suppress("UNCHECKED_CAST")
+        val mfg = summary["manufacturer"] as List<Map<String, Any?>>
+        assertArrayEquals(
+            b(0x0C, 0x02, 0x00, 0x00, 0x0D, 0x02, 0x00, 0x00),
+            mfg[0]["data"] as ByteArray)
+        assertEquals(8, mfg[0]["len"])
+
         // The raw appleAds() layer does NOT redact — redaction is summarize's
         // job, because AdvertScanner.includeRaw deliberately bypasses it for
         // calibration. If that ever changes, this assertion is the tripwire.
         assertArrayEquals(b(0xAA, 0xBB), AdvertParser.appleAds(TRACKING_SENSITIVE)[0].value)
+    }
+
+    /// Redaction is surgical: a sensitive TLV sharing an Apple AD with a
+    /// benign one loses only its own value bytes, and non-Apple manufacturer
+    /// data is untouched.
+    @Test
+    fun manufacturerDataRedactionIsSurgical() {
+        // Nordic AD (aa bb) + one Apple AD holding Handoff(de ad) then
+        // Nearby Info(11 ee).
+        val mixed = hex("02011a" + "05ff5900aabb" + "0bff4c00" + "0c02dead" + "100211ee")
+        assertEquals("3 + 6 + 12", 21, mixed.size)
+
+        val summary = AdvertParser.summarize(mixed)
+        @Suppress("UNCHECKED_CAST")
+        val mfg = summary["manufacturer"] as List<Map<String, Any?>>
+        assertEquals(listOf(0x0059, 0x004C), mfg.map { it["companyId"] })
+        // Non-Apple data intact.
+        assertArrayEquals(b(0xAA, 0xBB), mfg[0]["data"] as ByteArray)
+        // Apple data: Handoff value zeroed, Nearby Info value intact.
+        assertArrayEquals(
+            b(0x0C, 0x02, 0x00, 0x00, 0x10, 0x02, 0x11, 0xEE),
+            mfg[1]["data"] as ByteArray)
+
+        // And the `apple` list agrees with itself: 0x0C null, 0x10 present.
+        @Suppress("UNCHECKED_CAST")
+        val apple = summary["apple"] as List<Map<String, Any?>>
+        assertNull(apple.first { it["type"] == 0x0C }["value"])
+        assertArrayEquals(
+            b(0x11, 0xEE),
+            apple.first { it["type"] == 0x10 }["value"] as ByteArray)
+    }
+
+    /// Every ByteArray reachable in a channel map, recursively.
+    private fun byteArraysIn(node: Any?): List<ByteArray> = when (node) {
+        is ByteArray -> listOf(node)
+        is Map<*, *> -> node.values.flatMap { byteArraysIn(it) }
+        is List<*> -> node.flatMap { byteArraysIn(it) }
+        else -> emptyList()
+    }
+
+    private fun containsSubsequence(hay: ByteArray, needle: ByteArray): Boolean {
+        if (needle.isEmpty() || hay.size < needle.size) return false
+        outer@ for (i in 0..hay.size - needle.size) {
+            for (j in needle.indices) if (hay[i + j] != needle[j]) continue@outer
+            return true
+        }
+        return false
     }
 
     @Test

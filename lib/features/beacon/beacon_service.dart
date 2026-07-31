@@ -574,6 +574,7 @@ class BeaconService {
     // _scanStartLedger is deliberately NOT cleared — see _scanStartBudget.
     _scanRetryTimer?.cancel();
     _scanRetryTimer = null;
+    _scanRetryDeadline = null;
     _scanErrorStreak = 0;
     _scanRunning = false;
     _locationRefreshTimer?.cancel();
@@ -693,6 +694,12 @@ class BeaconService {
   int _scanErrorStreak = 0;
   Timer? _scanRetryTimer;
 
+  /// When the pending [_scanRetryTimer] will fire. Kept so a later, LONGER
+  /// request can extend the slot instead of being silently folded — a 3 s
+  /// bucket defer must not swallow a 60 s error backoff, or the per-code
+  /// ladder in [_scanBackoffFor] is never actually honoured.
+  DateTime? _scanRetryDeadline;
+
   /// True between a successful `FlutterBluePlus.startScan` and the next
   /// error/stop (W8). This is the state the app was missing: `_lastForeignScanAt`
   /// is bumped only inside `_ingestForeignSample` — i.e. only when a real In
@@ -751,17 +758,31 @@ class BeaconService {
   /// pending backoff therefore also outranks a cadence tick that lands on top
   /// of it; the backoff restart re-establishes scanning either way.
   void _deferScanRestart(Duration delay, String reason) {
+    final deadline = DateTime.now().add(delay);
     if (_scanRetryTimer != null) {
-      debugPrint('Scan restart ($reason) folded into pending retry');
-      return;
+      final pending = _scanRetryDeadline;
+      if (pending != null && !deadline.isAfter(pending)) {
+        debugPrint('Scan restart ($reason) folded into pending retry');
+        return;
+      }
+      // The fold must take the LATER deadline: a pending short bucket defer
+      // swallowing a longer error backoff re-arms a failing scan at bucket
+      // speed instead of ladder speed.
+      _scanRetryTimer!.cancel();
+      debugPrint('Scan restart ($reason) extends pending retry to '
+          '${delay.inMilliseconds}ms');
+    } else {
+      debugPrint('Scan restart ($reason) deferred ${delay.inMilliseconds}ms '
+          '(bucket ${_scanStartLedger.length}/$_scanStartBudget per '
+          '${_scanStartWindow.inSeconds}s, error streak $_scanErrorStreak)');
     }
-    debugPrint('Scan restart ($reason) deferred ${delay.inMilliseconds}ms '
-        '(bucket ${_scanStartLedger.length}/$_scanStartBudget per '
-        '${_scanStartWindow.inSeconds}s, error streak $_scanErrorStreak)');
+    _scanRetryDeadline = deadline;
     _scanRetryTimer = Timer(delay, () {
       _scanRetryTimer = null;
+      _scanRetryDeadline = null;
       // Re-price it: the deferral was granted against a ledger that another
-      // trigger may have spent in the meantime.
+      // trigger may have spent in the meantime. The ladder wait itself has
+      // already elapsed on this timer, so zero extra delay here is correct.
       _requestScanRestart(reason);
     });
   }
