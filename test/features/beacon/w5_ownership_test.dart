@@ -3,247 +3,280 @@ import 'dart:math';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:in_range/features/beacon/w5_ownership.dart';
 
-/// Acceptance tests for the #7 encounter-lease ownership oracle (corrected per
-/// PR #9 review). candA < candB by string order throughout. Scenarios 11-14
-/// (diagnostic isolation) are build-level (#8), not this unit surface.
+/// Two-peer acceptance tests for the #7 ownership oracle. candA < candB by
+/// string order; the winning physical keeper is therefore always 'A->B' (its
+/// central is A, the smaller candidate). leaseId == min == candA.
+const candA = 'cand-a';
+const candB = 'cand-b';
+const aliasA = 'aliasA';
+const aliasB = 'aliasB';
+const leaseId = candA;
+
+Iterable<List<int>> _perms(List<int> xs) sync* {
+  if (xs.length <= 1) {
+    yield List.of(xs);
+    return;
+  }
+  for (var i = 0; i < xs.length; i++) {
+    final rest = [...xs.sublist(0, i), ...xs.sublist(i + 1)];
+    for (final p in _perms(rest)) {
+      yield [xs[i], ...p];
+    }
+  }
+}
+
+/// Drives two endpoints and routes COMMIT messages between them.
+class _Pair {
+  final a = W5Ownership();
+  final b = W5Ownership();
+
+  void _route(List<W5Effect> fx, W5Ownership to, String fromAlias) {
+    for (final (op, arg) in fx) {
+      if (op == W5Op.commit) to.onCommitRecv(peerAlias: fromAlias, token: arg);
+    }
+  }
+
+  void aControl(String h, W5Role role) => _route(
+      a.onControl(
+          handle: h,
+          role: role,
+          myCandidate: candA,
+          peerCandidate: candB,
+          peerAlias: aliasB),
+      b,
+      aliasA);
+
+  void bControl(String h, W5Role role) => _route(
+      b.onControl(
+          handle: h,
+          role: role,
+          myCandidate: candB,
+          peerCandidate: candA,
+          peerAlias: aliasA),
+      a,
+      aliasB);
+
+  /// Convergence-bound fallback fires on both endpoints.
+  void finalize() {
+    a.onConvergenceTimeout(leaseId: leaseId);
+    b.onConvergenceTimeout(leaseId: leaseId);
+  }
+}
+
 void main() {
-  const candA = 'cand-a';
-  const candB = 'cand-b';
-  const aliasA = 'aliasA';
-  const aliasB = 'aliasB';
-  // Lease id at establishment == min(candidate) == candA (see per-test asserts).
-
-  // Decisive case: the initial dialer is chosen by TOKEN order, which can be
-  // opposite to candidate order. leaseId is min(candidate) regardless of dialer.
-  test('dialer chosen by token order; lease anchored to min(candidate)', () {
-    // A dials B (token order) even though B holds the smaller candidate.
-    final a = W5Ownership();
-    // Here A's own candidate is the LARGER one (candB), peer's is smaller.
-    final dial = a.onDiscovered(
-        alias: aliasB, wouldDial: true, candidateId: candB);
-    expect(dial, [(W5Op.dial, candB)]);
-    final up = a.onControl(
-        handle: 'A->B', role: W5Role.outbound,
-        myCandidate: candB, peerCandidate: candA, peerAlias: aliasB);
-    expect(up, [(W5Op.owns, 'A->B')]);
-    // Lease is anchored to the smaller candidate (candA), not the dialer's.
-    expect(a.keeperOf(candA), 'A->B');
-    expect(a.confirmedKeeperCount, 1);
-  });
-
-  // Scenario 2 (core fix): inbound-only peer does not dial after a token flip.
-  test('inbound-only peer stands down after ordering reverses', () {
-    final b = W5Ownership();
-    // B receives an inbound link from A (A dialed B).
-    b.onControl(
-        handle: 'A->B', role: W5Role.inbound,
-        myCandidate: candB, peerCandidate: candA, peerAlias: aliasA);
-    expect(b.confirmedKeeperCount, 1);
-    b.onConfirmed(handle: 'A->B');
-    // A token flip would make B "want" to dial — but aliasA maps to the lease.
-    final fx = b.onDiscovered(alias: aliasA, wouldDial: true, candidateId: candB);
-    expect(fx, isEmpty);
-    expect(b.confirmedKeeperCount, 1);
-  });
-
-  // Discovery before any peer control data is known → dial (not stand down).
-  test('discovery of an unknown peer dials', () {
-    final a = W5Ownership();
-    expect(a.onDiscovered(alias: 'newpeer', wouldDial: true, candidateId: candA),
-        [(W5Op.dial, candA)]);
-  });
-
-  // Simultaneous open: both role-reversed links converge to ONE keeper on each
-  // phone (the smaller link-candidate wins), regardless of event order.
-  for (final order in ['out-first', 'in-first']) {
-    test('simultaneous open converges to one keeper ($order)', () {
-      // A side: keeps its outbound A->B (candA is smaller).
-      final a = W5Ownership();
-      void aOut() => a.onControl(
-          handle: 'A->B', role: W5Role.outbound,
-          myCandidate: candA, peerCandidate: candB, peerAlias: aliasB);
-      void aIn() => a.onControl(
-          handle: 'B->A', role: W5Role.inbound,
-          myCandidate: candA, peerCandidate: candB, peerAlias: aliasB);
-      if (order == 'out-first') {
-        aOut();
-        aIn();
-      } else {
-        aIn();
-        aOut();
+  // Non-race: only A dials A->B. Both orderings converge, both agree on A->B.
+  for (final perm in _perms([0, 1])) {
+    test('two-peer non-race converges + agrees (order $perm)', () {
+      final p = _Pair();
+      final ops = <void Function()>[
+        () => p.aControl('A->B', W5Role.outbound),
+        () => p.bControl('A->B', W5Role.inbound),
+      ];
+      for (final i in perm) {
+        ops[i]();
       }
-      expect(a.confirmedKeeperCount, 1);
-      expect(a.keeperOf(candA), 'A->B'); // the smaller-candidate link kept
-
-      // B side keeps the SAME physical link (A->B, inbound on B).
-      final b = W5Ownership();
-      void bOut() => b.onControl(
-          handle: 'B->A', role: W5Role.outbound,
-          myCandidate: candB, peerCandidate: candA, peerAlias: aliasA);
-      void bIn() => b.onControl(
-          handle: 'A->B', role: W5Role.inbound,
-          myCandidate: candB, peerCandidate: candA, peerAlias: aliasA);
-      if (order == 'out-first') {
-        bOut();
-        bIn();
-      } else {
-        bIn();
-        bOut();
-      }
-      expect(b.confirmedKeeperCount, 1);
-      expect(b.keeperOf(candA), 'A->B');
+      p.finalize();
+      expect(p.a.committedKeeper(leaseId), 'A->B');
+      expect(p.b.committedKeeper(leaseId), 'A->B');
+      expect(p.a.committedKeeperCount, 1);
+      expect(p.b.committedKeeperCount, 1);
     });
   }
 
-  // A healthy keeper survives token rotations and lower-valued duplicate
-  // candidates (sticky).
-  test('confirmed keeper is not displaced by rotation or a smaller candidate',
-      () {
+  // Regression 1 — cross-device confirmation race. All 24 delivery orderings of
+  // both role-reversed links must converge to the SAME physical keeper on BOTH
+  // phones with exactly one committed keeper each.
+  test('two-peer simultaneous open: all 24 orderings agree on one keeper', () {
+    var count = 0;
+    for (final perm in _perms([0, 1, 2, 3])) {
+      final p = _Pair();
+      final ops = <void Function()>[
+        () => p.aControl('A->B', W5Role.outbound), // A dials B
+        () => p.aControl('B->A', W5Role.inbound), // B dialed A (A's inbound)
+        () => p.bControl('A->B', W5Role.inbound), // A dialed B (B's inbound)
+        () => p.bControl('B->A', W5Role.outbound), // B dials A
+      ];
+      for (final i in perm) {
+        ops[i]();
+      }
+      p.finalize();
+      expect(p.a.committedKeeper(leaseId), 'A->B', reason: 'A perm $perm');
+      expect(p.b.committedKeeper(leaseId), 'A->B', reason: 'B perm $perm');
+      expect(p.a.committedKeeperCount, 1, reason: 'A perm $perm');
+      expect(p.b.committedKeeperCount, 1, reason: 'B perm $perm');
+      count++;
+    }
+    expect(count, 24);
+  });
+
+  // Regression 2 — a committed lease is never rekeyed by a replay carrying a
+  // lower peer candidate.
+  test('committed lease is stable under same-handle replay', () {
+    final p = _Pair();
+    p.aControl('A->B', W5Role.outbound);
+    p.bControl('A->B', W5Role.inbound);
+    p.finalize();
+    expect(p.a.isCommitted(leaseId), isTrue);
+    // Replay control on the keeper handle with a lower peer candidate.
+    final fx = p.a.onControl(
+        handle: 'A->B',
+        role: W5Role.outbound,
+        myCandidate: candA,
+        peerCandidate: 'cand-0', // smaller than candA
+        peerAlias: aliasB);
+    expect(fx, [(W5Op.owns, 'A->B')]); // idempotent, NOT a rekey
+    expect(p.a.committedKeeper(leaseId), 'A->B');
+    expect(p.a.keeperOf('cand-0'), isNull); // never moved to cand-0
+    expect(p.a.activeLeases, 1);
+  });
+
+  // Regression 3 — reconnect during grace can initiate through the real
+  // discovery/dial path.
+  test('reconnect during grace re-dials (does not stand down forever)', () {
+    final p = _Pair();
+    p.aControl('A->B', W5Role.outbound);
+    p.bControl('A->B', W5Role.inbound);
+    p.finalize();
+    p.a.onLinkDown(handle: 'A->B'); // keeper lost → grace
+    // Discovery during grace MUST dial, not stand down.
+    final fx =
+        p.a.onDiscovered(alias: aliasB, wouldDial: true, candidateId: candA);
+    expect(fx, [(W5Op.dial, candA)]);
+    // And a fresh handshake re-establishes.
+    p.aControl('A->B2', W5Role.outbound);
+    p.finalize();
+    expect(p.a.committedKeeper(leaseId), 'A->B2');
+  });
+
+  // Loser links: a losing INBOUND is rejected (peer-central closes), a losing
+  // OUTBOUND is closed by us.
+  test('loser links produce role-correct close/reject effects', () {
     final a = W5Ownership();
     a.onControl(
-        handle: 'A->B', role: W5Role.outbound,
-        myCandidate: candA, peerCandidate: candB, peerAlias: aliasB);
-    a.onConfirmed(handle: 'A->B');
-    // Peer rotates its token in-band.
-    a.onAliasRoll(leaseId: candA, newAlias: 'aliasB2');
-    // A later inbound link arrives with a SMALLER candidate — must be closed,
-    // never adopted, because the keeper is confirmed.
+        handle: 'A->B',
+        role: W5Role.outbound,
+        myCandidate: candA,
+        peerCandidate: candB,
+        peerAlias: aliasB);
     final fx = a.onControl(
-        handle: 'late', role: W5Role.inbound,
-        myCandidate: candA, peerCandidate: 'cand-0', peerAlias: 'aliasB2');
-    expect(fx, [(W5Op.close, 'late')]);
-    expect(a.keeperOf(candA), 'A->B');
-    expect(a.confirmedKeeperCount, 1);
-    // A discovery under EITHER the new or previous alias maps to the lease.
-    expect(a.leaseForAlias('aliasB2'), candA);
-    expect(a.leaseForAlias(aliasB), candA); // previous kept during grace
+        handle: 'B->A',
+        role: W5Role.inbound, // loser (candB central) → rejectInbound
+        myCandidate: candA,
+        peerCandidate: candB,
+        peerAlias: aliasB);
+    expect(fx.contains((W5Op.rejectInbound, 'B->A')), isTrue);
+    expect(a.keeperOf(leaseId), 'A->B');
   });
 
-  // Identifier churn on either role → no second keeper (alias maps to lease).
-  test('identifier churn does not create a second keeper', () {
-    final a = W5Ownership();
-    a.onControl(
-        handle: 'h1', role: W5Role.outbound,
-        myCandidate: candA, peerCandidate: candB, peerAlias: aliasB);
-    a.onConfirmed(handle: 'h1');
-    // The peer reappears under a churned CB handle but the SAME alias.
-    expect(a.onDiscovered(alias: aliasB, wouldDial: true, candidateId: 'x'),
+  // Inbound-only peer stands down after a token flip (the core #7 fix).
+  test('inbound-only peer stands down (alias maps to the committed lease)', () {
+    final b = W5Ownership();
+    b.onControl(
+        handle: 'A->B',
+        role: W5Role.inbound,
+        myCandidate: candB,
+        peerCandidate: candA,
+        peerAlias: aliasA);
+    b.onConvergenceTimeout(leaseId: leaseId);
+    expect(b.isCommitted(leaseId), isTrue);
+    expect(b.onDiscovered(alias: aliasA, wouldDial: true, candidateId: candB),
         isEmpty);
-    expect(a.confirmedKeeperCount, 1);
   });
 
-  // Disconnect/reconnect inside grace resumes; after grace erases.
-  test('reconnect within grace resumes; after grace the encounter ends', () {
+  // Multiple peers → one committed keeper each, never a global cap.
+  test('two and three distinct peers each get one committed keeper', () {
     final a = W5Ownership();
-    a.onControl(
-        handle: 'h1', role: W5Role.outbound,
-        myCandidate: candA, peerCandidate: candB, peerAlias: aliasB);
-    a.onConfirmed(handle: 'h1');
-    a.onLinkDown(handle: 'h1');
-    // still in grace → an expiry check before reconnect would end it, but a
-    // reconnect first re-owns the SAME lease.
-    a.onControl(
-        handle: 'h2', role: W5Role.outbound,
-        myCandidate: candA, peerCandidate: candB, peerAlias: aliasB);
-    expect(a.keeperOf(candA), 'h2');
-    // A late grace-expiry now no-ops (keeper present).
-    expect(a.onGraceExpiry(leaseId: candA), isEmpty);
-
-    // Now drop and let grace expire.
-    a.onLinkDown(handle: 'h2');
-    expect(a.onGraceExpiry(leaseId: candA), [(W5Op.ended, candA)]);
-    expect(a.activeLeases, 0);
-  });
-
-  // Multiple peers → one keeper each, never a global cap.
-  test('two and three distinct peers get independent keepers', () {
-    final a = W5Ownership();
-    a.onControl(
-        handle: 'hb', role: W5Role.outbound,
-        myCandidate: 'ca', peerCandidate: 'zb', peerAlias: 'ab');
-    a.onControl(
-        handle: 'hc', role: W5Role.outbound,
-        myCandidate: 'cc', peerCandidate: 'zc', peerAlias: 'ac');
-    a.onControl(
-        handle: 'hd', role: W5Role.outbound,
-        myCandidate: 'cd', peerCandidate: 'zd', peerAlias: 'ad');
+    for (final (h, mine, peer, al) in [
+      ('hb', 'ca', 'zb', 'ab'),
+      ('hc', 'cc', 'zc', 'ac'),
+      ('hd', 'cd', 'zd', 'ad'),
+    ]) {
+      a.onControl(
+          handle: h,
+          role: W5Role.outbound,
+          myCandidate: mine,
+          peerCandidate: peer,
+          peerAlias: al);
+      a.onConvergenceTimeout(leaseId: mine.compareTo(peer) <= 0 ? mine : peer);
+    }
     expect(a.activeLeases, 3);
-    expect(a.confirmedKeeperCount, 3);
+    expect(a.committedKeeperCount, 3);
   });
 
-  // Beacon OFF and explicit teardown erase leases/aliases.
-  test('beacon off tears every encounter down', () {
+  // Alias rotation + bounded previous-alias expiry.
+  test('alias rollover keeps current+previous, then expires previous', () {
     final a = W5Ownership();
     a.onControl(
-        handle: 'hb', role: W5Role.outbound,
-        myCandidate: 'ca', peerCandidate: 'zb', peerAlias: 'ab');
-    a.onControl(
-        handle: 'hc', role: W5Role.outbound,
-        myCandidate: 'cc', peerCandidate: 'zc', peerAlias: 'ac');
-    final off = a.onBeaconOff();
-    expect(off.where((e) => e.$1 == W5Op.ended).length, 2);
-    expect(a.activeLeases, 0);
-    expect(a.leaseForAlias('ab'), isNull);
+        handle: 'h',
+        role: W5Role.outbound,
+        myCandidate: candA,
+        peerCandidate: candB,
+        peerAlias: aliasB);
+    a.onAliasRoll(leaseId: leaseId, newAlias: 'aliasB2');
+    expect(a.leaseForAlias('aliasB2'), leaseId);
+    expect(a.leaseForAlias(aliasB), leaseId); // previous kept
+    a.onPrevAliasExpiry(leaseId: leaseId);
+    expect(a.leaseForAlias(aliasB), isNull); // previous expired
+    expect(a.leaseForAlias('aliasB2'), leaseId);
   });
 
-  test('teardown closes keeper and erases identity', () {
+  test('beacon off and teardown erase everything', () {
     final a = W5Ownership();
     a.onControl(
-        handle: 'h1', role: W5Role.outbound,
-        myCandidate: candA, peerCandidate: candB, peerAlias: aliasB);
-    expect(a.onTeardown(leaseId: candA), [(W5Op.close, 'h1'), (W5Op.ended, candA)]);
+        handle: 'h',
+        role: W5Role.outbound,
+        myCandidate: candA,
+        peerCandidate: candB,
+        peerAlias: aliasB);
+    expect(a.onTeardown(leaseId: leaseId).last, (W5Op.ended, leaseId));
     expect(a.activeLeases, 0);
+    expect(a.leaseForAlias(aliasB), isNull);
   });
 
-  // Hostile/degenerate inputs fail safe.
   group('degenerate inputs fail safely', () {
-    test('unknown link-down / teardown / grace are no-ops', () {
+    test('unknown link-down / teardown / grace / commit are no-ops', () {
       final a = W5Ownership();
       expect(a.onLinkDown(handle: 'ghost'), isEmpty);
       expect(a.onTeardown(leaseId: 'ghost'), isEmpty);
       expect(a.onGraceExpiry(leaseId: 'ghost'), isEmpty);
-      a.onAliasRoll(leaseId: 'ghost', newAlias: 'z'); // no throw
+      expect(a.onCommitRecv(peerAlias: 'ghost', token: 't'), isEmpty);
+      a.onAliasRoll(leaseId: 'ghost', newAlias: 'z');
+      a.onPrevAliasExpiry(leaseId: 'ghost');
     });
     test('dial that never handshakes is cleared', () {
       final a = W5Ownership();
       expect(a.onDiscovered(alias: aliasB, wouldDial: true, candidateId: candA),
           [(W5Op.dial, candA)]);
       expect(a.onDiscovered(alias: aliasB, wouldDial: true, candidateId: candA),
-          isEmpty); // engaged, no double-dial
+          isEmpty);
       expect(a.onDialFailed(candidateId: candA), [(W5Op.ended, candA)]);
       expect(a.onDiscovered(alias: aliasB, wouldDial: true, candidateId: candA),
-          [(W5Op.dial, candA)]); // dialable again
+          [(W5Op.dial, candA)]);
     });
   });
 
-  // Property test: randomized event orderings for ONE encounter must never
-  // yield more than one confirmed keeper, and must not throw.
-  test('property: randomized orderings keep ≤1 keeper per encounter', () {
-    for (var seed = 0; seed < 200; seed++) {
+  // Property test: two peers, randomized delivery order of both links + their
+  // commits, must ALWAYS converge to the same physical keeper with exactly one
+  // committed keeper each (and never zero after convergence).
+  test('property: two-peer randomized orderings agree + exactly one keeper',
+      () {
+    for (var seed = 0; seed < 300; seed++) {
       final rng = Random(seed);
-      final a = W5Ownership();
-      // Two role-reversed links for one encounter, plus noise events.
-      final events = <void Function()>[
-        () => a.onControl(
-            handle: 'A->B', role: W5Role.outbound,
-            myCandidate: candA, peerCandidate: candB, peerAlias: aliasB),
-        () => a.onControl(
-            handle: 'B->A', role: W5Role.inbound,
-            myCandidate: candA, peerCandidate: candB, peerAlias: aliasB),
-        () => a.onControl(
-            handle: 'dup', role: W5Role.inbound,
-            myCandidate: candA, peerCandidate: 'cand-0', peerAlias: aliasB),
-        () => a.onConfirmed(handle: 'A->B'),
-        () => a.onConfirmed(handle: 'B->A'),
-        () => a.onAliasRoll(leaseId: candA, newAlias: 'rot'),
-        () => a.onLinkDown(handle: 'dup'),
+      final p = _Pair();
+      final ops = <void Function()>[
+        () => p.aControl('A->B', W5Role.outbound),
+        () => p.aControl('B->A', W5Role.inbound),
+        () => p.bControl('A->B', W5Role.inbound),
+        () => p.bControl('B->A', W5Role.outbound),
       ]..shuffle(rng);
-      for (final e in events) {
-        e();
+      for (final o in ops) {
+        o();
       }
-      // Invariant: at most one confirmed keeper for the single encounter.
-      expect(a.confirmedKeeperCount, lessThanOrEqualTo(1),
-          reason: 'seed $seed violated the one-keeper invariant');
+      p.finalize();
+      expect(p.a.committedKeeper(leaseId), 'A->B', reason: 'A seed $seed');
+      expect(p.b.committedKeeper(leaseId), 'A->B', reason: 'B seed $seed');
+      expect(p.a.committedKeeperCount, 1, reason: 'A seed $seed');
+      expect(p.b.committedKeeperCount, 1, reason: 'B seed $seed');
     }
   });
 }

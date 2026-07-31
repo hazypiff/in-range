@@ -1,8 +1,39 @@
-# W5 encounter-lease — design v2 (fix for #7)
+# W5 encounter-lease — design v3 (fix for #7)
 
-**Status:** DRAFT for hazypiff review (incorporates the PR #9 protocol review).
+**Status:** DRAFT for hazypiff review (incorporates PR #9 review rounds 1 + 2).
 Not merged; `INRANGE_W5_LINKS` stays default OFF. Native Swift is the production
 authority; the Dart state machine is a reference oracle only.
+
+## v3 corrections (PR #9 round 2)
+
+- **Distributed election/commit.** A keeper is never sticky-confirmed before the
+  **convergence bound**. Each endpoint elects the link with the smallest
+  **central candidate** among the physical links it knows and emits
+  `COMMIT(token)`; the keeper is committed only at the bound, by which point both
+  endpoints have seen every physical link and elect the SAME winner. Locking on an
+  early mutual commit is explicitly forbidden — it freezes a transient
+  partial-view winner (proven bug). The oracle verifies agreement across all 24
+  race orderings + 300 randomized two-peer seeds.
+- **Candidate lifetime — one definition.** Exactly one random 128-bit candidate
+  **per endpoint per encounter attempt**, reused across this endpoint's outbound
+  HELLO and inbound HELLO_ACK and across retries within the attempt. An
+  inbound-only peer still contributes its candidate in `HELLO_ACK`. A fresh
+  encounter or restoration mints a new one. Design and oracle use this one rule.
+- **Loser semantics are role-correct.** A peripheral cannot cancel a `CBCentral`;
+  a losing **inbound** link is `rejectInbound` (the peer-central closes), a losing
+  **outbound** is `closeOutbound`. Neither loser carries keepalive/RSSI work.
+- **Notifications respect `CBCentral.maximumUpdateValueLength`** (not only the
+  central write limit); over-length control payloads are a protocol error.
+- **Version handling reconciled:** an unknown **version** → treat the peer as
+  lease-incapable and fall back to today's token-read behavior (honest cost:
+  legacy peers retain the old ownership weakness until upgraded). An unknown
+  **type within a supported version** → drop the message + close the link. There
+  is no silent partial parse.
+- **Threat wording strengthened:** replay/spoofed control is bounded
+  **DoS / state-poisoning** (redundant probes, wasted connects), not merely "a
+  transient probe." Mitigated by random 128-bit values, strict fixed-width
+  parsing, TTLs, bounded caches (leases/pending/aliases), and replay-safe
+  transitions. Still **not** authentication — no spoof-resistance claimed.
 
 ## Problem (proven, #7)
 
