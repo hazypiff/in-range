@@ -288,4 +288,5 @@ counsel review already pending).
 0005/0022/0024/0029/0032/0034/0038/0049/0052/0057 and the shipped policy pages.
 **SIGN-OFF (Kimi):** BLUEPRINT SIGN-OFF: AGREED (with amendments listed) — all 10
 required amendments are incorporated in this document (review record:
-`gamify_review_kimi.md`, exchanges [18]–[21] of the 2026-07-31 transcript).
+`docs/research/2026-07-31/gamify_review_kimi.md`, exchanges [18]–[21] of
+`docs/research/2026-07-31/claude_kimi_chat_2026-07-31.md`).

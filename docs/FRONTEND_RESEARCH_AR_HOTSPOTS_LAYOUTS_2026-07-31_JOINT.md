@@ -167,5 +167,6 @@ spot-verified (`main.dart:187-188`, `0057:17,27-38`, `home_shell.dart:113-146`,
 **SIGN-OFF (Kimi):** RESEARCH SIGN-OFF: AGREED — with five recorded items (Niantic
 evidence corrections; hotspots as new shared table with per-row license provenance; no
 live per-venue presence, ever; tab-enum + static-center map catches; design-system
-task zero), all incorporated above. (Review record: `frontend_research_kimi.md`,
-transcript exchanges [23]–[25].)
+task zero), all incorporated above. (Review record:
+`docs/research/2026-07-31/frontend_research_kimi.md`, transcript exchanges [23]–[26]
+in `docs/research/2026-07-31/claude_kimi_chat_2026-07-31.md`.)
