@@ -9,8 +9,59 @@ on:
       - 'lib/**'
       - 'pubspec.yaml'
       - '.github/workflows/ios-build.yml'
+  # Audit F1 (2026-07-31): PR-class Swift work previously got no automatic
+  # compile gate — this workflow only ran on push-to-main or by hand.
+  pull_request:
+    paths:
+      - 'ios/**'
+      - 'lib/**'
+      - 'pubspec.yaml'
+      - '.github/workflows/ios-build.yml'
 
 jobs:
+  # Audit F2 (2026-07-31): RunnerTests never executed in CI — every native
+  # "N/N green" claim rested on one Mac simulator run. This job is the
+  # third-party corroboration: the full native bundle on a clean runner.
+  test-ios:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Pub get + generate iOS config
+        run: |
+          flutter pub get
+          flutter build ios --config-only --debug --no-codesign
+
+      - name: Pod install
+        run: cd ios && pod install
+
+      - name: Run RunnerTests on simulator
+        run: |
+          DEVICE=$(xcrun simctl list devices available | grep -Eo 'iPhone [0-9][^(]*' | head -1 | sed 's/ *$//')
+          echo "Simulator: $DEVICE"
+          cd ios
+          xcodebuild test \
+            -workspace Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,name=$DEVICE" \
+            -only-testing:RunnerTests \
+            CODE_SIGNING_ALLOWED=NO | tee xcodebuild-test.log | grep -E "Test [Cc]ase|Executed|TEST" || true
+          grep -q "\*\* TEST SUCCEEDED \*\*" xcodebuild-test.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: runner-tests-log
+          path: ios/xcodebuild-test.log
+          retention-days: 14
+
   build-ios:
     runs-on: macos-latest
     timeout-minutes: 45
