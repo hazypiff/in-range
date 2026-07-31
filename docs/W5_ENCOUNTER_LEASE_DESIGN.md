@@ -1,8 +1,29 @@
-# W5 encounter-lease — design v4 (fix for #7)
+# W5 encounter-lease — design v5 (fix for #7)
 
-**Status:** DRAFT for hazypiff review (incorporates PR #9 review rounds 1–3).
+**Status:** DRAFT for hazypiff review (incorporates PR #9 review rounds 1–4).
 Not merged; `INRANGE_W5_LINKS` stays default OFF. Native Swift is the production
 authority; the Dart state machine is a reference oracle only.
+
+## v5 corrections (PR #9 round 4)
+
+- **Physical-link identity ≠ encounter identity.** A fresh 128-bit **`linkId`**
+  is minted per outbound connection (central sends in `HELLO`, peripheral echoes
+  in `HELLO_ACK`); both roles map it to their own local CB handle. Agreement /
+  election is on **contenders `(centralCandidate, linkId)`**, never on a
+  reused candidate or an observer-local handle. Fixes: two same-direction
+  duplicate connections agreeing on different physical links; a stale proposal
+  committing a replacement link.
+- **Proposals bind to `encounterId` + `viewGen`**; a delayed proposal/ack from an
+  older view cannot commit a newer link. Peer agreement clears on any local view
+  change.
+- **Wire protocol specified** (below): `HELLO`/`HELLO_ACK` carry `linkId`;
+  `PROPOSE`/`PROPOSE_ACK`/`REJECT` carry contender lists + view binding + caps;
+  notify size honours `CBCentral.maximumUpdateValueLength`; unknown-version →
+  fallback, unknown-type-of-known-version → close.
+- **Tests use observer-local handles** — compare the committed wire `linkId`
+  across endpoints, then assert each maps it to the correct local handle; added
+  same-direction-duplicate and asymmetric-reconnect/stale-proposal regressions;
+  the harness also asserts **no `owns` before commit**.
 
 ## v4 corrections (PR #9 round 3)
 
@@ -84,7 +105,8 @@ another keepalive.
 |---|---|---|---|
 | Rotating **token/alias** | app crypto (existing) | ~15 min | on-air public id; maps to a lease |
 | `CBPeripheral`/`CBCentral.identifier` | CoreBluetooth, **local** | OS-controlled | connection handle only — never protocol identity |
-| **candidateId** | random 128-bit **per endpoint per encounter attempt** (reused across this endpoint's roles/retries) | until teardown/grace-expiry | the endpoint's central candidate; elects the keeper |
+| **candidateId** | random 128-bit **per endpoint per encounter attempt** (reused across this endpoint's roles/retries) | until teardown/grace-expiry | the endpoint's central candidate; **encounter** identity |
+| **linkId** | random 128-bit **per outbound physical connection attempt** (central mints in `HELLO`, peripheral echoes in `HELLO_ACK`) | that connection's lifetime | **physical-link** identity — both roles map it to their own local CB handle; agreement is on this |
 | **leaseId** | = min(candidateA, candidateB) anchor | while link healthy (+grace) | the encounter anchor |
 
 `CBPeripheral.identifier` and `CBCentral.identifier` are **not** assumed equal
@@ -98,19 +120,43 @@ response** and **peripheral→central notify** (an explicit two-way exchange).
 Correctness never depends on repeated reads (iOS reads fail with `CBError 6`;
 Herald). Acknowledged writes double as the keepalive link-layer traffic.
 
-Message = `ver(1) | type(1) | len(2) | body(len)`, parsed strictly; unknown
-`ver`/`type`, bad `len`, or oversize (> `maximumWriteValueLength(for:.withResponse)`)
-→ dropped, connection closed. Types:
+Frame = `ver(1) | type(1) | len(2) | body(len)`, parsed strictly. **Version
+handling (reconciled):** an unknown `ver` is **not** a close — the peer is
+treated as lease-incapable and we fall back to today's token-read behavior
+(legacy peers honestly keep the old ownership weakness until upgraded). An
+unknown/oversize/malformed message **of a supported `ver`** (bad `type`, bad
+`len`, or `> maximumWriteValueLength(for:.withResponse)` on a write /
+`> CBCentral.maximumUpdateValueLength` on a notify) is dropped and the link
+closed. All 16-byte fields are fixed-width; contender lists are bounded (cap
+`MAX_CONTENDERS`, small) and over-cap frames are rejected.
 
-- `HELLO` — body: `candidateId(16) | currentAlias(16) | prevAlias(16, optional)`.
-  Sent by the dialing central right after connect (write-with-response).
-- `HELLO_ACK` — peripheral → central notify: `peerCandidateId(16) | peerAlias(16)`.
-- `ALIAS_ROLL` — either side over the keeper before/at token rotation:
-  `newAlias(16)`. Atomic: receiver moves current→previous, sets new current.
-- `BYE` — graceful teardown (optional; loss is handled by grace timer).
+Types (all bind an `encounter`+`viewGen` so a stale frame from an old link set
+never satisfies a newer election):
 
-Backward compatibility: a peer without `CA6E` (older build) → fall back to
-today's token-read behavior for that peer; no lease, unchanged, never broken.
+- `HELLO` (central→peripheral, write-with-response) —
+  `linkId(16) | centralCandidate(16) | currentAlias(16) | prevAlias(16)`.
+  The central mints a fresh `linkId` per outbound connection.
+- `HELLO_ACK` (peripheral→central, notify) —
+  `linkId(16, echo) | peripheralCandidate(16) | peripheralAlias(16)`. Both roles
+  now map this `linkId` to their own local CB handle.
+- `PROPOSE` (either side, over the keeper/negotiating link) —
+  `encounterId(16) | viewGen(4) | count(1) | [centralCandidate(16) linkId(16)]*count`.
+  The endpoint's current contender set. Retransmittable and idempotent.
+- `PROPOSE_ACK` — `encounterId(16) | viewGen(4) | setHash(16)`. Confirms receipt
+  of a matching view (commit is on matching contender sets; ACK is the
+  liveness/verification aid).
+- `REJECT` — `encounterId(16) | viewGen(4) | linkId(16)`. A peripheral cannot
+  cancel a `CBCentral`, so it asks the peer-central to close the losing link.
+- `ALIAS_ROLL` (over the keeper, before/at rotation) — `newAlias(16)`. Atomic:
+  current→previous, set new current.
+- `BYE` — graceful teardown (optional; loss handled by grace timer).
+
+`viewGen` is a per-endpoint monotonic counter bumped whenever the contender set
+changes; peer agreement is cleared on any local view change, so a delayed
+`PROPOSE`/`ACK` from an older `viewGen` cannot commit a replacement link.
+
+Backward compatibility: a peer without `CA6E` → token-read fallback (no lease,
+unchanged, never broken).
 
 ## Ownership state model (native authority)
 
@@ -236,12 +282,23 @@ keeper lost → grace(120s). reconnect≤120s: resume lease. else: erase.
 ## Restoration / persistence (native)
 
 CoreBluetooth may wake a suspended app and restore central/peripheral state
-**before** app logic runs. So the lease map (`leaseId, keeperRole/handle mapping,
-aliases, grace deadlines`) persists natively and is rebuilt in
-`willRestoreState`/`didUpdateState`, so a restored keeper or restored inbound
-subscription is re-owned exactly once with no duplicate. (This is also why #8
-must isolate *diagnostic* restoration from *production* restoration — production
-restoration stays enabled.)
+**before** app logic runs. The persisted per-encounter state must therefore be
+sufficient to rebuild ownership unambiguously in
+`willRestoreState`/`didUpdateState`. Persist, per encounter:
+
+- `leaseId`, this endpoint's `encounter candidate`, `aliasCurrent`/`aliasPrevious`
+  (+ their expiry generation);
+- for each live link: `linkId`, role, `centralCandidate`, and the mapping
+  `linkId → restored local CB handle` (peripherals map via the originating
+  `CBCentral` on the restored subscription; centrals via the restored peripheral);
+- the committed winner `linkId` (if committed), `viewGen`, the last proposed
+  contender set, and any `pendingDials` (in-flight `linkId`s) + grace deadline.
+
+A restored keeper or restored inbound subscription is re-owned **exactly once**
+by recomputing the winner from the restored contender set (never minting a fresh
+candidate/linkId for a live/grace encounter). (This is also why #8 must isolate
+*diagnostic* restoration from *production* restoration — production restoration
+stays enabled.)
 
 ## Versioning / migration
 
