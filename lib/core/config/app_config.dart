@@ -35,6 +35,8 @@ class AppConfig {
           const String.fromEnvironment('INRANGE_SUBTLE_WAKE'),
         'INRANGE_LOCATION_RESIDENCY' =>
           const String.fromEnvironment('INRANGE_LOCATION_RESIDENCY'),
+        'INRANGE_W5_LINKS' =>
+          const String.fromEnvironment('INRANGE_W5_LINKS'),
         'AUTH_REDIRECT_URL' =>
           const String.fromEnvironment('AUTH_REDIRECT_URL'),
         'GOOGLE_WEB_CLIENT_ID' =>
@@ -50,6 +52,21 @@ class AppConfig {
   }
 
   static String get supabaseUrl => _env('SUPABASE_URL');
+
+  /// Crack #1 (issue #4) wake-ping endpoint. Null until hazypiff's server
+  /// half exists — a null URL keeps the native wake-ping silent, so this is
+  /// the feature flag. Expected shape once live:
+  /// '$supabaseUrl/functions/v1/wake-ping'.
+  static String? get wakePingUrl {
+    final v = _env('INRANGE_WAKE_PING_URL');
+    return v.isEmpty ? null : v;
+  }
+
+  /// Test-only gate for W5 persistent GATT links (iOS). Default OFF — W5 is
+  /// unproven through the awake gates, so it must never touch production
+  /// behavior until it passes. Enable per build: --dart-define=INRANGE_W5_LINKS=true
+  static bool get w5LinksEnabled =>
+      _env('INRANGE_W5_LINKS').toLowerCase() == 'true';
 
   static String get supabaseAnonKey {
     final k = _env('SUPABASE_PUBLISHABLE_KEY');

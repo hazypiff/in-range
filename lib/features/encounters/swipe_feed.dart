@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/core/notifications/local_notify.dart';
 import 'package:in_range/core/privacy/safety_store.dart';
+import 'package:in_range/features/beacon/beacon_provider.dart';
 import 'package:in_range/features/encounters/encounters_provider.dart';
 import 'package:in_range/features/encounters/local_encounter_store.dart';
 import 'package:in_range/features/encounters/swipe_card.dart';
@@ -112,6 +113,10 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
             otherUserId: c.otherUserId,
             range: c.rangeType,
           );
+      // W5 owner rule: a pass resolves the pair — drop its live radio
+      // session right now. (Undo doesn't resurrect it; the next natural
+      // contact re-establishes if they're still near.)
+      ref.read(beaconServiceProvider).dropPeer(c.id);
       await _showUndo();
       return true;
     } catch (e) {
