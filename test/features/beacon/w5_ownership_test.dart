@@ -384,6 +384,49 @@ void main() {
     expect(a.committedKeeperCount, 2);
   });
 
+  // Three independent peers → one keeper each (no global one-session cap).
+  test('three independent peers each get one committed keeper', () {
+    final a = W5Ownership();
+    for (final (mine, peer, alias, link, handle) in [
+      ('ca', 'zb', 'ab', 'lb', 'hb'),
+      ('cc', 'zc', 'ac', 'lc', 'hc'),
+      ('ce', 'zd', 'ad', 'ld', 'hd'),
+    ]) {
+      a.onControl(
+          handle: handle,
+          role: W5Role.outbound,
+          myCandidate: mine,
+          peerCandidate: peer,
+          peerAlias: alias,
+          linkId: link);
+      commitAgainst(a, mine, [ct(mine, link)], alias);
+    }
+    expect(a.committedKeeperCount, 3);
+    expect(a.activeLeases, 3);
+  });
+
+  // Local view generation saturation → teardown (no wrap), from ANY bumping
+  // event, per the documented u32 rule.
+  test('viewGen saturation tears down instead of wrapping', () {
+    final a = established('L1');
+    a.debugSetViewGen(leaseId, kU32Max);
+    // Overflow via a new inbound link.
+    final fx = a.onControl(
+        handle: 'p2',
+        role: W5Role.inbound,
+        myCandidate: candA,
+        peerCandidate: candB,
+        peerAlias: aliasB,
+        linkId: 'L2');
+    expect(fx, [const W5Ended(leaseId)]);
+    expect(a.activeLeases, 0);
+    // Overflow via link-down (a non-onControl bump site).
+    final b = established('L1');
+    b.debugSetViewGen(leaseId, kU32Max);
+    expect(b.onLinkDown(handle: 'p1'), [const W5Ended(leaseId)]);
+    expect(b.activeLeases, 0);
+  });
+
   test('alias rollover keeps current+previous, then expires previous', () {
     final a = established('L1');
     a.onAliasRoll(leaseId: leaseId, newAlias: 'aliasB2');

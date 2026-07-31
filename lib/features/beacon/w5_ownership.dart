@@ -275,6 +275,7 @@ class W5Ownership {
     } else {
       e.pendingDials.add(linkId);
       _bumpView(e);
+      if (e.viewGen > kU32Max) return _saturate(e);
       _dialInFlight[linkId] = e.leaseId;
     }
     return [W5Dial(linkId)];
@@ -324,6 +325,7 @@ class W5Ownership {
         }
         _map(e, handle, role, peerCandidate, linkId);
         _bumpView(e);
+        if (e.viewGen > kU32Max) return _saturate(e);
         return [_propose(e), _closeLoser(handle, role)];
       }
       return [_closeLoser(handle, role)];
@@ -457,6 +459,7 @@ class W5Ownership {
       e.inGrace = true;
     }
     _bumpView(e);
+    if (e.viewGen > kU32Max) return _saturate(e);
     return const [];
   }
 
@@ -474,6 +477,7 @@ class W5Ownership {
     if (e == null) return const [];
     e.pendingDials.remove(linkId);
     _bumpView(e);
+    if (e.viewGen > kU32Max) return _saturate(e);
     if (e.links.isEmpty && !e.committed && !e.inGrace) {
       _erase(leaseId);
       return [W5Ended(leaseId)];
@@ -507,6 +511,12 @@ class W5Ownership {
     _linkIdToLease.clear();
     _dialInFlight.clear();
     return fx;
+  }
+
+  /// Test-only: force an encounter's local view generation so the u32
+  /// saturation→teardown rule is executable without 4×10⁹ bump events.
+  void debugSetViewGen(String leaseId, int gen) {
+    _enc[leaseId]?.viewGen = gen;
   }
 
   // ---- internals ----
