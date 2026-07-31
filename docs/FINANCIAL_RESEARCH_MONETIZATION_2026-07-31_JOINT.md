@@ -228,6 +228,42 @@ inventory converts at the bottom of the 30–45% band.
 - Numbers left as labeled estimates (metro premiums, promoter rates, waitlist
   bands, campus stack): used as ranges, never as points.
 
+## 10. Addendum — founder discussion, 2026-07-31 (hazypiff × Rahul)
+
+*Added at owner direction after joint sign-off; maps the founders' Telegram
+discussion onto this report and the blueprint. It introduces no new numbers.*
+
+1. **Rahul: "points for encounters → free date with a match of their choice. Those
+   are the incentives."** This is the offers-catalog channel (§4 rank 4) in its best
+   form: a **venue-funded date redemption** ("your points buy the first round at
+   [venue]") is a stronger incentive than merch, doubles as venue revenue, and drives
+   the exact behavior the whole economy exists for — going BACK out. Adopt as the
+   flagship redemption once the §6.1 owner decision lands. It also feeds the density
+   flywheel: redeemed dates happen at partner hotspots.
+2. **hazypiff: "they get a bank account… either add credits or gain them" vs Rahul:
+   "let's not make it a financial thing — points, they can exchange for things."**
+   This is exactly owner decision §6.2 (blueprint Rule X6), and the research supports
+   **Rahul's side for v1**: earn-only points. "Add credits" (purchasable) triggers
+   Apple IAP (30%, or 15% under SBP) on every top-up, a money-transmission review,
+   and the X6 laundering surface — for a channel worth ~$0–0.10/free-user/month at
+   launch scale. Revisit with Live in year 2. **Language rule regardless of the
+   decision:** never "bank account"/"credits"/"cash" in UI or Terms — the Terms
+   virtual-items clause (§7.5 of the blueprint's policy schedule) must say points
+   have no cash value; call it the points wallet. The append-only `points_ledger`
+   (blueprint §3.3) already is the "bank account" — earn/spend history included.
+3. **hazypiff: "we need to know our margins… connect adspend to LTV… what it's
+   going to take per user."** That is §§1–3 of this report: ~$0.65–3.00/MAU/month
+   realistic year-1 value, max affordable CPI ~$1 net vs $5–8 real, and the D30
+   retention lever that connects the product roadmap to ad-spend math. The margin
+   caveats that matter: store fees (§2.1), founder price-lock (§2.3), moderation
+   COGS on venue/live revenue (§7).
+4. **Rahul: "shouldn't we add this stuff after we get the basic layout going?"**
+   Sequencing is already agreed and Rahul is right: the frontend report's task zero
+   is the design system + Phase A layout; the points economy ships as Phase A's
+   *backend* alongside it, and everything financial in this report exists to size
+   the ad budget and price the founder tier — decisions needed before launch, not
+   before layout. Nothing here blocks the Mac starting the layout work today.
+
 ---
 
 **SIGN-OFF (Claude):** AGREED — assembled from the three agent reports with all
