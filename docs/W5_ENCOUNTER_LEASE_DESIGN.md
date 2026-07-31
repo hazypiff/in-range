@@ -1,8 +1,25 @@
-# W5 encounter-lease — design v3 (fix for #7)
+# W5 encounter-lease — design v4 (fix for #7)
 
-**Status:** DRAFT for hazypiff review (incorporates PR #9 review rounds 1 + 2).
+**Status:** DRAFT for hazypiff review (incorporates PR #9 review rounds 1–3).
 Not merged; `INRANGE_W5_LINKS` stays default OFF. Native Swift is the production
 authority; the Dart state machine is a reference oracle only.
+
+## v4 corrections (PR #9 round 3)
+
+- **Safety is agreement, not elapsed time.** Commit happens only when this
+  endpoint's central-candidate set equals the peer's proposed set (never on a
+  timer). Timers are retransmit/fail-closed only. Fixes: partial-view timeout
+  divergence, committing without peer agreement, and the timer-as-consensus bug.
+- **Proposals advertise pending dials**, so a peer never commits its own link
+  before learning we dialed a smaller-central one. Candidate lifetime is **one
+  per endpoint per encounter attempt** — reconciled everywhere (the old "per
+  outbound attempt"/"each dial mints fresh" wording is removed).
+- **Reconnect is bookkept by encounter/lease** (not candidate-map coincidence): a
+  failed dial keeps the encounter retryable on either candidate ordering; grace
+  is only cleared by an established link, so discovery never wedges.
+- Verified by an explicit two-endpoint **message-queue model** (drops/reordering)
+  asserting safety under every interleaving + liveness under eventual delivery
+  (500 seeds).
 
 ## v3 corrections (PR #9 round 2)
 
@@ -67,8 +84,8 @@ another keepalive.
 |---|---|---|---|
 | Rotating **token/alias** | app crypto (existing) | ~15 min | on-air public id; maps to a lease |
 | `CBPeripheral`/`CBCentral.identifier` | CoreBluetooth, **local** | OS-controlled | connection handle only — never protocol identity |
-| **candidateId** | random 128-bit per outbound attempt | until convergence | picks the keeper in a race |
-| **leaseId** | = winning candidateId | while link healthy (+grace) | the encounter anchor |
+| **candidateId** | random 128-bit **per endpoint per encounter attempt** (reused across this endpoint's roles/retries) | until teardown/grace-expiry | the endpoint's central candidate; elects the keeper |
+| **leaseId** | = min(candidateA, candidateB) anchor | while link healthy (+grace) | the encounter anchor |
 
 `CBPeripheral.identifier` and `CBCentral.identifier` are **not** assumed equal
 across roles and are never used as identity. Address privacy rotation means the
@@ -115,22 +132,38 @@ implementation is Swift in `BackgroundBeacon.swift` (restoration-safe); the Dart
 
 ### Establishment (who dials)
 
-The initial dialer is chosen by the **existing token ordering** (unchanged). This
-may be "wrong" after a rotation — that is fine, because convergence, not the dial
-choice, enforces the invariant. Each dial mints a fresh `candidateId`.
+The initial dialer is chosen by the **existing token ordering** (unchanged),
+using the endpoint's per-encounter `candidateId` for the exchange. The dial
+choice may be "wrong" after a rotation — fine, because convergence, not the dial
+choice, enforces the invariant.
 
-### Convergence (first-healthy-wins; candidate only for true races)
+### Convergence (set-agreement commit; safety = agreement, not time)
 
-- A discovery whose alias maps to an **existing lease** → stand down (no dial).
-- On `HELLO`/`HELLO_ACK` completing for a link, if a **confirmed** keeper already
-  exists for this encounter (alias match) → close the new link (do **not**
-  displace a healthy keeper, regardless of candidate value).
-- Only when two links are simultaneously `negotiating` (no confirmed keeper yet)
-  do both sides deterministically keep `min(candidateA, candidateB)` and close
-  the other. Both sides see both candidates (own outbound + peer's HELLO), so
-  they pick the same link → converge. The kept candidate becomes `leaseId`.
-- Once a keeper is `confirmed` (handshake done + keepalive flowing), later probes
-  / lower-valued candidates **never** displace it.
+Ownership commits ONLY on distributed agreement, never on a timer (iOS can
+suspend an app timer arbitrarily, and a timeout cannot prove the peer saw every
+link):
+
+- Each endpoint proposes its **central-candidate set** = the central candidates
+  of the links it knows **plus its own outstanding dials**. Advertising a pending
+  dial tells the peer "an X-central link is coming," so the peer will not commit
+  a keeper before that link arrives.
+- An endpoint commits when its set equals the peer's most-recently-proposed set
+  **and all of its own dials have handshaked**. Both endpoints of a link learn it
+  via the bidirectional handshake, so the set is symmetric knowledge; equal sets
+  ⇒ both deterministically elect the same winner (smallest central candidate) and
+  commit the **same physical link**.
+- Losers are closed **at commit**, role-correct (a losing inbound is
+  `rejectInbound` so the peer-central closes; a losing outbound is
+  `closeOutbound`), and carry no keepalive/RSSI beforehand.
+- A committed keeper is sticky: a later larger-central link is added to the set
+  (kept in sync so the peer can still match) then closed; a smaller-central
+  intruder is closed without displacing the winner. Committed leases never rekey.
+- Timers only **retransmit** the current proposal (fail-closed retry) for
+  liveness under eventual delivery; they never declare agreement.
+
+Verified by a two-endpoint message-queue model with drops/reordering: **no two
+different committed keepers under any interleaving (safety)** and **exactly one
+matching keeper after eventual delivery (liveness)** across 500 seeds.
 
 ### Token rotation (in-band, atomic)
 
@@ -221,9 +254,12 @@ never deadlock; an old peer simply gets today's behavior.
 - **Replay:** candidates/aliases are random and short-lived; a replayed message
   only lets an in-range attacker cause a redundant connect/close within the
   current window (bounded by `connectRetryFloor`), no lasting identity.
-- **Spoofing:** the lease authorizes nothing; it only dedups links. A spoofed
-  `HELLO` at worst forces a transient probe that is closed. No spoof-resistance
-  claimed.
+- **Spoofing / DoS:** the lease authorizes nothing; it only dedups links. A
+  spoofed/replayed `HELLO` is a **bounded DoS / state-poisoning** vector
+  (redundant connects/probes/closes), mitigated by random 128-bit values, strict
+  fixed-width parsing, TTLs, bounded caches (leases/pending/aliases), and
+  replay-safe transitions — not eliminated. **No spoof-resistance is claimed**;
+  authenticity would require a separately reviewed authenticated protocol.
 - **Linkability:** `leaseId` = random candidate, per-encounter, erased on
   teardown/grace-expiry; aliases are the existing rotating tokens. Strictly
   better than keying on `CBPeripheral.identifier`.
