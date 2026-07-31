@@ -7,51 +7,118 @@
       "steps": [
         {
           "event": "control",
-          "handle": "p1", "role": "outbound",
-          "myCandidate": "cand-a", "peerCandidate": "cand-b",
-          "peerAlias": "aliasB", "linkId": "L1",
-          "expectEffects": [{"kind": "sendPropose"}]
+          "handle": "p1",
+          "role": "outbound",
+          "myCandidate": "cand-a",
+          "peerCandidate": "cand-b",
+          "peerAlias": "aliasB",
+          "linkId": "L1",
+          "expectEffects": [
+            {
+              "kind": "sendPropose"
+            }
+          ]
         },
         {
-          "event": "proposeRecv", "peerAlias": "aliasB",
-          "encounterId": "cand-a", "viewGen": 7,
-          "contenders": [["cand-a", "L1"]],
-          "expectEffects": [{"kind": "sendAck"}]
+          "event": "proposeRecv",
+          "peerAlias": "aliasB",
+          "encounterId": "cand-a",
+          "viewGen": 7,
+          "contenders": [
+            [
+              "cand-a",
+              "L1"
+            ]
+          ],
+          "expectEffects": [
+            {
+              "kind": "sendAck"
+            }
+          ]
         },
         {
-          "event": "ackCurrent", "peerAlias": "aliasB",
-          "expectEffects": [{"kind": "owns", "handle": "p1"}]
+          "event": "ackCurrent",
+          "peerAlias": "aliasB",
+          "expectEffects": [
+            {
+              "kind": "owns",
+              "handle": "p1"
+            }
+          ]
         },
-        {"event": "linkDown", "handle": "p1", "expectEffects": []},
+        {
+          "event": "linkDown",
+          "handle": "p1",
+          "expectEffects": []
+        },
         {
           "event": "discovered",
-          "alias": "aliasB2", "wouldDial": true,
-          "candidateId": "cand-a", "linkId": "L3",
-          "expectEffects": [{"kind": "dial", "linkId": "L3"}]
+          "alias": "aliasB2",
+          "wouldDial": true,
+          "candidateId": "cand-a",
+          "linkId": "L3",
+          "expectEffects": [
+            {
+              "kind": "dial",
+              "linkId": "L3"
+            }
+          ]
         },
         {
           "event": "control",
-          "handle": "p3", "role": "outbound",
-          "myCandidate": "cand-a", "peerCandidate": "cand-b",
-          "peerAlias": "aliasB2", "linkId": "L3", "peerPrevAlias": "aliasB",
-          "expectEffects": [{"kind": "sendPropose"}]
+          "handle": "p3",
+          "role": "outbound",
+          "myCandidate": "cand-a",
+          "peerCandidate": "cand-b",
+          "peerAlias": "aliasB2",
+          "linkId": "L3",
+          "peerPrevAlias": "aliasB",
+          "expectEffects": [
+            {
+              "kind": "sendPropose"
+            }
+          ]
         },
         {
-          "event": "proposeRecv", "peerAlias": "aliasB2",
-          "encounterId": "cand-a", "viewGen": 11,
-          "contenders": [["cand-a", "L3"]],
-          "expectEffects": [{"kind": "sendAck"}]
+          "event": "proposeRecv",
+          "peerAlias": "aliasB2",
+          "encounterId": "cand-a",
+          "viewGen": 11,
+          "contenders": [
+            [
+              "cand-a",
+              "L3"
+            ]
+          ],
+          "expectEffects": [
+            {
+              "kind": "sendAck"
+            }
+          ]
         },
         {
-          "event": "ackCurrent", "peerAlias": "aliasB2",
-          "expectEffects": [{"kind": "owns", "handle": "p3"}]
+          "event": "ackCurrent",
+          "peerAlias": "aliasB2",
+          "expectEffects": [
+            {
+              "kind": "owns",
+              "handle": "p3"
+            }
+          ]
         }
       ],
       "finalObs": {
         "activeLeases": 1,
-        "committed": {"cand-a": "L3"},
-        "leaseForAlias": {"aliasB2": "cand-a", "aliasB": "cand-a"},
-        "viewGenAtLeast": {"cand-a": 3}
+        "committed": {
+          "cand-a": "L3"
+        },
+        "leaseForAlias": {
+          "aliasB2": "cand-a",
+          "aliasB": "cand-a"
+        },
+        "viewGenAtLeast": {
+          "cand-a": 3
+        }
       }
     },
     {
@@ -59,34 +126,74 @@
       "steps": [
         {
           "event": "control",
-          "handle": "p1", "role": "outbound",
-          "myCandidate": "cand-a", "peerCandidate": "cand-b",
-          "peerAlias": "aliasB", "linkId": "L1",
-          "expectEffects": [{"kind": "sendPropose"}]
+          "handle": "p1",
+          "role": "outbound",
+          "myCandidate": "cand-a",
+          "peerCandidate": "cand-b",
+          "peerAlias": "aliasB",
+          "linkId": "L1",
+          "expectEffects": [
+            {
+              "kind": "sendPropose"
+            }
+          ]
         },
-        {"event": "linkDown", "handle": "p1", "expectEffects": []},
+        {
+          "event": "linkDown",
+          "handle": "p1",
+          "expectEffects": []
+        },
         {
           "event": "control",
-          "handle": "p3", "role": "outbound",
-          "myCandidate": "cand-x", "peerCandidate": "cand-b",
-          "peerAlias": "aliasB2", "linkId": "L3", "peerPrevAlias": "aliasB",
-          "expectEffects": [{"kind": "sendPropose"}]
+          "handle": "p3",
+          "role": "outbound",
+          "myCandidate": "cand-x",
+          "peerCandidate": "cand-b",
+          "peerAlias": "aliasB2",
+          "linkId": "L3",
+          "peerPrevAlias": "aliasB",
+          "expectEffects": [
+            {
+              "kind": "sendPropose"
+            }
+          ]
         },
         {
-          "event": "proposeRecv", "peerAlias": "aliasB2",
-          "encounterId": "cand-b", "viewGen": 9,
-          "contenders": [["cand-x", "L3"]],
-          "expectEffects": [{"kind": "sendAck"}]
+          "event": "proposeRecv",
+          "peerAlias": "aliasB2",
+          "encounterId": "cand-b",
+          "viewGen": 9,
+          "contenders": [
+            [
+              "cand-x",
+              "L3"
+            ]
+          ],
+          "expectEffects": [
+            {
+              "kind": "sendAck"
+            }
+          ]
         },
         {
-          "event": "ackCurrent", "peerAlias": "aliasB2",
-          "expectEffects": [{"kind": "owns", "handle": "p3"}]
+          "event": "ackCurrent",
+          "peerAlias": "aliasB2",
+          "expectEffects": [
+            {
+              "kind": "owns",
+              "handle": "p3"
+            }
+          ]
         }
       ],
       "finalObs": {
         "activeLeases": 1,
-        "committed": {"cand-b": "L3"},
-        "leaseForAlias": {"aliasB2": "cand-b"}
+        "committed": {
+          "cand-b": "L3"
+        },
+        "leaseForAlias": {
+          "aliasB2": "cand-b"
+        }
       }
     },
     {
@@ -94,28 +201,52 @@
       "steps": [
         {
           "event": "control",
-          "handle": "h1", "role": "outbound",
-          "myCandidate": "cand-a", "peerCandidate": "cand-z",
-          "peerAlias": "aliasZ", "linkId": "L1",
-          "expectEffects": [{"kind": "sendPropose"}]
+          "handle": "h1",
+          "role": "outbound",
+          "myCandidate": "cand-a",
+          "peerCandidate": "cand-z",
+          "peerAlias": "aliasZ",
+          "linkId": "L1",
+          "expectEffects": [
+            {
+              "kind": "sendPropose"
+            }
+          ]
         },
         {
           "event": "discovered",
-          "alias": "aliasY", "wouldDial": true,
-          "candidateId": "cand-y", "linkId": "L2",
-          "expectEffects": [{"kind": "dial", "linkId": "L2"}]
+          "alias": "aliasY",
+          "wouldDial": true,
+          "candidateId": "cand-y",
+          "linkId": "L2",
+          "expectEffects": [
+            {
+              "kind": "dial",
+              "linkId": "L2"
+            }
+          ]
         },
         {
           "event": "control",
-          "handle": "h2", "role": "outbound",
-          "myCandidate": "cand-y", "peerCandidate": "cand-a",
-          "peerAlias": "aliasY", "linkId": "L2",
-          "expectEffects": [{"kind": "closeOutbound", "handle": "h2"}]
+          "handle": "h2",
+          "role": "outbound",
+          "myCandidate": "cand-y",
+          "peerCandidate": "cand-a",
+          "peerAlias": "aliasY",
+          "linkId": "L2",
+          "expectEffects": [
+            {
+              "kind": "closeOutbound",
+              "handle": "h2"
+            }
+          ]
         }
       ],
       "finalObs": {
         "activeLeases": 2,
-        "keeperOf": {"cand-a": "h1"}
+        "keeperOf": {
+          "cand-a": "h1"
+        }
       }
     },
     {
@@ -123,28 +254,169 @@
       "steps": [
         {
           "event": "control",
-          "handle": "p1", "role": "outbound",
-          "myCandidate": "cand-a", "peerCandidate": "cand-b",
-          "peerAlias": "aliasB", "linkId": "L1",
-          "expectEffects": [{"kind": "sendPropose"}]
+          "handle": "p1",
+          "role": "outbound",
+          "myCandidate": "cand-a",
+          "peerCandidate": "cand-b",
+          "peerAlias": "aliasB",
+          "linkId": "L1",
+          "expectEffects": [
+            {
+              "kind": "sendPropose"
+            }
+          ]
         },
         {
           "event": "control",
-          "handle": "p2", "role": "inbound",
-          "myCandidate": "cand-a", "peerCandidate": "cand-b",
-          "peerAlias": "aliasB", "linkId": "L2",
-          "expectEffects": [{"kind": "sendPropose"}]
+          "handle": "p2",
+          "role": "inbound",
+          "myCandidate": "cand-a",
+          "peerCandidate": "cand-b",
+          "peerAlias": "aliasB",
+          "linkId": "L2",
+          "expectEffects": [
+            {
+              "kind": "sendPropose"
+            }
+          ]
         },
         {
-          "event": "teardown", "leaseId": "cand-a",
+          "event": "teardown",
+          "leaseId": "cand-a",
           "expectEffects": [
-            {"kind": "closeOutbound", "handle": "p1"},
-            {"kind": "rejectInbound", "handle": "p2"},
-            {"kind": "ended", "leaseId": "cand-a"}
+            {
+              "kind": "closeOutbound",
+              "handle": "p1"
+            },
+            {
+              "kind": "rejectInbound",
+              "handle": "p2"
+            },
+            {
+              "kind": "ended",
+              "leaseId": "cand-a"
+            }
           ]
         }
       ],
-      "finalObs": {"activeLeases": 0}
+      "finalObs": {
+        "activeLeases": 0
+      }
+    },
+    {
+      "name": "R8-F1 boundary: a stranger with its OWN candidate (per contract) cannot touch an in-grace lease",
+      "steps": [
+        {
+          "event": "control",
+          "handle": "p1",
+          "role": "outbound",
+          "myCandidate": "cand-a",
+          "peerCandidate": "cand-b",
+          "peerAlias": "aliasB",
+          "linkId": "L1",
+          "expectEffects": [
+            {
+              "kind": "sendPropose"
+            }
+          ]
+        },
+        {
+          "event": "proposeRecv",
+          "peerAlias": "aliasB",
+          "encounterId": "cand-a",
+          "viewGen": 7,
+          "contenders": [
+            [
+              "cand-a",
+              "L1"
+            ]
+          ],
+          "expectEffects": [
+            {
+              "kind": "sendAck"
+            }
+          ]
+        },
+        {
+          "event": "ackCurrent",
+          "peerAlias": "aliasB",
+          "expectEffects": [
+            {
+              "kind": "owns",
+              "handle": "p1"
+            }
+          ]
+        },
+        {
+          "event": "linkDown",
+          "handle": "p1",
+          "expectEffects": []
+        },
+        {
+          "event": "discovered",
+          "alias": "aliasS",
+          "wouldDial": true,
+          "candidateId": "cand-s",
+          "linkId": "L9",
+          "expectEffects": [
+            {
+              "kind": "dial",
+              "linkId": "L9"
+            }
+          ]
+        }
+      ],
+      "finalObs": {
+        "activeLeases": 2,
+        "leaseForAlias": {
+          "aliasB": "cand-a",
+          "aliasS": "cand-s"
+        }
+      }
+    },
+    {
+      "name": "R8-F1 violation shape (MUST NOT happen live — adapter's per-alias mint is the defense): a candidate reused across peers joins the stranger to the in-grace lease",
+      "steps": [
+        {
+          "event": "control",
+          "handle": "p1",
+          "role": "outbound",
+          "myCandidate": "cand-a",
+          "peerCandidate": "cand-b",
+          "peerAlias": "aliasB",
+          "linkId": "L1",
+          "expectEffects": [
+            {
+              "kind": "sendPropose"
+            }
+          ]
+        },
+        {
+          "event": "linkDown",
+          "handle": "p1",
+          "expectEffects": []
+        },
+        {
+          "event": "discovered",
+          "alias": "aliasS",
+          "wouldDial": true,
+          "candidateId": "cand-a",
+          "linkId": "L9",
+          "expectEffects": [
+            {
+              "kind": "dial",
+              "linkId": "L9"
+            }
+          ]
+        }
+      ],
+      "finalObs": {
+        "activeLeases": 1,
+        "leaseForAlias": {
+          "aliasS": "cand-a"
+        },
+        "comment": "This IS the hijack entry point — pinned identically in both languages so neither oracle can drift toward silently 'fixing' it and masking the adapter contract."
+      }
     }
   ]
 }

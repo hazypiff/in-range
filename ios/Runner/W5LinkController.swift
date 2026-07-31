@@ -76,6 +76,12 @@ final class W5LinkController {
   }
   private func outHandle(_ id: UUID) -> String { "out:\(id.uuidString)" }
   private func inHandle(_ key: String) -> String { "in:\(key)" }
+  /// CONTRACT (R8-F1, design §Adapter obligations): one fresh random 128-bit
+  /// candidate per alias, NEVER shared across aliases/peers. Since the R7
+  /// grace-rejoin fix, candidateId is the oracle's only rejoin key for an
+  /// unknown alias — a candidate reused across peers would let a stranger
+  /// join (and commit-hijack) another peer's in-grace lease. The oracle
+  /// cannot enforce this; this mint is the defense.
   private func candidate(for alias: String) -> String {
     if let c = candidateByAlias[alias] { return c }
     let c = mintHex()

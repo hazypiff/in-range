@@ -203,6 +203,24 @@ another keepalive.
 across roles and are never used as identity. Address privacy rotation means the
 link-layer address is not a stable app identity.
 
+## Adapter obligations (normative — the oracle cannot enforce these)
+
+- **Per-peer candidate minting is load-bearing (R8-F1).** The R7 grace-rejoin
+  fix makes `candidateId` the oracle's ONLY rejoin key when a discovery's alias
+  is unknown (rotation during grace). The oracle therefore cannot tell a
+  same-peer rediscovery from a stranger reusing the same candidate: **if an
+  adapter ever passed one candidateId for two different peers, the stranger
+  would join — and could commit-hijack — the first peer's in-grace lease.**
+  The Swift adapter's per-alias mint (`W5LinkController.candidate(for:)`,
+  random 128-bit per alias, never shared across aliases) is the defense, and
+  it is a CONTRACT, not an implementation detail. Ownership conformance
+  vectors 5 (safe boundary) and 6 (violation shape, labeled MUST-NOT-HAPPEN)
+  pin both sides of this line in both languages.
+- **A dropped dial needs a fresh scan event.** A discovery that arrives before
+  the corresponding `onLinkDown` has been consumed is refused by the healthy-
+  encounter guard; the adapter re-dials on the next discovery, it does not
+  queue. (Round-7 non-blocking observation, accepted behavior.)
+
 ## Wire format — versioned bidirectional control (`CA6E`)
 
 `CA6E` is a control characteristic supporting **central→peripheral write WITH
