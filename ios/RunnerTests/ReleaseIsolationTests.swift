@@ -1,0 +1,44 @@
+import XCTest
+
+@testable import Runner
+
+/// #8 release isolation: a production build must not be able to resume
+/// diagnostic state. These run against the normal (non-diag) configurations —
+/// the assertions prove the production persistence domain and restoration
+/// namespace are disjoint from the diagnostic ones by construction.
+final class ReleaseIsolationTests: XCTestCase {
+
+  func testProductionBuildIsNotDiag() {
+    XCTAssertFalse(BackgroundBeacon.isDiagBuild)
+    XCTAssertEqual(BackgroundBeacon.restoreIDSuffix, "")
+  }
+
+  func testProductionRestorationIdentifiersAreNotDiagNamespaced() {
+    // A diag build restores under ".diag"-suffixed identifiers; iOS hands
+    // restoration state back per (bundle id, restore id), so production ids
+    // must never carry the diag suffix.
+    XCTAssertEqual(BackgroundBeacon.peripheralRestoreID, "io.inrange.beacon.peripheral")
+    XCTAssertEqual(BackgroundBeacon.centralRestoreID, "io.inrange.beacon.central")
+  }
+
+  func testProductionDomainCannotSeeDiagnosticState() {
+    // Simulate a diagnostic build having persisted operational state (token
+    // slots, flags), then prove the production operational domain reads none
+    // of it.
+    let diag = UserDefaults(suiteName: BackgroundBeacon.diagSuiteName)!
+    let probeKeys = ["bb.slots", "bb.enabled", "bb.w5links"]
+    for k in probeKeys {
+      diag.set("diag-poison", forKey: k + ".isolation-probe")
+    }
+    defer {
+      for k in probeKeys { diag.removeObject(forKey: k + ".isolation-probe") }
+    }
+    let prod = BackgroundBeacon.operationalDefaults()
+    XCTAssertEqual(prod, UserDefaults.standard)
+    for k in probeKeys {
+      XCTAssertNil(
+        prod.object(forKey: k + ".isolation-probe"),
+        "production domain must not see diag-suite key \(k)")
+    }
+  }
+}

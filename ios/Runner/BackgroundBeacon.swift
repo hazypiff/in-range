@@ -39,8 +39,34 @@ final class BackgroundBeacon: NSObject {
   // execution, inside which the next outgoing beat is sent: neither side
   // ever suspends while the session lives.
   private static let keepaliveCharUUID = CBUUID(string: "CA5E")
-  private static let peripheralRestoreID = "io.inrange.beacon.peripheral"
-  private static let centralRestoreID = "io.inrange.beacon.central"
+
+  // #8 release isolation: diagnostic builds live in their own persistence
+  // universe — separate bundle id (build config), separate UserDefaults suite,
+  // separate CoreBluetooth restoration identifiers — so nothing a diagnostic
+  // build persists (token slots, flags, logs) can ever be restored by a
+  // production build. INRANGE_DIAG is set ONLY by the diag build flavor.
+  #if INRANGE_DIAG
+    static let isDiagBuild = true
+    static let restoreIDSuffix = ".diag"
+  #else
+    static let isDiagBuild = false
+    static let restoreIDSuffix = ""
+  #endif
+  /// Referenced by tests to prove the production domain cannot see it.
+  static let diagSuiteName = "io.inrange.diag"
+  static let peripheralRestoreID = "io.inrange.beacon.peripheral" + restoreIDSuffix
+  static let centralRestoreID = "io.inrange.beacon.central" + restoreIDSuffix
+
+  /// The operational persistence domain. Diagnostic builds write to their own
+  /// suite; production compiles to UserDefaults.standard with no code path
+  /// that reads the diag suite.
+  static func operationalDefaults() -> UserDefaults {
+    #if INRANGE_DIAG
+      return UserDefaults(suiteName: diagSuiteName) ?? .standard
+    #else
+      return UserDefaults.standard
+    #endif
+  }
 
   private static let keyEnabled = "bb.enabled"
   private static let keySlots = "bb.slots"
@@ -111,7 +137,9 @@ final class BackgroundBeacon: NSObject {
   /// transitions rather than re-logging a steady state.
   private var lastLoggedManagerState: [String: String] = [:]
 
-  private var defaults: UserDefaults { UserDefaults.standard }
+  // #8: MUST stay operationalDefaults() — diag builds persist in their own
+  // suite; UserDefaults.standard here would silently break diag isolation.
+  private var defaults: UserDefaults { Self.operationalDefaults() }
 
   // MARK: - Lifecycle
 
@@ -642,19 +670,22 @@ final class BackgroundBeacon: NSObject {
   /// samples and zero evidence of WHY): append wake/read events to a file
   /// in Documents so a USB pull can show whether iOS granted windows at
   /// all, separately from whether scans saw anything during them.
+  /// #8: diagnostic-only — compiled out of production entirely.
   private func logWake(_ kind: String) {
-    let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-    let url = docs.appendingPathComponent("bb_wake_log.txt")
-    let line = "\(Int(Date().timeIntervalSince1970 * 1000)) \(kind)\n"
-    if let data = line.data(using: .utf8) {
-      if let h = try? FileHandle(forWritingTo: url) {
-        h.seekToEndOfFile()
-        h.write(data)
-        try? h.close()
-      } else {
-        try? data.write(to: url)
+    #if INRANGE_DIAG
+      let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+      let url = docs.appendingPathComponent("bb_wake_log.txt")
+      let line = "\(Int(Date().timeIntervalSince1970 * 1000)) \(kind)\n"
+      if let data = line.data(using: .utf8) {
+        if let h = try? FileHandle(forWritingTo: url) {
+          h.seekToEndOfFile()
+          h.write(data)
+          try? h.close()
+        } else {
+          try? data.write(to: url)
+        }
       }
-    }
+    #endif
   }
 }
 

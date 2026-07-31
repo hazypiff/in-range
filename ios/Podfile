@@ -8,6 +8,10 @@ project 'Runner', {
   'Debug' => :debug,
   'Profile' => :release,
   'Release' => :release,
+  # #8 release isolation: diagnostic flavor (separate bundle id + INRANGE_DIAG).
+  'Debug-diag' => :debug,
+  'Profile-diag' => :release,
+  'Release-diag' => :release,
 }
 
 def flutter_root
