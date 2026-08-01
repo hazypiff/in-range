@@ -1,0 +1,28 @@
+Review a migration I just wrote, before it goes anywhere near production. Be adversarial — this fixes three Criticals from the audit you co-signed, and a bad fix here is worse than the bug.
+
+File: /home/hazypiff/in-range/supabase/migrations/0063_audit_2026_08_01_critical_fixes.sql
+Audit: /home/hazypiff/in-range/docs/research/2026-08-01-hardening/HARDENING_AUDIT_2026-08-01.md
+
+It changes three functions, each extracted verbatim from its latest definition and modified only at marked sites:
+
+1. **C-SQL-1** — `claim_token`: added `WHERE public.token_claim_history.user_id = v_uid` to the `ON CONFLICT (token) DO UPDATE`, and replaced the dead `COALESCE(EXCLUDED.x, existing.x)` guards with plain assignments, and made `valid_until` a `GREATEST(existing, excluded)` so a claim can never SHORTEN an existing window.
+
+2. **C-SQL-3** — `cleanup_ephemeral_data`: added `DELETE FROM public.beacon_token_batch WHERE valid_until < NOW() - INTERVAL '24 hours';`
+
+3. **C-SQL-4** — `correlate_encounter`: the GPS veto only ran when the claim row carried coordinates. Added `v_veto_ran` tracking; the reciprocity SELECT now also fetches the reverse sighting's `observer_lat/observer_lon`; and when the claim-based veto did not run, it falls back to comparing the caller's coordinates against the reverse observer's coordinates, failing CLOSED (RETURN) if either is missing.
+
+Questions I specifically want answered:
+
+a) **Does the C-SQL-4 fallback break the locked-phone path it is meant to protect?** That path exists precisely because a locked phone pre-claims tokens with NULL location. If `sightings.observer_lat/observer_lon` are ever NULL, or if the reverse sighting legitimately comes from a device with no fix, my fail-closed branch silently kills real encounters. Check the NOT NULL constraints and the real write paths before answering.
+
+b) **Is `GREATEST(existing.valid_until, EXCLUDED.valid_until)` right, or does it introduce a new problem?** It stops a claim shortening a window, but it also means a token's resolvable life can only ever grow. Is that exploitable by the token's own owner?
+
+c) **Does the `WHERE` on `DO UPDATE` silently swallow a case that should error instead?** A foreign-owned conflict now becomes a no-op, so the attacker gets a success response. Should it RAISE instead, and does raising leak an oracle ("this token belongs to someone else")?
+
+d) Anything in the three bodies that I altered accidentally — i.e. any diff against the originals beyond the marked sites. The originals are in 0060 (claim_token), 0053 (correlate_encounter), 0059 (cleanup_ephemeral_data).
+
+e) Ordering/transactional concerns: it is all one BEGIN/COMMIT. Any risk on a live database?
+
+Rehearsal already done: migrations 0020..0063 apply cleanly in sequence on a local database that has the full Supabase scaffolding, and all three changes verify present via pg_get_functiondef. The local database is now at 0063.
+
+Reply with: VERDICT (SAFE TO DEPLOY / SAFE WITH CHANGES / DO NOT DEPLOY), then your specific concerns with file:line.

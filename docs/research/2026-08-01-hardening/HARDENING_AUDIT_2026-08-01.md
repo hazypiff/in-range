@@ -12,6 +12,49 @@ recorded in `CONSENSUS_DIALOGUE.md`.
 finding has a dedicated evidence section in `verified_findings_working.md` with reproduction commands.
 The High/Medium tier is summarized here with file:line inline, not separately sectioned.
 
+## 🔴🔴 SEVERITY CORRECTION — PRODUCTION IS AT 0055+0062, NOT 0063
+
+**Verified after sign-off, and it lowers the live severity of all three SQL Criticals.**
+`supabase migration list --linked` shows prod at **0001–0055 + 0062**; **0056–0061 are NOT applied.**
+A `supabase db dump --linked` of the live schema confirms the consequences:
+
+| Claim in this report | Production reality |
+|---|---|
+| C-SQL-1: `claim_token` overwrites another user's **coordinates** | Prod's conflict clause is `ON CONFLICT (token) DO UPDATE SET valid_until = EXCLUDED.valid_until;` — the 0048-era version. **The coordinate overwrite does not exist in prod.** Cross-user `valid_until` extension IS live (a token stays resolvable longer than its owner intended), but the GPS-veto-neutralisation harm is **not**. It arrives with 0060. |
+| C-SQL-3: unpurged map de-anonymises 30 days of `rssi_samples` | `beacon_token_batch` is present and unpurged (**real**), but **`rssi_samples` is ABSENT from prod** (0056). The join target does not exist yet, so the proximity-graph harm arrives with 0056. |
+| C-SQL-4: batch-pre-claimed tokens skip the GPS veto | The claim-coordinate-gated veto **is** live in prod, but the only writer of NULL-coordinate claim rows is `claim_token_batch` (0060, **absent**), and prod's `claim_token` raises on NULL coordinates. **No prod code path produces a veto-skipping row.** It arrives with 0060. |
+
+**So the accurate statement is:** these three are **live in `main` and become live in production on the app
+rollout** (when 0056–0061 ship). They are not currently exploitable against production users. C-PROD-1
+remains the only finding that was genuinely live in production, and it is now fixed.
+
+**Why this correction exists:** this report warned the panel that migrations are cumulative and that prod
+must be verified rather than inferred — and then rated three findings from migration files without
+checking the deployed ledger. Third time this project has hit that trap; first time it was this report
+doing it.
+
+## ⛔ DEPLOYMENT BLOCKER — 0063 MUST NOT SHIP ALONE
+
+`0063` modifies `cleanup_ephemeral_data` using **0059's body**, which references `rssi_samples`,
+`venue_anchors` and `proximity_wake_requests`. Verified: prod's current `cleanup_ephemeral_data` has
+**zero** references to those tables and **none of them exist in prod**. Pushing 0063 by itself would
+install a function referencing non-existent tables and **break `run_maintenance` in production** — the job
+that performs every retention purge. 0063 ships **only** as part of the 0056→0063 batch, in order.
+(Caught by Kimi during migration review.)
+
+---
+
+**REMEDIATION STATUS (updated after sign-off):**
+- **C-PROD-1 — FIXED AND VERIFIED IN PRODUCTION.** `send-push` and `photo-review` redeployed with the auth
+  gate; `config.toml` corrected (`verify_jwt=false` on both, plus the missing `[functions.proximity-wake]`
+  block). Re-probed: unauthenticated `POST` → `401`, `GET` → `405`, wrong bearer → `401`. Hole closed.
+- **C-SQL-1 / C-SQL-3 / C-SQL-4 — FIXED IN `0063_audit_2026_08_01_critical_fixes.sql`, NOT DEPLOYED, and
+  MUST NOT be deployed alone (see DEPLOYMENT BLOCKER above).**
+  Rehearsed: 0020→0063 apply cleanly in sequence on a locally-scaffolded database, all three changes
+  verified present via `pg_get_functiondef`. Awaiting panel review + owner go-ahead; unlike the redeploy
+  this is new code, and C-SQL-4 changes encounter-correlation semantics.
+- Everything in the High tier is untouched.
+
 **Baseline:** `flutter analyze` clean; `flutter test` 183/183 on `main`, 233/233 on the W5 branch. Both
 suites green — **no defect below is caught by an existing test.**
 
@@ -268,10 +311,14 @@ as **wildcards**, so v5.2 correction #5 has zero coverage.
   Required manual check: `SELECT jobname, schedule FROM cron.job;`. **Do not treat this as cleared.**
 - **Not verified:** anything requiring Xcode (no Mac) — all Swift findings are static reads; hardware
   frequency and behaviour; the deployed Edge Function *source*.
-- **⚠️ UNVERIFIED, NOT CLEARED — privilege regressions across migrations 0020–0062.** The local Supabase
-  container is at **0019**, so no DB-derived statement in this round covers anything introduced after it,
-  including 0047's revokes and 0061's own sweep. This caveat applies to Kimi's DB-derived "all clean"
-  statement as much as to Claude's. **Do not treat 0020–0062 as cleared.**
+- **⚠️ NARROWED BUT NOT CLEARED — privilege regressions across migrations 0020–0062.** At sign-off the
+  local container was at **0019**, making every DB-derived statement about later migrations unsupported.
+  It has since been advanced to **0063** and swept: **0** anon-executable SECURITY DEFINER functions,
+  **0** `USING(true)` policies reachable by `authenticated`, and RLS enabled on every application table
+  (sole exception: PostGIS's own `spatial_ref_sys`, not app data). That verifies **the migration chain**.
+  It does **not** verify **production**, and C-PROD-1 is direct proof that this project's prod state can
+  diverge from its repo for weeks without anyone noticing. **Still not cleared** — it needs the same
+  sweep run against prod.
 - **Depth of each auditor's check, self-reported:** Codex re-read the source mechanism for every Critical
   and summarized High finding including latest SQL definitions, and accepted rather than reproduced the
   production HTTP observations, flag values, cron state and Flutter totals; it did not re-audit

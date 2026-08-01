@@ -46,7 +46,12 @@ enable_signup = true
 enable_confirmations = true
 
 [functions.send-push]
-verify_jwt = true
+# Self-authenticates via requireServiceRole(); see miles-correlate note. The
+# service key is the sb_secret_ format, which the gateway rejects when
+# verify_jwt=true — so gateway verification would lock out the ONLY legitimate
+# caller while admitting every anon/authenticated JWT. (Audit 2026-08-01,
+# H-CFG-1.)
+verify_jwt = false
 
 [functions.miles-correlate]
 # Self-authenticates via requireServiceRole() (exact Bearer == service-role key).
@@ -54,7 +59,8 @@ verify_jwt = true
 verify_jwt = false
 
 [functions.photo-review]
-verify_jwt = true
+# Self-authenticates via requireServiceRole(); see send-push note. (H-CFG-1.)
+verify_jwt = false
 
 [functions.ncii-intake]
 # Public, unauthenticated NCII/TAKE IT DOWN intake — reporters have no JWT.
@@ -63,6 +69,13 @@ verify_jwt = false
 
 [functions.maintenance]
 # Self-authenticates via requireServiceRole(); see miles-correlate note.
+verify_jwt = false
+
+[functions.proximity-wake]
+# Self-authenticates via requireServiceRole(). Previously ABSENT from this file,
+# so it silently inherited the verify_jwt=true default. NOT yet deployed — 0059
+# is unapplied and H-PW-1 (unvalidated geohash, no blocks/consent filter in
+# findLikelyPeers) must be fixed before it ships. (Audit 2026-08-01.)
 verify_jwt = false
 
 [functions.waitlist-join]

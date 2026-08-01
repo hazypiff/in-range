@@ -6,6 +6,110 @@ Paste the section below to the Mac agent. It is written to be self-contained.
 
 ## Prompt for the Mac agent
 
+---
+
+## ⚡ STATUS AS OF THIS UPDATE — read before you plan your day
+
+**The live production hole is CLOSED.** C-PROD-1 is fixed and verified. `send-push` and `photo-review`
+were redeployed with the auth gate that had been sitting correct-but-undeployed in the repo since
+`45ef624` (2026-07-12), and `supabase/config.toml` was corrected (`verify_jwt=false` on both, plus a
+`[functions.proximity-wake]` block that had been missing entirely, so it was silently inheriting the
+`true` default). Re-probed against production:
+
+| probe | before | after |
+|---|---|---|
+| `POST` no auth | `200` | **`401 unauthorized`** |
+| `GET` no auth *(the conclusive one)* | `200` | **`405 method_not_allowed`** |
+| `POST` wrong bearer | `200` | **`401 unauthorized`** |
+
+**The three SQL Criticals are written and rehearsed but NOT deployed.**
+`supabase/migrations/0063_audit_2026_08_01_critical_fixes.sql` fixes C-SQL-1, C-SQL-3 and C-SQL-4. It has
+been rehearsed — migrations 0020→0063 apply cleanly in sequence on a local database with full Supabase
+scaffolding, and all three changes verify present via `pg_get_functiondef`. It is **awaiting Kimi/Codex
+review and an owner go-ahead** before it touches production, because unlike the redeploy this is new code
+rather than restoring reviewed code, and the C-SQL-4 change alters encounter-correlation semantics.
+
+**One standing caveat got narrower, and one did not.** The local container was the reason "privilege
+regressions across 0020–0062" was unverifiable; it is now at **0063**, and a sweep of the full chain shows
+**0 anon-executable SECURITY DEFINER functions, 0 permissive `USING(true)` policies reachable by
+`authenticated`, and RLS on every application table** (the sole exception is PostGIS's own
+`spatial_ref_sys`, which is not app data). That verifies the *migration chain*. It does **not** verify
+production, where drift is exactly what C-PROD-1 turned out to be — so treat this as narrowed, **not
+cleared**. The `cron.job` retention caveat is completely untouched and still needs a human with prod
+access.
+
+---
+
+## ⚠️ CORRECTIONS — if you were sent a summary of this audit, check it against these
+
+A briefing circulated that got several things wrong in ways that would misdirect your work:
+
+- **"All four Criticals are in Supabase/Edge Functions code."** No. Only C-PROD-1 involved Edge Functions,
+  and it was a *deployment* defect — the repo code was already correct. The other three are **Postgres
+  migrations** (`0060`, `0059`, `0053`). Different fix, different risk, different verification.
+- **"The production auth bypass could allow unauthorized encounters or points minting."** No. The two
+  exposed functions were `photo-review` (advances photo verification, which gates discoverability) and
+  `send-push` (drains the notification outbox). Neither touches encounters. **There is no points system
+  deployed at all** — Phase A is unbuilt, which is why the audit reviewed the mint as a *design*.
+- **"Two UNVERIFIED caveats about server-side cron jobs."** Only one is about cron. The second is about
+  **privilege regressions across migrations 0020–0062** and has nothing to do with cron. Losing it would
+  drop a whole caveat.
+- **"H-DIAG-4 is a medium-risk concern."** It is rated **High**.
+
+The signed report is authoritative. If a summary and the report disagree, the report wins.
+
+---
+
+## 📱 DEVICE MATRIX — three Androids are available, and this changes what is testable
+
+Two Galaxy S9s were already in the pool; a third Android has been added
+(`3931395a4d583398`, currently the only one attached over USB).
+
+**Read this before planning hardware work: the Android in hand runs Android 10.**
+
+That matters for one finding specifically. **H-RT-8 — backgrounded-iPhone discovery broken by Apple
+multi-AD blob offsets — is NOT reproducible on these devices.** AOSP changed from "last Apple AD wins"
+(≤14) to "concatenate in PDU order" (15 flag-gated, 16+ ungated). On Android 10–14 the `0x01` byte lands
+at payload index 0 and the hardware filter matches. The bug needs an **Android 15 or 16** handset. Do not
+let anyone conclude "we have three Androids, so H-RT-8 is covered" — verify with
+`adb shell getprop ro.build.version.release` per device first.
+
+What three Androids plus the two iPhones **do** unblock, none of which needed hardware before:
+
+- **NOT three-peer W5 contention — correcting an earlier line in this doc.** An earlier revision said
+  three Androids plus an iPhone would give a four-endpoint W5 contention test. **That is wrong and is
+  withdrawn.** W5 has no Android implementation: `grep -rn 'W5' android/app/src/main/kotlin/` returns
+  nothing, and `W5LinkController.swift` / `W5Ownership.swift` / `w5_ownership.dart` exist only on
+  `fix/w5-encounter-lease`. Androids cannot participate in a lease at all.
+  **Consequence, and it is a real constraint:** multi-peer W5 contention needs **three iOS devices**, and
+  the pool has two. `MAX_CONTENDERS = 5`, the cap-refusal paths, and the third-peer-arrives-mid-negotiation
+  case that most reliably produces H-W5-3's `pendingDial` leak are therefore **not testable on current
+  hardware**. Two iPhones can still reproduce the leak via the simpler triggers (kill the peer after
+  `didConnect` but before HELLO_ACK; force the 10s watchdog at `BackgroundBeacon.swift:967-973`). If you
+  want the contention case covered, a third iOS device is a hardware ask — flag it rather than assuming
+  the Androids close it.
+- **Forgery repro for C-SQL-1 / C-SQL-4** with two honest devices and one modified client, which is the
+  only way to confirm the 0063 fixes actually close the holes rather than merely looking like they do.
+- **H-RT-1** (`_flushSightings` compounding) under a deliberately half-dead network — airplane-mode
+  toggling or a throttled hotspot. This is the finding where the user taps "beacon off" and BLE keeps
+  running; a device test is the only honest proof of the fix.
+- **H-RT-6** consent withdrawal on-device: withdraw `precise_location` and confirm the beacon actually
+  stops uploading coordinates, and that the gate re-arms after a withdrawal rather than staying satisfied
+  by the one-shot prefs flag.
+- **H-RT-2 / RH-1**: an Android can be left running for days to reproduce the isolate wedge, and — because
+  `restoreNativeSession` is iOS-only — to confirm that the beacon does *not* auto-resume on Android after
+  a process death, which is the half of RH-1 nobody has demonstrated.
+- **Walk #4** calibration with a third device improves per-pair coverage against the promotion gates
+  (≥3 walks, every class in ≥2 independent walks).
+
+**One sequencing note that matters more than it looks.** H-W5-5 (the 120-second reconnect grace being
+unreachable behind the 900s token cache and 300s retry floor) should be fixed *before* any Phase-5
+hardware session, not after. "Rotation-during-grace" is the designated priority case for that matrix, and
+if the dial is gated before the lease authority is ever consulted, the matrix will faithfully measure a
+code path the app does not normally take — and report a pass.
+
+---
+
 We ran a full-system hardening and bug-hunt round on 2026-08-01 — no UI/UX work, pure stability,
 security and correctness. The panel was 7 independent Claude reviewers plus Kimi K3 and Codex
 (`gpt-5.6-sol`) on separate scopes, and every finding was re-verified against the code by the
