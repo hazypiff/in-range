@@ -829,3 +829,450 @@ transcript copy + README, committing the joint financial report per owner instru
 ("commit the money report once kimi signs off"), pushing both remotes. Financial
 round complete: 3 Claude agents + Kimi independent verification, 1 error corrected
 (SEC-verified), 1 strategy rejected (Meta exemption), 4 owner decisions consolidated.
+
+---
+---
+
+# PHASE 8 — Marketing research: the new angle, prelaunch site (owner-directed)
+
+Owner brief: research the gamified go-out angle and how to market it on inrange.life
+before traffic starts; both agents research independently; graphics upgrades wanted,
+free image sources only.
+
+---
+
+## [33] CLAUDE → KIMI
+
+Sent external findings (marketing_research_claude.md): M1 anti-swipe wave evidence
+(156 hrs/yr for 6 connections, 45% Gen Z frustrated, >50% burned out, ~80% college
+students quit apps, ~90% prefer offline, Tinder −600k users 2024 + launched IRL
+events 2026, Thursday events-first 150 cities, IRL attendance +49%) — we launch INTO
+the wave, incumbents validating late. M2 positioning trap: gamification must NOT read
+as more screen addiction — BeReal frame "doing instead of scrolling"; proposed frames
+"life is the game — the app just keeps score" / "points for living, not scrolling".
+M3 waitlist mechanics evidence (15% avg → 40%+ top; 5 winner mechanics; endowed
+progress; Robinhood refer-to-advance 3+ refs/user); gaps on our page: city/zone
+capture, zone progress bars, confirmation-page referral push. M4 proposed site
+changes (going-out-pays section, anti-swipe hero injection, NYC/DMV framing, zone
+waitlist upgrade pending backend check, FLUX+Unsplash graphics, FAQ additions,
+guardrails: no sponsorship/no purchasable credits/nothing-built claimed). Asked
+K1-K6; Kimi instructed to do INDEPENDENT research FIRST (owner directive), then
+CONFIRM/DISPUTE.
+
+## [34] KIMI → CLAUDE (independent marketing research + K1–K6 verdicts, response file marketing_research_kimi.md)
+
+# Marketing research round — Kimi independent research + K1–K6 review
+Date: 2026-07-31. Method: independent web research FIRST (all of Part 1 gathered
+before reading Claude's brief), then review. Repo evidence: waitlist backend read
+at main (read-only). Claude's brief: `marketing_research_claude.md` (same dir).
+
+---
+
+## PART 1 — My independent findings (pre-brief)
+
+### The trend evidence (this is a documented wave, and incumbents are validating it late)
+
+- **Incumbent distress is on the record:** Match Group cut 13% of staff in May
+  2025 and its CEO publicly acknowledged the swipe format is losing Gen Z
+  ([grass.camp trend report citing Fortune](https://grass.camp/blog/less-tinder-more-strava-running-replaces-dating-apps));
+  Tinder itself launched IRL events in March 2026. Bumble FY2025 revenue −10–14%
+  (Bumble IR, verified in the financial round).
+- **User-side numbers:** 45% of Gen Z dating-app users report frustration and
+  hopelessness ([Loyola 2025 study via Columbia News Service](https://columbianewsservice.com/2026/03/02/gen-z-is-logging-off-dating-apps-and-looking-for-love-irl/));
+  ~156 hours on apps for ~6 connections and 80% of Gen Z reporting loneliness
+  ([grass.camp friendship report](https://grass.camp/en-US/blog/gen-z-friendship-revolution-2026));
+  IRL event attendance +49% (same source).
+- **The activity-club displacement is named and measured:** Strava's own Year in
+  Sport 2025 calls "running clubs are the new dating apps" a top trend — clubs
+  passed 1M total, running clubs ×3.5, hiking clubs ×5.8, Gen Z 75% more likely
+  than Gen X to enter a race ([summary](https://grass.camp/blog/less-tinder-more-strava-running-replaces-dating-apps)).
+  Eventbrite 2026: coffee clubbing +478%, sober-curious +92% (same). The slogan
+  "Less Tinder, More Strava" grew organically out of NYC run-club culture in
+  2024–25 — meaning our exact message already has organic carrier waves.
+- **Authenticity marketing works and its violation is punished:** BeReal grew
+  ~2000% in 2022 with zero paid ads on an anti-filter, anti-doomscroll promise
+  ([AMT Lab/CMU](https://amt-lab.org/reviews/2023/3/bereal-review-a-new-kind-of-social-media),
+  [The Drum](https://www.thedrum.com/opinion/2022/08/04/how-brands-can-authentically-leverage-bereal));
+  post-Voodoo it introduced ads and the differentiation narrative collapsed
+  ([Business Model Hub](https://businessmodelhub.in/bereal-business-model/)).
+  **Lesson with teeth for us: the no-ads stance is a marketing asset exactly as
+  long as it stays absolute** — every "no ads, ever" line on our page is
+  contingent on the §7.1 owner decision going the amendment route, not the
+  sponsorship-without-disclosure route.
+- **Pokémon Go's spread was physical and organic:** people *saw* players
+  gathering in parks — the game was visible in public space, which did what no ad
+  could ([King Kong case study](https://kingkong.co/blog/what-your-business-can-learn-from-pokemon-go/)).
+  Our analog: Range Nights make the app physically visible at venues. The
+  marketing mechanic is the gathering, not the creative.
+- **Gen Z messaging rules (multi-source convergence):** authenticity is
+  non-negotiable ([The Brand Leader](https://thebrandleader.com/how-to-market-to-generation-z/));
+  self-aware, lo-fi, fourth-wall-breaking beats polished — "strategic
+  imperfection" ([Artizone cringe-marketing analysis](https://www.artizone.in/cringe-marketing-and-chaos-packaging-in-2025);
+  Duolingo-owl/Ryanair/Liquid Death as the canon
+  ([ZoomSphere](https://www.zoomsphere.com/blog/cringe-marketing-why-brands-are-embracing-weird-unhinged-strategies-in-2025)));
+  don'ts: corporate voice, superlatives you can't prove, fake urgency, anything
+  that smells like engagement-farming. This generation audits claims — which
+  suits us: our entire brand stack (both-phones-agree, 24h purge, honesty-fix
+  history) is claim-auditable.
+
+### My angle ranking (K1's answer, evidence-weighted)
+
+1. **"The swipe era is ending — we built what comes next" (anti-swipe wave).**
+   Strongest: documented, incumbent-validated (Match layoffs, Tinder's own IRL
+   pivot), and we are structurally *of* the wave rather than reacting to it.
+   Risk: every dating startup claims this now — so pair it with proof points
+   only we have (verification, purge, no-ads).
+2. **"Life is the game — the app just keeps score" (gamification inverted).**
+   Our differentiator within the wave. The inversion is essential: points for
+   leaving the phone in your pocket, nothing grindable from a couch. This is
+   what separates us from both dating apps AND engagement-farm games.
+3. **"The clubs are already meeting — we make it count" (run-club/activity
+   displacement).** Strava/Eventbrite numbers say the gathering behavior exists
+   at scale; our lanes map onto it one-to-one. Best for channel-specific
+   creative (fitness/lane communities) rather than the homepage lead.
+4. **"No ads, no tracking, 24-hour delete" (BeReal-proof privacy as brand).**
+   Supporting layer, not lead — BeReal proved authenticity positioning wins the
+   demographic AND that violating it is fatal. Say it plainly; never stretch it.
+5. **Pokémon-Go nostalgia.** Use as a wink in earned media ("Pokémon Go for
+   your social life" is a press-friendly shorthand) — not as owned-page copy:
+   it borrows someone else's identity, and our rings/radar identity is stronger
+   standing alone.
+6. **Loneliness economy.** Do NOT lead with it. "We cure loneliness" trips the
+   manipulation radar; "go where the people are" invites instead of diagnosing.
+   Use the stats as support, never as the headline emotion.
+
+---
+
+## PART 2 — K1–K6 verdicts on Claude's brief
+
+### K1 — CONFIRM (M1's wave claim), with the ranking above
+
+Claude's M1 numbers are directionally consistent with everything I found
+independently (the 156-hours and 45%-frustration figures match my sources; the
+"~80% of college students stopped" and "~90% prefer offline" figures I could not
+find primaries for in my pass — tag them SOFT or drop them from page copy; keep
+only numbers we can defend: Match layoffs, Bumble decline, Strava report,
+Eventbrite, Loyola 45%, IRL +49%). My ranking (Part 1) endorses M2's inversion
+as the core differentiator and adds two cautions: the anti-swipe angle is
+crowded, so proof-points carry it; and loneliness-economy framing should not
+lead.
+
+### K2 — DISPUTE "Go outside. It literally pays." The others mostly stand.
+
+"It literally pays" is the one frame that fails our own stack, on two axes:
+- **Literal means literal.** The Terms virtual-items clause (blueprint §7.5)
+  states points have no cash value and are not purchasable (X6). "Literally
+  pays" asserts the opposite in the plain-meaning sense ad regulators use —
+  and it's checkable against our own published Terms in one click. This is
+  precisely the class of overclaim we removed from the lanes copy this morning.
+- **The redemption catalog is owner-undecided** (joint financial report §6.1).
+  Today points buy in-app flair only. Teasing cash-out economics before that
+  decision lands is premature in the same way.
+
+Replacements (ranked):
+1. **"Go out. It counts."** — double meaning (points count; it matters), zero
+   overpromise, two words of brand voice. My top pick.
+2. "Points for living, not scrolling." (Claude's — clean, endorses M2.)
+3. "The app that rewards you for putting your phone away." — Claude's "The
+   only app that…" version drops "only": unprovable superlative (screen-time
+   apps exist), and our honesty discipline doesn't need it.
+Keep "life is the game — the app just keeps score" as the section explainer
+line; it's the correct frame and survives every policy check.
+
+### K3 — Backend needs a small migration (verified); cold-start solved honestly
+
+**Verified at main:** `waitlist-join/index.ts:60-64,86-90` accepts exactly
+`email`, `source` (≤40 chars), `ref`. The table (0054: email/source/created_at;
+0055: ref_code/referred_by/referral_count/priority) has **no zone column**.
+Zone chips CANNOT be captured today. Options:
+- **Recommended: small migration (~20 lines)** — `ALTER TABLE waitlist ADD
+  COLUMN zone TEXT;` + `join_waitlist(p_zone TEXT DEFAULT NULL)` param +
+  `CREATE INDEX ON waitlist (zone)` for count queries; edge fn whitelists
+  `['nyc','dc','md','nova']` (extensible), slices to 20 chars, passes through.
+  Repeat-posts (the silent status-check path, `index.ts:83-85`) should be
+  last-wins on zone so a user can correct a mis-tap.
+- Zero-migration hack (zone smuggled into `source` as `hero|nyc`) works today
+  but pollutes source analytics — don't; the migration is trivial and this
+  field will be read by every launch-gating query.
+
+**Cold-start zone progress, honest version** (Claude's question: zones are at
+~zero today):
+1. **Never fabricate a count.** A discovered fake counter kills the brand's
+   core claim in one screenshot. Non-negotiable.
+2. **Suppress absolute numbers at low counts.** Below ~25 signups show the bar
+   with no numbers ("just opened — be one of the first"); at ≥25 show the real
+   "214/300". A bar showing "3/300" is demotivating and invites ridicule.
+3. **Show rank, not just level:** "Astoria is #2 of 6 zones — zones open in
+   order" — competition between neighborhoods is motivating without exposing
+   thin absolutes, and it's the endowed-progress mechanic in social form.
+4. **Frame N as target, not promise:** "your zone opens around 300" — the
+   existing page promise is "cities unlock in signup order"; a displayed
+   threshold must not harden into a guarantee ops can't meet. (Terms-safe as
+   written today; keep it that way.)
+5. These are *waitlist signup counts* — our own marketing metric, not member
+   presence — so no conflict with the venue-presence privacy rule; but keep
+   them per-zone waitlist counts, never "members near you."
+
+### K4 — CONFIRM the section plan with two amendments
+
+Placement after the journey section is right (points tease feeds the founder
+offer's value). Two amendments:
+1. **Cut the "free-date redemption tease"** (M4.1's Rahul flagship) until the
+   §6.1 owner decision lands — it is the same class of premature claim as this
+   morning's lane lines: the offers catalog doesn't exist and may never in that
+   form. Tease points/streaks/levels "coming at launch" (present-tense
+   discipline per the honesty fix); redemption phrasing at most "points you can
+   actually spend — details at launch" or omit.
+2. **The section needs the inversion sentence up top** ("points exist for going
+   OUT — nothing here is grindable from a couch") or it reads as engagement
+   farming to exactly the audience the wave delivers (M2 is correct about the
+   trap).
+Guardrails (no venue sponsorship, no purchasable credits, nothing claimed as
+built that isn't): endorse — and add mine: no "no ads, ever" absolute on the
+page beyond what privacy.html currently says, until §7.1 is decided (the
+current page copy is fine as-is; don't strengthen it).
+
+### K5 — SEO/OG/JSON-LD
+
+- **Meta/OG descriptions:** inject the new angle + named geography. Suggested
+  og:description: "Points for going out, not scrolling. In Range verifies the
+  people you actually cross paths with — launching NYC metro + DC first. Free
+  founding list." (~160 chars.) Keep og:title "You crossed paths with someone
+  today." — it's the strongest asset on the page.
+- **Name the cities in the FAQ answer** ("Which cities?" currently answers
+  generically): "NYC metro and the DC area (DMV) first — zones unlock in signup
+  order." Real SEO keywords, honest, and owner-set.
+- **FAQPage schema must mirror the visible FAQ exactly** — add the three new
+  Q&As to both the section and the JSON-LD in the same edit (Google requires
+  parity; also our own honesty discipline).
+- **New FAQ "Is this a game?"** — answer with the inversion; good featured-
+  snippet bait.
+- No new schema types (no Event, no Offer — nothing scheduled/sold yet).
+- OG image: keep photographic (real city energy); refresh subject to "out at
+  night" stock, not generated art (trust surface).
+
+### K6 — Graphics direction: CONFIRM approach, with license specifics and FLUX prompt rules
+
+**Licenses (verified today):** Pexels — free for commercial use, no attribution
+required ([license](https://www.pexels.com/license/),
+[FAQ](https://help.pexels.com/hc/en-us/articles/360042295174-What-is-the-license-of-the-photos-and-videos-on-Pexels)).
+Unsplash — same shape (free commercial, no attribution required; can't sell
+unaltered copies or build a competing stock service).
+**People caution (both licenses):** identifiable faces on a dating/social app
+page imply those people are users — that brushes the licenses' sensitive-use
+limits and is just bad judgment. Prefer: crowd-from-behind, silhouettes, venue
+ambiance, hands/objects, motion blur. Save any identifiable people for
+FLUX-generated or shot-by-us content.
+**Search terms:** "friends rooftop bar night", "coffee shop window city",
+"run club morning bridge", "concert crowd lights silhouette", "nyc subway
+platform motion", "dc dupont circle night".
+**FLUX-schnell (Apache 2.0, CF Workers AI):** strong at — abstract/radar/rings
+motifs, isometric map-glow cityscapes, textures, dark-brand backgrounds
+matching #0B0B0C/#FFD60A/#E5352B. Weak at — readable text (always garbled;
+put "no text, no words" in every prompt), hands, photorealistic crowds.
+**NSFW-filter discipline (the gotcha is real):** abstract/vague prompts trip it;
+be literal and concrete. Template: "isometric night map of Manhattan, glowing
+amber concentric rings centered on a small bar, dark background, red and yellow
+accents, no people, no text". For people: name clothing, activity, shot type —
+"two friends in jackets laughing at a bar table, wide editorial photo, warm
+light" — never "intimate", "seductive", "close embrace", "body", or unqualified
+"couple". Generate several seeds; filter rejection is cheaper than a wrong
+metaphor.
+
+---
+
+**MARKETING RESEARCH SIGN-OFF: AGREED** — with these items:
+1. "It literally pays" cut; headline candidates ranked in K2 ("Go out. It
+   counts." first). Any cash/redemption implication waits on owner decision §6.1.
+2. Zone capture requires a small migration + edge-fn pass-through (spec in K3);
+   smuggling zone into `source` rejected.
+3. Cold-start zone bars: real counts only, absolutes suppressed below ~25,
+   rank framing, threshold as target-not-promise (K3).
+4. Drop the free-date redemption tease; inversion sentence leads the points
+   section (K4); M1's two unverifiable stats (~80% college, ~90% offline
+   preference) tagged SOFT or dropped from page copy (K1).
+5. FAQ + FAQPage schema updated atomically; NYC/DMV named in the cities answer
+   (K5). Stock imagery avoids identifiable faces; FLUX prompts follow the
+   specificity template with "no text" always (K6).
+
+## [35] CLAUDE → KIMI (verification results + implementation + final-pass/deploy-gate request)
+
+Kimi — Claude. Marketing round, closing pass. Your independent research + K1–K6 came back
+AGREED with 5 conditions. Status on my side:
+
+VERIFICATION OF YOUR CLAIMS (all confirmed at main before I accepted anything):
+- 0054/0055: no zone column; join_waitlist(TEXT,TEXT,TEXT) returns the ladder JSONB — confirmed.
+- waitlist-join/index.ts accepts exactly email/source(≤40)/ref; repeat-post = silent status
+  check — confirmed. Your K3 dispute of my source-smuggling idea: ACCEPTED, you were right —
+  source is the analytics field every launch-gating query will read.
+- One deploy fact you didn't have: prod DB is at migration 0055 — local 0056–0061 (wake/
+  calibration) are deliberately NOT applied yet (they ship with the app rollout). So I will
+  NOT blanket `supabase db push`. Plan: 0062 is written fully idempotent; I temporarily set
+  aside 0056–0061, push 0062 alone, restore them. The 0062 header documents this. Future devs
+  need `--include-all` for 0056+ — documented. Critique this if you see a better way.
+
+IMPLEMENTED (all 5 of your conditions):
+1. "It literally pays" — never shipped. Section headline is your "Go out. It counts."
+2. Migration supabase/migrations/0062_waitlist_zone.sql: zone TEXT + length check + partial
+   index; join_waitlist(p_email,p_source,p_ref,p_zone) with last-wins zone on repeat posts;
+   returns zone/zone_count/zone_rank (rank via RANK() over per-zone counts) so the
+   confirmation card needs NO new public endpoint. Edge fn whitelists ['nyc','dc','md','nova'].
+3. Cold-start rules in web JS: real counts only; <25 → bar with NO numbers ("just opened —
+   you're one of the first in line"); ≥25 → real count; always "#N of the launch zones —
+   zones open in signup order"; threshold phrased "opens around 300" (ZONE_TARGET const).
+4. Free-date tease cut. Inversion sentence leads the points section ("Life is the game — the
+   app just keeps score… nothing farmed from a couch, bought, or botted"). Third card promises
+   ONLY earn-only ("you'll never be able to buy them — you can only go earn them") + details
+   at launch. SOFT stats (~80% college / ~90% offline) are OFF the page and tagged in the
+   joint doc.
+5. FAQ + FAQPage JSON-LD updated in the same edit (2 new Q&As + cities answer names NYC metro
+   + the DMV). Meta/og/twitter descriptions carry the new angle + geography; og:title
+   untouched. Graphics: FLUX night-map with brand radar rings at web/img/points.jpg — 4 seeds
+   generated, 2 discarded for garbled signage exactly as you predicted, winner has zero text.
+   og.jpg untouched (photographic trust surface). No sponsorship, no "no ads ever"
+   strengthening, no purchasable-points language anywhere.
+
+REVIEW REQUEST — you are the gate on two things:
+A) REPORT: docs/MARKETING_PRELAUNCH_2026-07-31_JOINT.md — faithful to both briefs? §8
+   corrections record fair in both directions? End verdict line:
+   "MARKETING REPORT SIGN-OFF: AGREED" or "DISPUTED: <items>".
+B) DEPLOY: run `git -C ~/in-range diff` + `git -C ~/in-range status` and read the changed
+   files (web/index.html, supabase/functions/waitlist-join/index.ts,
+   supabase/migrations/0062_waitlist_zone.sql, new web/img/points.jpg). Check: my 5-condition
+   compliance above, SQL correctness of 0062 (esp. the DROP/CREATE signature swap, last-wins
+   branch, rank query), the zone JS (XSS-escaping, localStorage handling, silent-restore path
+   still works when zone is null), FAQ↔JSON-LD parity, and the copy guardrails. End verdict
+   line: "DEPLOY SIGN-OFF: GO" or "DEPLOY SIGN-OFF: NO-GO: <blockers>".
+
+Deploy sequence after your GO: 0062 push (isolated as above) → supabase functions deploy
+waitlist-join → wrangler pages deploy from web/ → live check (POST owner email with
+zone:nyc = status-check path, verifies zone fields land; no junk rows) → commit both remotes
+with all research records incl. your two files + refreshed transcript in
+docs/research/2026-07-31/ (your fin-round housekeeping condition is remembered — the records
+land WITH the report this time).
+
+Write your full response to
+/tmp/claude-1000/-home-hazypiff/909ca9a6-f5fa-4e4c-99d4-e610a0223e24/scratchpad/marketing_final_kimi.md
+
+## [36] KIMI → CLAUDE (final pass: MARKETING REPORT SIGN-OFF: AGREED + DEPLOY SIGN-OFF: GO, response file marketing_final_kimi.md)
+
+# Marketing round — Kimi closing-pass gate (report + deploy)
+Date: 2026-07-31. Reviewed: `docs/MARKETING_PRELAUNCH_2026-07-31_JOINT.md`,
+`git diff` of `web/index.html` (+152/−8) and `supabase/functions/waitlist-join/index.ts`
+(+5), `supabase/migrations/0062_waitlist_zone.sql` (full read), `web/img/points.jpg`
+(viewed). Repo read-only as agreed.
+
+---
+
+## A) REPORT GATE
+
+**MARKETING REPORT SIGN-OFF: AGREED.**
+
+- Faithful to both briefs: the angle ranking (§2) matches my six-item order and
+  rationale; the wave evidence is split correctly into hard/soft (§1); the copy
+  system (§3) records the dispute outcomes accurately; the waitlist mechanics (§4)
+  match what was actually built; channel plan (§5) is consistent with the financial
+  joint report (capped subsidy, written permission, re-warm cadence).
+- §8 corrections record is fair in both directions — my rejections are attributed
+  ("literally pays", source-smuggling, SOFT stats, "only" superlative, free-date
+  tease), and the counter-line about my own zone-smuggling framing ("confirmed but
+  rejected jointly") is accurate: I did note the hack would work and recommended
+  against it. No spin either way.
+- §6's "what was NOT done" list is explicit and correct (no sponsorship, no
+  redemption specifics, no no-ads strengthening, no SOFT stats) — the guardrails
+  held.
+
+## B) DEPLOY GATE
+
+**5-condition compliance:** all present and correct — headline "Go out. It
+counts." with "Coming at launch" tag and inversion sentence leading; 0062 with
+whitelist edge fn; cold-start JS rules (real counts, <25 numberless, rank framing,
+"opens around 300" target-not-promise); free-date tease cut, third card earn-only
+with details-at-launch; FAQ+JSON-LD updated atomically with NYC/DMV named;
+og:title untouched, og.jpg untouched, no sponsorship/no-ads-strengthening/
+purchasable language anywhere. points.jpg verified visually: on-brand night-map
+with amber radar rings, zero text, no people, no garbled signage.
+
+**0062 SQL correctness — verified clean:**
+- DROP-then-CREATE for the signature swap is the required pattern (can't CREATE
+  OR REPLACE across an arg-list change); done inside one transaction — no window.
+- Idempotency: `ADD COLUMN IF NOT EXISTS`, constraint guarded via `pg_constraint`,
+  `CREATE INDEX IF NOT EXISTS`, DROP+REPLACE, REVOKE/GRANT re-asserted — a later
+  `--include-all` replay is genuinely harmless, as the header claims.
+- Last-wins branch (`:98`) is precisely right: it only updates when the incoming
+  zone is non-null AND differs — so a repeat post without a zone (silent restore
+  from a stale page, or a user who never picks a chip) **cannot clobber** a
+  previously stored zone. This was the one data-loss risk in the design and it's
+  handled correctly.
+- `v_zone` normalization (`NULLIF(left(lower(trim(...)),20),'')`) matches the
+  ≤20 check constraint. `ON CONFLICT ((lower(email)))` target verified present
+  (`waitlist_email_uniq`, 0054:23). zone_rank via `RANK() OVER (ORDER BY
+  COUNT(*) DESC)` is correct and returns NULL zone-safely. SECURITY DEFINER with
+  pinned search_path; EXECUTE revoked from public/anon/authenticated, granted only
+  to service_role — no new public read path, as advertised.
+
+**Edge fn (+5):** whitelist `['nyc','dc','md','nova']`, everything else → null
+(including the "Elsewhere" chip's empty string) — correct.
+
+**Zone JS — verified:** tampered `ir_zone` values fail the ZONE_LABELS whitelist;
+all interpolated values pass through `esc()` (pct is numeric and clamped);
+`zoneBlock` returns '' when zone is null, so the silent-restore path renders
+cleanly for zone-less users; hiding `.zones` in renderDone is handled; the
+submit body sends `zone: getZone()` (null when unset → edge null → SQL no-clobber,
+verified end-to-end). localStorage handling is try/catch wrapped. One cosmetic
+note, not a blocker: on a first visit, `setZone(null)` marks the "Elsewhere"
+chip selected by default — arguably informative, slightly presumptuous; your call.
+
+**FAQ↔JSON-LD parity:** both new Q&As and the cities answer updated in both
+surfaces; answers near-verbatim. Question phrasing differs slightly ("Is this a
+game?" vs "Is In Range a game?") — matches the page's pre-existing pattern
+("iPhone or Android?" vs "Does In Range work between…"), acceptable to Google.
+
+**Two nits (not blockers):**
+1. **"Never" absolutes crept back in:** the third card says "you'll **never** be
+   able to buy them" and the FAQ says "money **never** can" mint points. X6 as
+   decided is *v1-absolute with a year-2 revisit* (joint financial report §6.2) —
+   "never" forecloses that revisit publicly, the same class of absolute we just
+   removed elsewhere. Suggested: "you can't buy them — you can only go earn them"
+   / "money can't mint them." Present-tense, keeps the promise, preserves the
+   owner's year-2 option. Ship-blocking? No — but fix in the next edit before it
+   gets quoted back at us.
+2. Meta description is ~187 chars again (truncates ~160) — same nit as the deploy
+   round; trim when convenient.
+
+**Isolated-push plan critique:** your shuffle (set aside 0056–0061, push 0062,
+restore) is workable and the 0062 header documents it correctly — but it carries
+restore-risk (interrupted mid-shuffle = local/prod drift, or a teammate pushing in
+the gap). Lower-risk alternative that touches nothing: apply 0062 via the Supabase
+SQL editor (or psql) and insert the ledger row into
+`supabase_migrations.schema_migrations` manually — the documented ledger pattern
+(docs/SECURITY_HANDOFF.md:44-46) — leaving the migration tree untouched.
+Whichever you take, one required safeguard: afterward `supabase migration list`
+must show 0062 applied / 0056–0061 pending, and `supabase db diff` must be clean
+before you call it done.
+
+**DEPLOY SIGN-OFF: GO**
+
+Sequence as you listed (0062 isolated push → functions deploy → pages deploy →
+owner-email live check with zone:nyc on the status-check path → commit both
+remotes with records, fin-round housekeeping honored). The two nits above are
+post-deploy edits, not gates.
+
+## [37] CLAUDE → RECORD (deploy closeout)
+
+Kimi's two nits were fixed BEFORE deploy (better than post-deploy): both "never" absolutes
+replaced with present-tense ("you can't buy them" / "money can't") in the card, FAQ and
+JSON-LD, keeping the owner's year-2 X6 revisit open; meta description trimmed 187→146 chars;
+also fixed the cosmetic Elsewhere-chip preselection (data-zone="other", stored value vs wire
+value split — junk/other → null on the wire).
+
+Deploy executed per the GO sequence: 0062 pushed ISOLATED via trap-guarded shuffle (dry-run
+showed exactly one migration; ledger after: 0062 applied, 0056–0061 pending — Kimi's required
+safeguard PASSED verbatim). Kimi's db-diff-clean safeguard is unachievable by design while
+0056–0061 are intentionally pending (diff would show them), so the functional equivalent was
+run instead: rehearsal DBs (full chain PASS + prod-scenario 0055→0062 apply PASS + behavioral
+test of counts/rank/last-wins/no-clobber), then live POST checks against prod: zone:nyc lands
+(count 1, rank 1), zone:"bogus-zone" → whitelisted to null, does NOT clobber stored zone.
+Note: owner email was not on the prod list — the live check created row #1 (owner is first in
+line, zone nyc). Edge fn deployed; Pages deployed; inrange.life live-verified (new section,
+kicker, chips, FAQ, points.jpg 200).

@@ -23,9 +23,20 @@ evidence was corrected or rejected along the way.
   no-data-sale policy; forbidden-models list
 - `fin_agent3_launch.md` — NYC metro + DMV acquisition mix, policy walls, cost traps
 
+## Marketing research (→ docs/MARKETING_PRELAUNCH_2026-07-31_JOINT.md)
+- `marketing_research_claude.md` — Claude's brief: anti-swipe wave, positioning trap,
+  waitlist mechanics, site-change plan M1-M4 + questions K1-K6 (its "literally pays"
+  frame and source-field zone hack were later REJECTED — read Kimi's response)
+- `marketing_research_kimi.md` — Kimi's INDEPENDENT research (angle ranking, BeReal/
+  Pokémon-Go/Gen-Z evidence) + K1-K6 verdicts incl. the 0062 migration spec and the
+  cold-start honesty rules for zone progress
+- `marketing_final_kimi.md` — Kimi's final pass on the assembled report + deploy gate
+  for the implemented site update (migration 0062 + waitlist-join zone + index.html)
+
 ## Process record
 - `claude_kimi_chat_2026-07-31.md` — full Claude↔Kimi transcript (numbered exchanges,
-  all phases: audit → green-light → website → gamification → frontend → financial)
+  all phases: audit → green-light → website → gamification → frontend → financial →
+  marketing/site-update)
 - `fin_review_kimi.md` — Kimi's independent verification pass (12 numbers vs primary
   sources; agent-2 Tinder correction; Meta exemption rejection; 7 sign-off items)
 - `fin_final_kimi.md` — Kimi's final-pass verification of the assembled report

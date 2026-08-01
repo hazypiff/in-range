@@ -62,6 +62,10 @@ Deno.serve(async (req) => {
     // Referral ladder (0055): optional share code from ?ref= links.
     const rawRef = String(body.ref ?? "").trim().toLowerCase();
     const ref = /^[a-z2-9]{4,16}$/.test(rawRef) ? rawRef : null;
+    // Launch zones (0062): optional area chip; whitelist, everything else null.
+    const ZONES = ["nyc", "dc", "md", "nova"];
+    const rawZone = String(body.zone ?? "").trim().toLowerCase();
+    const zone = ZONES.includes(rawZone) ? rawZone : null;
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || email.length > 320) {
       return json({ ok: false, error: "invalid_email" }, 400);
     }
@@ -87,6 +91,7 @@ Deno.serve(async (req) => {
       p_email: email,
       p_source: source,
       p_ref: ref,
+      p_zone: zone,
     });
     if (rpcErr) {
       return json({ ok: false, error: "operation_failed" }, 400);

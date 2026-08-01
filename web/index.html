@@ -4,21 +4,21 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>In Range — you crossed paths with someone today</title>
-<meta name="description" content="Dates, friends, gym partners — In Range introduces you to people you've actually crossed paths with, verified by your phone. Founding list open.">
+<meta name="description" content="Points for going out, not scrolling. In Range introduces you to the people you actually cross paths with — launching first in NYC metro + the DMV.">
 <link rel="canonical" href="https://inrange.life/">
 <meta name="theme-color" content="#0B0B0C">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="In Range">
 <meta property="og:url" content="https://inrange.life/">
 <meta property="og:title" content="You crossed paths with someone today.">
-<meta property="og:description" content="Dates, friends, gym partners, people into what you're into — In Range introduces you to the people you actually pass in real life. Founding list open.">
+<meta property="og:description" content="Points for going out, not scrolling. In Range verifies the people you actually cross paths with — launching NYC metro + the DMV first. Free founding list.">
 <meta property="og:image" content="https://inrange.life/img/og.jpg">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="In Range — you crossed paths with someone today. Founding list open at inrange.life">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="You crossed paths with someone today.">
-<meta name="twitter:description" content="The app that introduces you to people you actually pass in real life — for dating, friends, and everything you're into. Founding list open.">
+<meta name="twitter:description" content="Points for going out, not scrolling. The app that introduces you to people you actually pass in real life — launching NYC metro + the DMV first.">
 <meta name="twitter:image" content="https://inrange.life/img/og.jpg">
 <link rel="apple-touch-icon" href="/img/apple-touch-icon.png">
 <link rel="preload" as="image" href="/img/hero.jpg" fetchpriority="high">
@@ -139,6 +139,42 @@
   }
   .signup .done .refcount { font-size: .8rem; color: var(--grey); margin-top: .6rem; }
   .signup .done .refcount b { color: var(--yellow); }
+
+  /* ---------- launch-zone chips + zone progress ---------- */
+  .signup .zones { display: flex; flex-wrap: wrap; gap: .45rem; justify-content: center; margin: 0 0 .9rem; }
+  .signup .zones .zlabel { flex-basis: 100%; font-size: .78rem; color: var(--grey); margin: 0 0 .15rem; }
+  .signup .zone-chip {
+    font: inherit; font-size: .82rem; font-weight: 700; cursor: pointer;
+    color: var(--grey); background: var(--ink);
+    border: 1.5px solid #2c2c33; border-radius: 999px; padding: .42rem .9rem;
+  }
+  .signup .zone-chip:hover { border-color: #44444d; }
+  .signup .zone-chip.sel { border-color: var(--yellow); color: var(--yellow); }
+  .signup .done .zonebar { margin-top: 1rem; padding-top: 1rem; border-top: 1px dashed #2c2c33; text-align: left; }
+  .signup .done .zonebar .zline { font-size: .88rem; font-weight: 700; color: var(--white); margin: 0 0 .5rem; }
+  .signup .done .zonebar .zline b { color: var(--yellow); }
+  .signup .done .track { height: 10px; border-radius: 999px; background: #232329; overflow: hidden; }
+  .signup .done .fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--yellow), #ffe14d); min-width: 6px; }
+  .signup .done .zfoot { font-size: .78rem; color: var(--grey); margin: .5rem 0 0; }
+
+  /* ---------- points (at launch) ---------- */
+  section.points {
+    max-width: 46rem; margin: 0 auto;
+    padding: clamp(2rem, 5vw, 3.5rem) clamp(1rem, 4vw, 2.5rem);
+    text-align: center;
+  }
+  .points h2 { font-size: clamp(1.5rem, 3.4vw, 2.2rem); letter-spacing: -.02em; margin: .9rem 0 .4rem; }
+  .points .h2sub { color: var(--grey); margin: 0 auto 1.6rem; max-width: 34rem; }
+  .points .h2sub strong { color: var(--white); }
+  .points .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; text-align: left; }
+  .points .card { background: var(--ink); border: 1px solid #222228; border-radius: 14px; padding: 1.15rem 1.2rem; }
+  .points .card svg { width: 30px; height: 30px; }
+  .points .card h3 { margin: .55rem 0 .35rem; font-size: 1.02rem; }
+  .points .card p { margin: 0; color: var(--grey); font-size: .9rem; }
+  .points img.art {
+    display: block; width: 100%; aspect-ratio: 21 / 9; object-fit: cover;
+    border-radius: 16px; border: 1px solid #222228; margin: 1.6rem 0 0;
+  }
 
   /* ---------- journey path ---------- */
   section.journey {
@@ -287,6 +323,7 @@
     .signup form { flex-direction: column; }
     .signup button { width: 100%; }
     .trust .inner { grid-template-columns: 1fr; }
+    .points .grid { grid-template-columns: 1fr; }
     .stop { gap: 1rem; }
     .stops::before { left: 27px; }
     .stop .icon { width: 56px; height: 56px; }
@@ -310,7 +347,7 @@
 
 <div class="hero-wrap">
 <header class="hero">
-  <span class="kicker"><span class="dot"></span> Launching soon — founding list open</span>
+  <span class="kicker"><span class="dot"></span> Launching first in NYC metro + the DMV</span>
   <h1>You crossed paths with someone <em>today</em>.</h1>
   <p class="sub">At the coffee shop. At the gym. On the platform. You'll never know —
   <strong>unless your phone was paying attention.</strong> In Range introduces you to the
@@ -318,6 +355,14 @@
   No swiping across the city. No strangers from nowhere.</p>
 
   <div class="signup" data-source="hero">
+    <div class="zones" role="group" aria-label="Your area">
+      <span class="zlabel">Where are you? Zones open in signup order.</span>
+      <button type="button" class="zone-chip" data-zone="nyc">NYC metro</button>
+      <button type="button" class="zone-chip" data-zone="dc">DC</button>
+      <button type="button" class="zone-chip" data-zone="md">Maryland</button>
+      <button type="button" class="zone-chip" data-zone="nova">Northern VA</button>
+      <button type="button" class="zone-chip" data-zone="other">Elsewhere</button>
+    </div>
     <form novalidate>
       <input type="email" name="email" placeholder="you@email.com" autocomplete="email" required>
       <button type="submit">Get in line</button>
@@ -415,6 +460,44 @@
   </div>
 </section>
 
+<section class="points" id="points">
+  <span class="founder-tag">Coming at launch</span>
+  <h2>Go out. It counts.</h2>
+  <p class="h2sub">Life is the game — the app just keeps score. Points exist for one thing:
+  <strong>actually going out.</strong> Nothing here can be farmed from a couch, bought,
+  or botted.</p>
+  <div class="grid">
+    <div class="card">
+      <svg viewBox="0 0 30 30" aria-hidden="true">
+        <circle cx="15" cy="15" r="11" fill="none" stroke="#FFD60A" stroke-width="2.4"/>
+        <circle cx="15" cy="15" r="5.5" fill="none" stroke="#FFD60A" stroke-width="2.4" opacity=".55"/>
+        <circle cx="15" cy="15" r="2" fill="#E5352B"/>
+      </svg>
+      <h3>Real encounters mint points</h3>
+      <p>Cross paths out in the world and both phones have to agree it happened — that's
+      the only way points are made. No check-ins to spoof, no bots, no shortcuts.</p>
+    </div>
+    <div class="card">
+      <svg viewBox="0 0 30 30" aria-hidden="true">
+        <path d="M15 4c1 4-4 5.5-4 10a4 4 0 0 0 8 0c0-2-1-3.2-1-3.2s3 1.4 3 4.7A6.5 6.5 0 0 1 15 26a6.5 6.5 0 0 1-6-9c1.5-3.6 6-5 6-13z" fill="none" stroke="#E5352B" stroke-width="2.2" stroke-linejoin="round"/>
+      </svg>
+      <h3>Streaks for showing up</h3>
+      <p>Days out in a row build your streak — and your phone stays in your pocket the
+      whole time. This is the opposite of screen time.</p>
+    </div>
+    <div class="card">
+      <svg viewBox="0 0 30 30" aria-hidden="true">
+        <rect x="4" y="10" width="22" height="14" rx="3" fill="none" stroke="#FFD60A" stroke-width="2.2"/>
+        <path d="M4 15h22M12 10c-3-1-4.5-4-2.5-5.5C11.5 3 14 6 15 10c1-4 3.5-7 5.5-5.5C22.5 6 21 9 18 10" fill="none" stroke="#FFD60A" stroke-width="2.2" stroke-linecap="round"/>
+      </svg>
+      <h3>Points you can actually spend</h3>
+      <p>What they unlock gets announced when your city opens. What we can promise now:
+      you can't buy them — you can only go earn them.</p>
+    </div>
+  </div>
+  <img class="art" width="1024" height="440" decoding="async" loading="lazy" src="/img/points.jpg" alt="Stylized night map of a city block with glowing amber rings radiating from a busy corner">
+</section>
+
 <section class="lanes" id="lanes">
   <h2>Not just dating. Pick what you're In&nbsp;Range for.</h2>
   <p class="h2sub">Tell In Range what you're about, and who you meet leans that way.
@@ -466,6 +549,14 @@
     </ul>
 
     <div class="signup" data-source="founder">
+      <div class="zones" role="group" aria-label="Your area">
+        <span class="zlabel">Where are you? Zones open in signup order.</span>
+        <button type="button" class="zone-chip" data-zone="nyc">NYC metro</button>
+        <button type="button" class="zone-chip" data-zone="dc">DC</button>
+        <button type="button" class="zone-chip" data-zone="md">Maryland</button>
+        <button type="button" class="zone-chip" data-zone="nova">Northern VA</button>
+        <button type="button" class="zone-chip" data-zone="other">Elsewhere</button>
+      </div>
       <form novalidate>
         <input type="email" name="email" placeholder="you@email.com" autocomplete="email" required>
         <button type="submit">Claim founder access</button>
@@ -525,9 +616,22 @@
     There's no GPS check-in to spoof, no way to bot your way into someone's feed.</p>
   </details>
   <details>
+    <summary>Is this a game?</summary>
+    <p>Life is the game — the app just keeps score. Points only come from real, verified
+    encounters out in the world; there's nothing to grind from a couch and nothing to buy.
+    If anything, In Range is designed to get your eyes <em>off</em> the screen.</p>
+  </details>
+  <details>
+    <summary>What do points get me?</summary>
+    <p>Points arrive with launch, and they're earn-only: verified real-world encounters and
+    showing-up streaks mint them — money can't. What they unlock will be announced when
+    your city opens, and founding members hear it first.</p>
+  </details>
+  <details>
     <summary>When does it launch? Which cities?</summary>
-    <p>Cities unlock in signup order — the more people in line where you are, the sooner
-    yours opens. That's the whole reason to <a href="#founder">get in line early</a>.</p>
+    <p>First up: <strong>NYC metro and the DMV</strong> (DC, Maryland, Northern Virginia).
+    Inside those, zones unlock in signup order — the more people in line where you are, the
+    sooner yours opens. That's the whole reason to <a href="#founder">get in line early</a>.</p>
   </details>
   <details>
     <summary>iPhone or Android?</summary>
@@ -578,6 +682,40 @@
   function getRef() {
     try { return localStorage.getItem('ir_ref') || null; } catch (e) { return null; }
   }
+
+  // Launch zones (0062): optional chip, remembered across visits. '' = elsewhere/none.
+  var ZONE_LABELS = { nyc: 'NYC metro', dc: 'DC', md: 'Maryland', nova: 'Northern VA' };
+  var ZONE_TARGET = 300; // opens *around* this — a target, not a promise
+  function storedZone() {
+    try { return localStorage.getItem('ir_zone') || null; } catch (e) { return null; }
+  }
+  function getZone() {
+    var z = storedZone();
+    return ZONE_LABELS[z] ? z : null; // 'other' and junk → null on the wire
+  }
+  function setZone(z) {
+    try { z ? localStorage.setItem('ir_zone', z) : localStorage.removeItem('ir_zone'); } catch (e) {}
+    document.querySelectorAll('.zone-chip').forEach(function (c) {
+      c.classList.toggle('sel', !!z && c.dataset.zone === z);
+    });
+  }
+
+  // Honest zone progress: real counts only; below 25 the bar shows no numbers.
+  function zoneBlock(d) {
+    var label = d.zone && ZONE_LABELS[d.zone];
+    if (!label) return '';
+    var count = Number(d.zone_count) || 0;
+    var pct = Math.max(3, Math.min(100, Math.round(count / ZONE_TARGET * 100)));
+    var rank = d.zone_rank ? '<b>#' + esc(d.zone_rank) + '</b> of the launch zones — zones open in signup order.' : 'Zones open in signup order.';
+    var line = count < 25
+      ? '<b>' + esc(label) + '</b> just opened — you’re one of the first in line.'
+      : '<b>' + esc(count) + '</b> in line in <b>' + esc(label) + '</b>.';
+    return '<div class="zonebar">' +
+      '<p class="zline">' + line + '</p>' +
+      '<div class="track"><div class="fill" style="width:' + pct + '%"></div></div>' +
+      '<p class="zfoot">' + rank + ' Your zone opens around ' + ZONE_TARGET + ' signups.</p>' +
+      '</div>';
+  }
   function esc(s) { return String(s).replace(/[<>&]/g, function (c) { return { '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]; }); }
 
   function renderDone(box, email, d) {
@@ -586,10 +724,13 @@
     var shareUrl = 'https://inrange.life/?ref=' + d.ref_code;
     form.style.display = 'none';
     box.querySelector('.note').style.display = 'none';
+    var zones = box.querySelector('.zones');
+    if (zones) zones.style.display = 'none';
     done.innerHTML =
       '<div class="big">You’re in — <span class="pos">#' + esc(d.position) + ' in line</span> 🎉</div>' +
       (d.behind > 0 ? '<div class="behind"><b>' + esc(d.behind) + (d.behind === 1 ? ' person is' : ' people are') + ' behind you.</b> Keep it that way.</div>' : '') +
       '<p>Founder spot locked to <strong>' + esc(email) + '</strong>. We’ll email you the moment your neighborhood opens.</p>' +
+      zoneBlock(d) +
       '<div class="ladder">' +
         '<p class="cta-line">Skip the line — every friend who joins moves you up. ⬆️</p>' +
         '<div class="linkrow">' +
@@ -631,7 +772,7 @@
     return fetch(ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: email, source: box.dataset.source, ref: getRef() })
+      body: JSON.stringify({ email: email, source: box.dataset.source, ref: getRef(), zone: getZone() })
     })
     .then(function (r) { return r.json().then(function (b) { return { status: r.status, body: b }; }); })
     .then(function (res) {
@@ -659,6 +800,11 @@
       button.textContent = box.dataset.source === 'founder' ? 'Claim founder access' : 'Get in line';
     });
   }
+
+  document.querySelectorAll('.zone-chip').forEach(function (chip) {
+    chip.addEventListener('click', function () { setZone(chip.dataset.zone || null); });
+  });
+  setZone(storedZone());
 
   var boxes = document.querySelectorAll('.signup');
   boxes.forEach(function (box) {
@@ -728,7 +874,9 @@
         { "@type": "Question", "name": "Is my phone constantly tracking me?", "acceptedAnswer": { "@type": "Answer", "text": "No. The app uses low-energy Bluetooth to notice when another In Range phone is physically near — the signal is anonymous, constantly changing, and never contains your name, face, or location. Precise location is only used to double-check an encounter, then purged within 24 hours." } },
         { "@type": "Question", "name": "What does In Range do to my battery?", "acceptedAnswer": { "@type": "Answer", "text": "It's built on the same low-energy Bluetooth your earbuds and watch use, working in the background with the screen off. Designed to sip, not gulp." } },
         { "@type": "Question", "name": "Can someone fake being near me?", "acceptedAnswer": { "@type": "Answer", "text": "No. An encounter only exists when both phones agree it happened, in person. There's no GPS check-in to spoof and no way to bot into someone's feed." } },
-        { "@type": "Question", "name": "When does In Range launch and in which cities?", "acceptedAnswer": { "@type": "Answer", "text": "Cities unlock in signup order — the more people in line where you are, the sooner yours opens." } },
+        { "@type": "Question", "name": "Is In Range a game?", "acceptedAnswer": { "@type": "Answer", "text": "Life is the game — the app just keeps score. Points only come from real, verified encounters out in the world; there's nothing to grind from a couch and nothing to buy. In Range is designed to get your eyes off the screen." } },
+        { "@type": "Question", "name": "What do In Range points get me?", "acceptedAnswer": { "@type": "Answer", "text": "Points arrive with launch, and they're earn-only: verified real-world encounters and showing-up streaks mint them — money can't. What they unlock will be announced when your city opens, and founding members hear it first." } },
+        { "@type": "Question", "name": "When does In Range launch and in which cities?", "acceptedAnswer": { "@type": "Answer", "text": "First up: NYC metro and the DMV (DC, Maryland, Northern Virginia). Inside those, zones unlock in signup order — the more people in line where you are, the sooner yours opens." } },
         { "@type": "Question", "name": "Does In Range work between iPhone and Android?", "acceptedAnswer": { "@type": "Answer", "text": "Yes — crossed paths work between the two platforms." } },
         { "@type": "Question", "name": "What does In Range cost?", "acceptedAnswer": { "@type": "Answer", "text": "Free to join and free to match. When premium features arrive, founding members get them at a rate that never goes up." } },
         { "@type": "Question", "name": "How do I delete my data?", "acceptedAnswer": { "@type": "Answer", "text": "One request wipes your account and everything attached to it — in the app, or via inrange.life/delete-account with no app required." } }
