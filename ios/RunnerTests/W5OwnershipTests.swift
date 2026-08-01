@@ -537,4 +537,77 @@ final class W5OwnershipTests: XCTestCase {
     XCTAssertEqual(a.onDialFailed(linkId: "L1"), [.ended(leaseId: candA)])
     XCTAssertEqual(a.activeLeases, 0)
   }
+
+  // MARK: - persistence / restoration
+
+  func testSnapshotRestoreRoundTripPreservesObservations() {
+    let a = established("L1")
+    commitAgainst(a, leaseId, [ct("cand-a", "L1")], aliasB)
+    let snap = a.snapshot()
+    let b = W5Ownership()
+    XCTAssertTrue(b.restore(from: snap, reconnectGrace: 120, aliasTTL: 900))
+    XCTAssertEqual(b.activeLeases, a.activeLeases)
+    XCTAssertEqual(b.committedLinkId(leaseId), a.committedLinkId(leaseId))
+    XCTAssertEqual(b.committedKeeper(leaseId), a.committedKeeper(leaseId))
+    XCTAssertEqual(b.keeperOf(leaseId), a.keeperOf(leaseId))
+    XCTAssertEqual(b.leaseForAlias(aliasB), a.leaseForAlias(aliasB))
+    XCTAssertEqual(b.currentProposal(leaseId)?.viewGen, a.currentProposal(leaseId)?.viewGen)
+  }
+
+  func testRestoreReplayedControlIsIdempotent() {
+    let a = established("L1")
+    commitAgainst(a, leaseId, [ct("cand-a", "L1")], aliasB)
+    let snap = a.snapshot()
+    let b = W5Ownership()
+    XCTAssertTrue(b.restore(from: snap, reconnectGrace: 120, aliasTTL: 900))
+    let fx = b.onControl(
+      handle: "p1", role: .outbound, myCandidate: candA, peerCandidate: candB,
+      peerAlias: aliasB, linkId: "L1")
+    XCTAssertEqual(fx, [.owns(handle: "p1")])
+    XCTAssertEqual(b.committedKeeperCount, 1)
+  }
+
+  func testStaleGraceSnapshotIsExpiredOnRestore() {
+    let a = established("L1")
+    _ = a.onLinkDown(handle: "p1") // enters grace
+    let snap = a.snapshot()
+    let b = W5Ownership()
+    let restored = b.restore(
+      from: snap, reconnectGrace: 120, aliasTTL: 900,
+      now: Date().timeIntervalSince1970 + 121)
+    XCTAssertFalse(restored)
+    XCTAssertEqual(b.activeLeases, 0)
+  }
+
+  func testStaleActiveSnapshotIsExpiredOnRestore() {
+    let a = established("L1")
+    let snap = a.snapshot()
+    let b = W5Ownership()
+    let restored = b.restore(
+      from: snap, reconnectGrace: 120, aliasTTL: 900,
+      now: Date().timeIntervalSince1970 + 901)
+    XCTAssertFalse(restored)
+    XCTAssertEqual(b.activeLeases, 0)
+  }
+
+  func testRestoreNeverRemintsIds() {
+    let a = W5Ownership()
+    _ = a.onControl(
+      handle: "p1", role: .outbound, myCandidate: candA, peerCandidate: candB,
+      peerAlias: aliasB, linkId: "L1")
+    commitAgainst(a, leaseId, [ct("cand-a", "L1")], aliasB)
+    let snap = a.snapshot()
+    // The raw snapshot must carry the exact linkId and candidate; restore
+    // returns them verbatim — no fresh mint for a live/grace encounter.
+    let b = W5Ownership()
+    XCTAssertTrue(b.restore(from: snap, reconnectGrace: 120, aliasTTL: 900))
+    let contenders = b.currentProposal(leaseId)!.contenders
+    XCTAssertEqual(contenders, [ct("cand-a", "L1")])
+    // Replaying the same control must not mint a replacement linkId or candidate.
+    let fx = b.onControl(
+      handle: "p1", role: .outbound, myCandidate: candA, peerCandidate: candB,
+      peerAlias: aliasB, linkId: "L1")
+    XCTAssertEqual(fx, [.owns(handle: "p1")])
+    XCTAssertEqual(b.currentProposal(leaseId)!.contenders, [ct("cand-a", "L1")])
+  }
 }
