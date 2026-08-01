@@ -408,6 +408,36 @@ candidate/linkId for a live/grace encounter). (This is also why #8 must isolate
 *diagnostic* restoration from *production* restoration — production restoration
 stays enabled.)
 
+### Shipped persistence schema (feat/w5-lease-persistence)
+
+The native authority persists to `BackgroundBeacon.operationalDefaults()` only
+(#8 isolation — never `UserDefaults.standard` directly).
+
+`W5Ownership.snapshot()` emits a versioned JSON blob containing, per encounter:
+`leaseId`, `myCandidate`, `aliasCurrent`/`aliasPrevious`, every live link as
+`(handle, role, centralCand, linkId)`, `pendingDials`, `viewGen`, the accepted
+`peerProposal`/`peerViewGen`, `peerAckedMine`, `committed`, `inGrace`, plus the
+raw timestamps `refreshedAt` and `graceStartedAt`.
+
+`W5LinkController` stores alongside the ownership snapshot its own link metadata
+(`linkIdHex`, `myCandidateHex`, `peerAliasHex`, `helloSent`, `established`) keyed
+by handle, and the `candidateByAlias` map. On every ownership state change the
+combined payload is written with a 50 ms debounce.
+
+`W5Ownership.restore(from:reconnectGrace:aliasTTL:now:)` rebuilds the in-memory
+state exactly once, restoring the endpoint-global `handle→leaseId` and
+`linkId→leaseId` bijections from the snapshot. Encounters whose `graceStartedAt`
+has passed `reconnectGrace` (120 s), or whose `refreshedAt` has passed the alias
+TTL (15 min), are dropped as stale.
+
+BackgroundBeacon's `centralManager(_:willRestoreState:)` and
+`peripheralManager(_:willRestoreState:)` call `W5LinkController.restoreFromPersistence()`,
+passing restored peripherals on the central side. Outbound peripherals are
+pre-registered in `outLinks` with their persisted `linkId`/`candidate`, so the
+token-read path does not mint fresh ids for a live/grace encounter. Inbound
+subscriptions re-attach naturally through `controlSubscribed`/`controlWrite` once
+the restored `CBCentral` subscribes again.
+
 ## Versioning / migration
 
 `ver` byte on every control message. Unknown version → treat peer as
