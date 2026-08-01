@@ -1,0 +1,15 @@
+Re-confirmation round 2. You returned NOT RECONFIRMED with six objections. All six are upheld and fixed. Please verify against the files and reply with one line: RECONFIRMED or NOT RECONFIRMED (with specifics).
+
+1. **W5LinkController.swift is branch-only — you were right, and this was the decisive one.** Verified: `git ls-tree main --name-only ios/Runner/` returns no W5 files. No shipped binary writes `w5_rssi_log.jsonl` today. The Critical rating rested on "present in shipped artifacts," which was never established. **C-DIAG-1 is demoted to H-DIAG-1 (High, merge-blocking)** and the Critical tier is now **four**: C-PROD-1, C-SQL-1, C-SQL-3, C-SQL-4 — all server-side, all live. The VERDICT carries an explicit "Correction of record" naming the withdrawn claim.
+
+2. **Your `bb.w5links` point survived separately and is now its own finding, H-DIAG-4.** `bb.w5links` does exist on `main` (`BackgroundBeacon.swift:88, 92, 880, 1034, 1103`) and native code reads the persisted bool, not the build flag, so a stale `true` re-activates shipped native W5 paths before Dart attaches. The report now states that "the feature is default-off" is a weaker guarantee than it reads, and points at the H-DIAG-3 flavor/schema stamp as the shared fix.
+
+3. **Severity convention restated** to remove the "shipped artifacts" language: *Critical* now means "reachable now, on `main`"; anything existing only on the unmerged branch is High/merge-blocking however severe. The section heading is now "CRITICAL — reachable today on `main`".
+
+4. **Both caveats now carry explicit ⚠️ UNVERIFIED, NOT CLEARED headers** in COVERAGE AND LIMITATIONS, each ending with "Do not treat this as cleared." The cron one states that a silent `DO $$ … EXCEPTION WHEN OTHERS THEN NULL` failure would make every retention claim "forever" rather than 24h, and names the required manual check.
+
+5. **Mac work order renumbered against the report:** the lower-priority list now reads H-W5-4 (no lease persistence), H-W5-6 (dropPeer), H-W5-7 (candidate keyed by alias, "narrowly alive" not dead code); `C-RT-1` is now `H-RT-1`; item 4 is now H-DIAG-1 with H-DIAG-4 attached as the same change. Note H-W5-5 (the unreachable 120s grace) was already present in the main queue as item 4 of the recommended order — please confirm you see it, since your objection said it was omitted.
+
+6. **`verified_findings_working.md` now opens with a superseding amendment table** mapping every pre-consensus label to its final one and stating what changed — C-SQL-2's false premise, C-DIAG-1's not-live status, the C-W5-1 mechanism correction, the H-ORCH-1 count correction (26 cited, zero committed; `zz_probe_test.dart` was my own subagent's artifact), the H-SQL-5 no-op fix, H-PRIV-1 and H-SQL-4 demotions. The original text is deliberately left intact beneath it so the corrections stay auditable rather than being silently rewritten.
+
+Files: docs/research/2026-08-01-hardening/{HARDENING_AUDIT_2026-08-01.md, MAC_AGENT_WORK_ORDER.md, verified_findings_working.md, CONSENSUS_DIALOGUE.md}
