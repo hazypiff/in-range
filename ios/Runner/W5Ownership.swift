@@ -114,6 +114,7 @@ private final class W5Enc {
   var peerViewGen: Int? // newest accepted peer generation
   var peerAckedMine = false
   var committed = false
+  var committedWinner: (linkId: String, handle: String)?  // stored at commit (H-W5-1)
   var inGrace = false
   var aliasCurrent: String
   var aliasPrevious: String?
@@ -194,6 +195,8 @@ private struct W5EncounterSnapshot: Codable {
   let peerViewGen: Int?
   let peerAckedMine: Bool
   let committed: Bool
+  let committedWinnerLinkId: String?
+  let committedWinnerHandle: String?
   let inGrace: Bool
   let refreshedAt: TimeInterval
   let graceStartedAt: TimeInterval?
@@ -230,12 +233,12 @@ final class W5Ownership {
 
   func committedLinkId(_ leaseId: String) -> String? {
     guard let e = enc[leaseId], e.committed else { return nil }
-    return e.winner()?.linkId
+    return e.committedWinner?.linkId
   }
 
   func committedKeeper(_ leaseId: String) -> String? {
     guard let e = enc[leaseId], e.committed else { return nil }
-    return e.winner()?.handle
+    return e.committedWinner?.handle
   }
 
   func keeperOf(_ leaseId: String) -> String? { enc[leaseId]?.winner()?.handle }
@@ -282,6 +285,8 @@ final class W5Ownership {
         peerViewGen: e.peerViewGen,
         peerAckedMine: e.peerAckedMine,
         committed: e.committed,
+        committedWinnerLinkId: e.committedWinner?.linkId,
+        committedWinnerHandle: e.committedWinner?.handle,
         inGrace: e.inGrace,
         refreshedAt: e.refreshedAt,
         graceStartedAt: e.graceStartedAt)
@@ -331,6 +336,9 @@ final class W5Ownership {
       e.viewGen = s.viewGen
       e.peerAckedMine = s.peerAckedMine
       e.committed = s.committed
+      if let wl = s.committedWinnerLinkId, let wh = s.committedWinnerHandle {
+        e.committedWinner = (wl, wh)
+      }
       e.inGrace = s.inGrace
       e.refreshedAt = s.refreshedAt
       e.graceStartedAt = s.graceStartedAt
@@ -416,6 +424,10 @@ final class W5Ownership {
     if e == nil, let prev = peerPrevAlias, let prevId = aliasTo[prev] {
       e = enc[prevId]
     }
+    // H-W5-1: resolve via realId BEFORE the committed check — an unknown
+    // (rotated) alias must still find a committed encounter keyed by the
+    // peer's candidate, or the intruder lands in the uncommitted path.
+    if e == nil { e = enc[realId] }
 
     // Endpoint-global bijection: a live handle or linkId already bound to a
     // DIFFERENT encounter/link fails closed without mutating the binding.
@@ -431,7 +443,7 @@ final class W5Ownership {
     if let ec = e, ec.committed {
       bindAlias(ec, peerAlias)
       ec.touch()
-      let w = ec.winner()
+      let w = ec.committedWinner
       if let w, w.linkId == linkId, w.handle == handle {
         return [.owns(handle: handle)]
       }
@@ -459,7 +471,6 @@ final class W5Ownership {
       return [closeLoser(handle, role)]
     }
 
-    if e == nil { e = enc[realId] }
     let ec: W5Enc
     if let existing = e {
       ec = existing
@@ -587,6 +598,7 @@ final class W5Ownership {
     }
     if wasWinner {
       e.committed = false
+      e.committedWinner = nil
       e.inGrace = true
       e.graceStartedAt = Date().timeIntervalSince1970
     }
@@ -715,6 +727,7 @@ final class W5Ownership {
     e.committed = true
     e.touch()
     let w = e.winner()!
+    e.committedWinner = (w.linkId, w.handle)
     var fx: [W5Effect] = [.owns(handle: w.handle)]
     for (handle, v) in e.links.sorted(by: { w5Cmp($0.key, $1.key) < 0 })
     where handle != w.handle {

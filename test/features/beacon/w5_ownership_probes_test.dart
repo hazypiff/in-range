@@ -38,6 +38,39 @@ void commit(
 }
 
 void main() {
+  // H-W5-1 — a committed encounter reached only via realId (unknown rotated
+  // alias, no prevAlias, lease keyed by the PEER's candidate) must still hit
+  // the sticky-keeper branch: intruder rejected, keeper unmoved. Before the
+  // hoist this returned [W5SendPropose] and moved the keeper p1→p2, L5→L0.
+  test('probe: realId-resolved committed encounter keeps its sticky keeper',
+      () {
+    final a = W5Ownership();
+    // peerCandidate 'cand-a' < myCandidate 'cand-b' → leaseId = peer's cand.
+    a.onControl(
+        handle: 'p1',
+        role: W5Role.outbound,
+        myCandidate: 'cand-b',
+        peerCandidate: 'cand-a',
+        peerAlias: aliasB,
+        linkId: 'L5');
+    commit(a, 'cand-a', [ct('cand-b', 'L5')], aliasB);
+    expect(a.committedKeeper('cand-a'), 'p1');
+    // Intruder link under a NEVER-SEEN alias (rotation, ALIAS_ROLL lost, no
+    // prevAlias): resolution falls through _locate to _enc[realId].
+    final fx = a.onControl(
+        handle: 'p2',
+        role: W5Role.inbound,
+        myCandidate: 'cand-b',
+        peerCandidate: 'cand-a',
+        peerAlias: 'alias-rotated-unknown',
+        linkId: 'L0');
+    expect(fx, [const W5RejectInbound('p2')],
+        reason: 'sticky branch must fire via realId resolution');
+    expect(a.committedKeeper('cand-a'), 'p1',
+        reason: 'committed keeper never moves without an effect');
+    expect(a.committedLinkId('cand-a'), 'L5');
+  });
+
   // R7 probe 1 — proposals are encounterId-bound: a same-generation proposal
   // for a DIFFERENT encounter never collides into this one's gen space.
   test('probe: foreign-encounter proposal is inert at any generation', () {

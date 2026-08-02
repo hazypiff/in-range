@@ -190,6 +190,7 @@ class _Enc {
   int? peerViewGen; // newest accepted peer generation
   bool peerAckedMine = false;
   bool committed = false;
+  (String linkId, String handle)? committedWinner; // stored at commit (H-W5-1)
   bool inGrace = false;
   String aliasCurrent;
   String? aliasPrevious;
@@ -236,12 +237,12 @@ class W5Ownership {
   int get committedKeeperCount => _enc.values.where((e) => e.committed).length;
   String? committedLinkId(String leaseId) {
     final e = _enc[leaseId];
-    return (e != null && e.committed) ? e.winner()?.$1 : null;
+    return (e != null && e.committed) ? e.committedWinner?.$1 : null;
   }
 
   String? committedKeeper(String leaseId) {
     final e = _enc[leaseId];
-    return (e != null && e.committed) ? e.winner()?.$2 : null;
+    return (e != null && e.committed) ? e.committedWinner?.$2 : null;
   }
 
   String? keeperOf(String leaseId) => _enc[leaseId]?.winner()?.$2;
@@ -306,6 +307,11 @@ class W5Ownership {
       final prevId = _aliasTo[peerPrevAlias];
       if (prevId != null) e = _enc[prevId];
     }
+    // H-W5-1: resolve via realId BEFORE the committed check. An unknown
+    // (rotated) alias must still find a committed encounter keyed by the
+    // peer's candidate, or the intruder link lands in the uncommitted path
+    // with no winner comparison — the original #7 defect, attacker-free.
+    e ??= _enc[realId];
 
     // Endpoint-global bijection: a live handle or linkId already bound to a
     // DIFFERENT encounter/link fails closed without mutating the binding.
@@ -320,7 +326,7 @@ class W5Ownership {
 
     if (e != null && e.committed) {
       _bindAlias(e, peerAlias);
-      final w = e.winner();
+      final w = e.committedWinner;
       if (w != null && w.$1 == linkId && w.$2 == handle) {
         return [W5Owns(handle)];
       }
@@ -348,7 +354,6 @@ class W5Ownership {
       return [_closeLoser(handle, role)];
     }
 
-    e ??= _enc[realId];
     if (e == null) {
       e = _Enc(realId, peerAlias, myCandidate);
       _enc[realId] = e;
@@ -475,6 +480,7 @@ class W5Ownership {
     }
     if (wasWinner) {
       e.committed = false;
+      e.committedWinner = null;
       e.inGrace = true;
     }
     _bumpView(e);
@@ -603,6 +609,7 @@ class W5Ownership {
     if (!e.peerAckedMine) return const [];
     e.committed = true;
     final w = e.winner()!;
+    e.committedWinner = (w.$1, w.$2);
     final fx = <W5Effect>[W5Owns(w.$2)];
     for (final entry in e.links.entries) {
       if (entry.key != w.$2) fx.add(_closeLoser(entry.key, entry.value.$1));

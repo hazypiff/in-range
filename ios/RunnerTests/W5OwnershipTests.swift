@@ -497,6 +497,40 @@ final class W5OwnershipTests: XCTestCase {
       ])
   }
 
+  // H-W5-1 — a committed encounter reached only via realId (unknown rotated
+  // alias, no prevAlias, lease keyed by the PEER's candidate) must hit the
+  // sticky-keeper branch: intruder rejected, keeper unmoved.
+  func testHW51RealIdResolvedCommittedEncounterKeepsStickyKeeper() {
+    let a = W5Ownership()
+    _ = a.onControl(
+      handle: "p1", role: .outbound, myCandidate: "cand-b", peerCandidate: "cand-a",
+      peerAlias: aliasB, linkId: "L5")
+    commitAgainst(a, "cand-a", [ct("cand-b", "L5")], aliasB)
+    XCTAssertEqual(a.committedKeeper("cand-a"), "p1")
+    let fx = a.onControl(
+      handle: "p2", role: .inbound, myCandidate: "cand-b", peerCandidate: "cand-a",
+      peerAlias: "alias-rotated-unknown", linkId: "L0")
+    XCTAssertEqual(fx, [.rejectInbound(handle: "p2")])
+    XCTAssertEqual(a.committedKeeper("cand-a"), "p1")
+    XCTAssertEqual(a.committedLinkId("cand-a"), "L5")
+  }
+
+  // H-W5-1 persistence: the stored winner survives a snapshot round-trip.
+  func testHW51CommittedWinnerSurvivesSnapshotRestore() {
+    let a = W5Ownership()
+    _ = a.onControl(
+      handle: "p1", role: .outbound, myCandidate: candA, peerCandidate: candB,
+      peerAlias: aliasB, linkId: "L1")
+    commitAgainst(a, leaseId, [ct("cand-a", "L1")], aliasB)
+    let data = a.snapshot()
+    let b = W5Ownership()
+    _ = b.restore(
+      from: data, reconnectGrace: 120, aliasTTL: 900,
+      now: Date().timeIntervalSince1970)
+    XCTAssertEqual(b.committedKeeper(leaseId), "p1")
+    XCTAssertEqual(b.committedLinkId(leaseId), "L1")
+  }
+
   func testAliasRolloverKeepsCurrentPlusPreviousThenExpires() {
     let a = established("L1")
     a.onAliasRoll(leaseId: leaseId, newAlias: "aliasB2")
