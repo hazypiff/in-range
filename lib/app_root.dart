@@ -7,6 +7,7 @@ import 'package:in_range/core/session/app_session.dart';
 import 'package:in_range/features/auth/auth_screen.dart';
 import 'package:in_range/features/beacon/beacon_provider.dart';
 import 'package:in_range/features/consent/consent_gate.dart';
+import 'package:in_range/features/encounters/encounters_provider.dart';
 import 'package:in_range/features/encounters/local_encounter_store.dart';
 import 'package:in_range/features/home/home_shell.dart';
 import 'package:in_range/features/locals/locals_service.dart';
@@ -110,6 +111,9 @@ Future<void> _stopDiscovery(WidgetRef ref) async {
 
 Future<void> _clearUserRuntime(WidgetRef ref) async {
   await _stopDiscovery(ref);
+  // Belt-and-suspenders with myEncountersProvider's user-id dependency: evict
+  // any completed Future immediately when an account ends or changes.
+  ref.invalidate(myEncountersProvider);
   // Drop the previous user's coordinates/place label, not just the flag.
   ref.read(localsControllerProvider.notifier).reset();
   await ref.read(matchStoreProvider.notifier).clearAll();

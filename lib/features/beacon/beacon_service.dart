@@ -20,6 +20,7 @@ import 'package:in_range/features/beacon/gatt_token_reader.dart';
 import 'package:in_range/features/beacon/claim_manager.dart';
 import 'package:in_range/features/beacon/ephemeral_token_generator.dart';
 import 'package:in_range/features/beacon/location_keepalive.dart';
+import 'package:in_range/features/beacon/opaque_token.dart';
 import 'package:in_range/features/beacon/proximity_observation.dart';
 import 'package:in_range/features/beacon/range_estimator.dart';
 import 'package:in_range/features/beacon/subtle_wake_service.dart';
@@ -523,8 +524,8 @@ class BeaconService {
     // WiFi venue layer — 60s cadence: a venue changes on the scale of minutes,
     // and WiFi shares the 2.4GHz antenna with the BLE scanner that matters more.
     wifiScanner.onFingerprint = (fp) {
-      _wifiFingerprint =
-          fp.hashed(_correlationSalt, excludedBssids: wifiScanner.excludedBssids);
+      _wifiFingerprint = fp.hashed(_correlationSalt,
+          excludedBssids: wifiScanner.excludedBssids);
     };
     wifiScanner.start();
 
@@ -828,10 +829,10 @@ class BeaconService {
   /// with the detail only in the message. So the per-code policy has to hang
   /// off the int, and the string path falls through to the plain ladder.
   Duration? _scanBackoffFor(Object e) {
-    final code = (e is FlutterBluePlusException &&
-            e.platform == ErrorPlatform.android)
-        ? e.code
-        : null;
+    final code =
+        (e is FlutterBluePlusException && e.platform == ErrorPlatform.android)
+            ? e.code
+            : null;
     // 2 s, 4 s, 8 s, 16 s, 32 s, then the 60 s ceiling. The shift is clamped so
     // a long-lived session cannot overflow it.
     final step = _clampBackoff(
@@ -947,14 +948,6 @@ class BeaconService {
   /// server-issued opaque token (32 hex chars) — no HMAC. Peers hex these bytes
   /// back to the same token and report it; the server resolves it via the claim
   /// history the advertiser wrote. (#6 step 2)
-  Uint8List _hexTo16Bytes(String hex) {
-    final out = Uint8List(16);
-    for (var i = 0; i < 16; i++) {
-      out[i] = int.parse(hex.substring(i * 2, i * 2 + 2), radix: 16);
-    }
-    return out;
-  }
-
   /// Fetches this user's server-issued opaque token batch for [dayUtc]. Returns
   /// [] in local mode or on failure, so the token source falls back to a random
   /// token and advertising never stalls.
@@ -1110,9 +1103,8 @@ class BeaconService {
             connectable: false,
             legacyMode: true,
             scannable: true,
-            txPowerLevel: _advPower == AdvertPower.medium
-                ? txPowerMedium
-                : txPowerHigh,
+            txPowerLevel:
+                _advPower == AdvertPower.medium ? txPowerMedium : txPowerHigh,
             interval: intervalHigh,
           ),
         );
@@ -1199,8 +1191,7 @@ class BeaconService {
       if (stream != null) {
         _peripheralStateSub = stream.listen(
           _onPeripheralState,
-          onError: (Object e) =>
-              debugPrint('peripheralState stream error: $e'),
+          onError: (Object e) => debugPrint('peripheralState stream error: $e'),
         );
       }
     }
@@ -1392,7 +1383,7 @@ class BeaconService {
       _setReceivePathDown(
           true,
           'idle in two reads ${_receivePathConfirmDelay.inSeconds}s apart, '
-              'central=${again.central.name}');
+          'central=${again.central.name}');
     } else {
       _setReceivePathDown(false, 'scan-restart gap, not a failure');
     }
@@ -1663,8 +1654,7 @@ class BeaconService {
     // _onScanResults.
     final calib = AppConfig.calibScanMode;
     final legacyOnly = AppConfig.scanLegacyPhyOnly;
-    final isIOS =
-        !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+    final isIOS = !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
     try {
       await FlutterBluePlus.startScan(
         timeout: const Duration(hours: 1),
@@ -1864,9 +1854,8 @@ class BeaconService {
     final start = _calibWindowStart;
     final now = DateTime.now();
     final windowS = start == null ? 0 : now.difference(start).inSeconds;
-    final scanAgeS = _scanStartedAt == null
-        ? -1
-        : now.difference(_scanStartedAt!).inSeconds;
+    final scanAgeS =
+        _scanStartedAt == null ? -1 : now.difference(_scanStartedAt!).inSeconds;
     final lastAny = _lastAnyScanResultAt;
     debugPrint('=== calib window ${windowS}s receiver=$_receiverTag '
         'scanSeq=$_scanSeq scanAge=${scanAgeS}s scanRunning=$_scanRunning ===');
@@ -2008,8 +1997,7 @@ class BeaconService {
                     const Duration(minutes: 15);
             if (cacheFresh) {
               if (AppConfig.calibScanMode) {
-                debugPrint(
-                    'W3 overflow dev=$deviceId rssi=${r.rssi} → cached '
+                debugPrint('W3 overflow dev=$deviceId rssi=${r.rssi} → cached '
                     '${cachedHex.substring(0, 8)} (age ${DateTime.now().difference(cachedAt).inSeconds}s)');
               }
               _ingestForeignSample(cachedHex, r.rssi, AdvertPower.high);
@@ -2152,8 +2140,7 @@ class BeaconService {
           _gattTokenByDevice[deviceId] = hex;
           _gattTokenAt[deviceId] = DateTime.now();
           if (_gattTokenByDevice.length > 64) {
-            final cutoff =
-                DateTime.now().subtract(const Duration(minutes: 15));
+            final cutoff = DateTime.now().subtract(const Duration(minutes: 15));
             _gattTokenAt.removeWhere((id, at) {
               final stale = at.isBefore(cutoff);
               if (stale) _gattTokenByDevice.remove(id);
@@ -2193,7 +2180,8 @@ class BeaconService {
       ProximityObservation(
         source: ProximitySource.advertRssi,
         rssi: rssi,
-        localState: defaultTargetPlatform == TargetPlatform.iOS ? 'locked' : 'scan',
+        localState:
+            defaultTargetPlatform == TargetPlatform.iOS ? 'locked' : 'scan',
       ),
       power: power,
     );
@@ -2253,9 +2241,8 @@ class BeaconService {
     // Uploaded sightings carry the ESTIMATED band, not the fixed beacon
     // range — the server derives encounter bands from it (migration 0022).
     final estimated = rangeEstimator.classify(observedCorrelationIdHex);
-    final uploadRange = (range.startsWith('feet') && estimated != 'none')
-        ? estimated
-        : range;
+    final uploadRange =
+        (range.startsWith('feet') && estimated != 'none') ? estimated : range;
     final record = SightingRecord(
       observedToken: observedCorrelationIdHex,
       rssi: rssi,
@@ -2380,8 +2367,8 @@ class BeaconService {
     final maxAge = AppConfig.calibScanMode
         ? const Duration(seconds: 30)
         : const Duration(seconds: 120);
-    final stale =
-        _cachedLocAt == null || DateTime.now().difference(_cachedLocAt!) > maxAge;
+    final stale = _cachedLocAt == null ||
+        DateTime.now().difference(_cachedLocAt!) > maxAge;
     if (!stale) return;
     if (_locationRefreshTimer != null) return;
     _locationRefreshTimer = Timer(Duration.zero, () async {
@@ -2484,7 +2471,7 @@ class BeaconService {
 
   Future<void> _refreshClaim({required String rangeType}) async {
     _currentToken = await _tokenSource.nextToken();
-    _currentCorrelationId = _hexTo16Bytes(_currentToken!.token);
+    _currentCorrelationId = opaqueTokenBytes(_currentToken!.token);
     // Remember every token we advertise so the scanner never self-sights a
     // stale one (leaked advertiser after off→on). Bounded to stay tiny.
     _ownCorrHexes.add(_currentCorrelationId!
@@ -2498,11 +2485,10 @@ class BeaconService {
     // user who travels >400 m without seeing a peer keeps claiming their
     // ORIGIN, and the server's 400 m veto then rejects the real encounter at
     // the new location (reviewer #7).
-    final cacheAge = _cachedLocAt == null
-        ? null
-        : DateTime.now().difference(_cachedLocAt!);
-    final cacheFresh = cacheAge != null &&
-        cacheAge <= const Duration(minutes: 2);
+    final cacheAge =
+        _cachedLocAt == null ? null : DateTime.now().difference(_cachedLocAt!);
+    final cacheFresh =
+        cacheAge != null && cacheAge <= const Duration(minutes: 2);
     double? lat = cacheFresh ? _cachedLat : null;
     double? lon = cacheFresh ? _cachedLon : null;
     if (lat == null) {
@@ -2540,8 +2526,8 @@ class BeaconService {
 
     // Publish the new token's expiry immediately, even before the claim RPC
     // resolves, so the UI countdown tracks the current token (reviewer #11).
-    onClaimStateChanged?.call(
-        _currentToken!.expiresAt, AppConfig.hasRealSupabase ? _cloudClaimed : null);
+    onClaimStateChanged?.call(_currentToken!.expiresAt,
+        AppConfig.hasRealSupabase ? _cloudClaimed : null);
 
     if (!AppConfig.hasRealSupabase) {
       _cloudClaimed = false;
@@ -2598,7 +2584,8 @@ class BeaconService {
         .join();
     // Always send UTC — a local DateTime without offset is misread as UTC by
     // Postgres and expires claims hours early (broke feet correlation once).
-    final until = _currentToken!.expiresAt.toUtc().add(const Duration(minutes: 2));
+    final until =
+        _currentToken!.expiresAt.toUtc().add(const Duration(minutes: 2));
     // Timeout: a hanging claim (dead network) must fail the attempt so
     // ClaimManager's bounded retry + the "Local BLE only" fallback engage,
     // instead of wedging the whole beacon-on flow (S22 2026-07-23).

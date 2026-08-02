@@ -10,7 +10,7 @@ List<BatchSlot> _dayBatch(DateTime dayUtc, int windowMinutes) {
   for (var g = 0; g < n; g++) {
     final vf = dayUtc.add(Duration(minutes: g * windowMinutes));
     slots.add(BatchSlot(
-      token: 'tok${g.toString().padLeft(2, '0')}'.padRight(32, '0'),
+      token: g.toRadixString(16).padLeft(32, '0'),
       validFrom: vf,
       validUntil: vf.add(Duration(minutes: windowMinutes + 2)),
     ));
@@ -19,6 +19,7 @@ List<BatchSlot> _dayBatch(DateTime dayUtc, int windowMinutes) {
 }
 
 final _hex32 = RegExp(r'^[0-9a-f]{32}$');
+String _repeat(String value, int count) => List.filled(count, value).join();
 
 void main() {
   final day = DateTime.utc(2026, 7, 16);
@@ -57,7 +58,8 @@ void main() {
     expect(a.token, _dayBatch(day, 15)[0].token);
     expect(b.token, _dayBatch(day, 15)[2].token);
     expect(c.token, _dayBatch(day, 15)[13].token);
-    expect(fetches, 2, reason: 'today + tomorrow are cached from one paired fetch');
+    expect(fetches, 2,
+        reason: 'today + tomorrow are cached from one paired fetch');
   });
 
   test('tomorrow is preloaded; refetches only when now falls outside both days',
@@ -111,6 +113,32 @@ void main() {
     );
     final t = await src.nextToken();
     expect(_hex32.hasMatch(t.token), isTrue);
+  });
+
+  test('drops malformed batch rows and falls back instead of throwing',
+      () async {
+    final now = day.add(const Duration(minutes: 20));
+    final src = BatchTokenSource(
+      fetchBatch: (d, w) async => [
+        BatchSlot(
+          token: 'short',
+          validFrom: day,
+          validUntil: day.add(const Duration(hours: 1)),
+        ),
+        BatchSlot(
+          token: _repeat('a', 34),
+          validFrom: day,
+          validUntil: day.add(const Duration(hours: 1)),
+        ),
+      ],
+      now: () => now,
+    );
+
+    final token = await src.nextToken();
+
+    expect(_hex32.hasMatch(token.token), isTrue);
+    expect(token.token, isNot(_repeat('a', 32)));
+    expect(src.slots, isEmpty);
   });
 
   test('shouldRotate: true when null or within grace of expiry', () {

@@ -2,8 +2,10 @@
 
 This file is the **working evidence record**, written during discovery. Section headings below carry the
 severity labels and mechanisms as they stood **before** the three adversarial consensus rounds. The
-signed report (`HARDENING_AUDIT_2026-08-01.md`) is authoritative. The following were changed after these
-sections were written, and the original text is deliberately preserved so the correction is auditable:
+report committed at `d1b8c38` was signed. `HARDENING_AUDIT_2026-08-01.md` was substantively amended at
+`c5398e7` and is **not re-signed**; its explicit post-sign-off correction blocks are the current status
+authority. The following were changed after these sections were written, and the original text is
+deliberately preserved so the correction is auditable:
 
 | Section below | Superseded by | What changed |
 |---|---|---|
@@ -16,14 +18,22 @@ sections were written, and the original text is deliberately preserved so the co
 | `H-W5-4` (dropPeer) / `H-W5-5` (candidate keyed by alias) in the native reviewer's section | **H-W5-6** / **H-W5-7** in the report | Renumbered only. |
 | `C-RT-1` | **H-RT-1** | Local availability failure, not a trust-boundary crossing. Codex's fix supersedes: a timeout does not cancel the underlying flush — `_stopBle()` must run **before** network draining (`beacon_service.dart:603`), with a generation check and bounded batches. |
 | `C-CONSENT-1` | **H-CONSENT-1** | Bounded today: 0056 documents the gap as deliberate pre-rollout, `INRANGE_CALIB_SCAN` defaults false, 0059 is undeployed. |
-| `H-ORCH-1` | **corrected** | The claim "only 6 probes are committed, in `zz_probe_test.dart`" was **wrong**: no such file exists at W5 HEAD or in `git log --all`. It was a temporary artifact created by one of this audit's own subagents and mistaken for committed code. The transcript (`docs/research/2026-07-31/claude_kimi_chat_2026-07-31.md:386`) records `/tmp/kimi-r8/…/w5_ownership_r8_kimi_test.dart`, **26 tests**, "259/259" vs a committed 233 — so **26 probes were cited as sign-off evidence and zero were committed**. The 233 baseline is uncontaminated (measured before the artifact existed). |
+| `H-ORCH-1` | **corrected; remediated on PR #9** | The claim "only 6 probes are committed, in `zz_probe_test.dart`" was **wrong**: no such file exists at W5 HEAD or in `git log --all`. It was a temporary artifact created by one of this audit's own subagents and mistaken for committed code. The transcript (`docs/research/2026-07-31/claude_kimi_chat_2026-07-31.md:386`) records `/tmp/kimi-r8/…/w5_ownership_r8_kimi_test.dart`, **26 tests**, "259/259" vs a committed 233 — so **26 probes were cited as sign-off evidence and zero were committed**. PR #9 commit `810875a` subsequently reconstructed nine recorded probe classes as committed regressions. |
 | `H-SQL-5` | **H-SQL-3** in the report | Its proposed fix was a **no-op**: `record_sighting` upserts the forward row with `received_at = v_now` (`0053:119`, `:123`) immediately before calling `correlate_encounter` (`:138`), so comparing reverse receipt time to forward receipt time is the existing predicate. Real fix: compare the two `observed_at` **capture** times and bind observations to the token's validity interval. Two of the original fix items survive: reject `p_observed_at` outside `[valid_from, valid_until]`, and stop refreshing `received_at` on weaker-RSSI upserts. |
 | `H-PRIV-1` | **M-PRIV-1** (Medium) | "No path ever clears it" is **struck**: `drainBufferedWakes` (`subtle_wake_service.dart:306-346`) checks only the platform, not any flag, and the ack fires for every entry. What persists un-aged is only what accumulated while no engine existed. Coordinates are place-level SLC/`CLVisit`, not raw GPS. |
 | `H-SQL-4` | **M-SQL-1** (Medium) | The runbook forbids punitive action on `relay_geo` (`RELAY_ABUSE_RUNBOOK.md:22`) and the attacker needs the victim's rotating token. |
 
-**Two caveats remain UNVERIFIED, NOT CLEARED:** the `cron.job` retention schedule (a silent failure would
-make every retention claim "forever"), and privilege regressions across migrations 0020–0062 (the local
-container is at 0019).
+**Two caveats remain NOT CLEARED:** the `cron.job` retention schedule is unverified (a silent failure
+would make every retention claim "forever"). The privilege caveat was narrowed after sign-off: the raw
+psql harness replays 0020→0064 in order, the standard local migration ledger records 0064, and the local
+privilege/RLS sweep passes. Its separate encounter advisory-lock race also passes but does not exercise
+0064's row lock. The equivalent production sweep is still unverified.
+
+**Linux round-2 remediation (uncommitted, not pushed):** `0064_token_claim_ownership_repair.sql` closes
+0063's squat-first residual. Its squat-rejection arm was observed red on 0063; all fixed-state ownership
+and legal-hold assertions pass on 0064. H-RT-5 now rejects malformed server batch tokens before BLE
+decoding, and H-RT-7's encounter provider is scoped to the active account. These are working-tree
+results, not panel consensus or release approval.
 
 ---
 

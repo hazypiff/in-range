@@ -1,5 +1,9 @@
 # Work order for the Mac agent — hardening round 2026-08-01
 
+> **Current dispatch:** read `MAC_AGENT_PANEL_WORK_ORDER_2026-08-01.md` first. It pins the latest branch
+> heads, the 0064 follow-up, the three-iPhone matrix, and the exact-final-SHA panel protocol. Where that
+> dispatch differs from this historical detail packet, the newer dispatch wins.
+
 Paste the section below to the Mac agent. It is written to be self-contained.
 
 ---
@@ -22,15 +26,21 @@ were redeployed with the auth gate that had been sitting correct-but-undeployed 
 | `GET` no auth *(the conclusive one)* | `200` | **`405 method_not_allowed`** |
 | `POST` wrong bearer | `200` | **`401 unauthorized`** |
 
-**The three SQL Criticals are written and rehearsed but NOT deployed.**
-`supabase/migrations/0063_audit_2026_08_01_critical_fixes.sql` fixes C-SQL-1, C-SQL-3 and C-SQL-4. It has
-been rehearsed — migrations 0020→0063 apply cleanly in sequence on a local database with full Supabase
-scaffolding, and all three changes verify present via `pg_get_functiondef`. It is **awaiting Kimi/Codex
-review and an owner go-ahead** before it touches production, because unlike the redeploy this is new code
-rather than restoring reviewed code, and the C-SQL-4 change alters encounter-correlation semantics.
+**The three SQL Criticals and the newly proven squat residual are patched locally but NOT deployed.**
+`0063_audit_2026_08_01_critical_fixes.sql` addresses C-SQL-1, C-SQL-3 and C-SQL-4;
+`0064_token_claim_ownership_repair.sql` closes 0063's foreign batch-token squat. Its transactional T9
+squat-rejection arm was observed failing on 0063; rightful-owner recovery, deliberately poisoned-row
+repair, legal-hold preservation and post-release repair pass on 0064. The latter pre-fix failures were
+traced, not separately executed red. The raw-psql harness replays 0020→0064 in order, then passes the
+privilege/RLS suite and its existing encounter advisory-lock race (which does not test 0064's row lock);
+the standard local migration ledger now records 0064. Kimi and Codex reviewed only a **313-line 0063
+draft**; its committed **380-line final file was never re-reviewed**. Kimi K3 and Claude Opus returned
+`SAFE WITH EXACT CHANGES` on the first 0064 packet; their exchange changed the legal-hold bytes, so the
+new final packet still needs both verdicts. No consensus or deployment approval exists yet. The batch
+must ship in order as 0056→0064, never piecemeal.
 
 **One standing caveat got narrower, and one did not.** The local container was the reason "privilege
-regressions across 0020–0062" was unverifiable; it is now at **0063**, and a sweep of the full chain shows
+regressions across 0020–0062" was unverifiable; it is now locally through **0064**, and a sweep shows
 **0 anon-executable SECURITY DEFINER functions, 0 permissive `USING(true)` policies reachable by
 `authenticated`, and RLS on every application table** (the sole exception is PostGIS's own
 `spatial_ref_sys`, which is not app data). That verifies the *migration chain*. It does **not** verify
@@ -56,7 +66,9 @@ A briefing circulated that got several things wrong in ways that would misdirect
   drop a whole caveat.
 - **"H-DIAG-4 is a medium-risk concern."** It is rated **High**.
 
-The signed report is authoritative. If a summary and the report disagree, the report wins.
+The report at `d1b8c38` was signed. The current file was amended at `c5398e7` and is **not re-signed**;
+its explicit post-sign-off correction blocks override older summary/verdict language until the panel
+re-confirms exact text.
 
 ---
 
@@ -74,22 +86,21 @@ at payload index 0 and the hardware filter matches. The bug needs an **Android 1
 let anyone conclude "we have three Androids, so H-RT-8 is covered" — verify with
 `adb shell getprop ro.build.version.release` per device first.
 
-What three Androids plus the two iPhones **do** unblock, none of which needed hardware before:
+What three Androids plus the three documented iPhones **do** unblock, none of which needed hardware before:
 
 - **NOT three-peer W5 contention — correcting an earlier line in this doc.** An earlier revision said
   three Androids plus an iPhone would give a four-endpoint W5 contention test. **That is wrong and is
   withdrawn.** W5 has no Android implementation: `grep -rn 'W5' android/app/src/main/kotlin/` returns
   nothing, and `W5LinkController.swift` / `W5Ownership.swift` / `w5_ownership.dart` exist only on
   `fix/w5-encounter-lease`. Androids cannot participate in a lease at all.
-  **Consequence, and it is a real constraint:** multi-peer W5 contention needs **three iOS devices**, and
-  the pool has two. `MAX_CONTENDERS = 5`, the cap-refusal paths, and the third-peer-arrives-mid-negotiation
-  case that most reliably produces H-W5-3's `pendingDial` leak are therefore **not testable on current
-  hardware**. Two iPhones can still reproduce the leak via the simpler triggers (kill the peer after
-  `didConnect` but before HELLO_ACK; force the 10s watchdog at `BackgroundBeacon.swift:967-973`). If you
-  want the contention case covered, a third iOS device is a hardware ask — flag it rather than assuming
-  the Androids close it.
+  **Consequence:** multi-peer W5 contention needs **three iOS devices**. The fleet has three documented
+  test iPhones — iPhone 14, iPhone 13 (used in the 2026-07-29 persistent-link run), and iPhone 15 Plus —
+  so the third-peer-arrives-mid-negotiation case that most reliably produces H-W5-3's `pendingDial` leak
+  stays on the Phase-5 matrix once all three are cabled. `MAX_CONTENDERS = 5` and behaviour beyond three
+  iOS peers remain untestable on current hardware. Androids still cannot participate in W5.
 - **Forgery repro for C-SQL-1 / C-SQL-4** with two honest devices and one modified client, which is the
-  only way to confirm the 0063 fixes actually close the holes rather than merely looking like they do.
+  hardware complement to the observed red-on-0063 squat-rejection arm and the green 0064 ownership,
+  legal-hold and post-release repair assertions.
 - **H-RT-1** (`_flushSightings` compounding) under a deliberately half-dead network — airplane-mode
   toggling or a throttled hotspot. This is the finding where the user taps "beacon off" and BLE keeps
   running; a device test is the only honest proof of the fix.
@@ -121,17 +132,20 @@ reproduction commands for each item:
 - `docs/research/2026-08-01-hardening/HARDENING_AUDIT_2026-08-01.md`
 - `docs/research/2026-08-01-hardening/verified_findings_working.md`
 
-Four Critical findings total and **none of them is yours** — all four are server-side and live, and the
-Linux side owns them. Everything in your queue is **High / merge-blocking**: it exists only on the
+Four original Critical findings total and **none of them is yours** — all four are server-side release
+path findings. C-PROD-1 is closed; the other three are on `main` but absent from the deployed schema and
+await an approved migration batch. The Linux side owns them. Everything in your queue is **High /
+merge-blocking**: it exists only on the
 unmerged `fix/w5-encounter-lease` branch, so it cannot harm a user until PR #9 lands, but it blocks that
 merge and the Phase-5 hardware matrix. The order below is unchanged by the re-rating. The
 Linux side has already taken the server, Android and web items, so do not spend time there — the split
 is at the bottom of this message.
 
-Baseline before you start: `flutter analyze` is clean, `flutter test` is 233/233 on
-`fix/w5-encounter-lease` and 183/183 on `main`. Both suites are green, which means **not one of the
-defects below is caught by an existing test.** Every fix you land needs a test that fails before it and
-passes after.
+Baseline before you start: `flutter analyze` is clean; the historical suites were 233/233 on the
+pre-reconstruction W5 branch and 183/183 on `main`; the uncommitted Linux round-2 tree is 190/190 after
+new H-RT-5/H-RT-7 regressions. Those suites being green was the warning: **not one of the original
+defects was caught by an existing test.** Every fix you land needs a test that fails before it and passes
+after.
 
 ### Your queue, in the order we recommend
 
@@ -331,8 +345,8 @@ switch.
 ### Working agreement
 
 Branch off `fix/w5-encounter-lease`. Every fix needs a test that fails before and passes after — that is
-what this round exists to establish, given all suites were green while four live Criticals and the
-entire High tier below were present in the code. Watch
+what this round exists to establish, given all suites were green while four original server-side
+Critical findings and the entire High tier below were present on the reviewed release paths. Watch
 every rebase: a previous one silently dropped three third-party commits, so verify `git log origin..HEAD`
 still contains everything that is not yours before any force-push. Post findings and questions on PR #9;
 if anything above does not match what you see in the code, say so on the thread rather than adapting to

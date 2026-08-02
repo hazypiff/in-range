@@ -1,12 +1,16 @@
 # In Range — full-system hardening & bug-hunt audit, 2026-08-01
 
 **Scope:** stability, security, correctness. No UI/UX work.
-**Branches:** `main` @ `f2f948e`, `fix/w5-encounter-lease` @ `83890e6` (PR #9), `feat/gamification-phase-a` (PR #10).
+**Audit snapshot:** `main` @ `f2f948e`, `fix/w5-encounter-lease` @ `83890e6` (PR #9),
+`feat/gamification-phase-a` (PR #10). **Current remediation baseline:** `main` @ `c5398e7`; PR #9 @
+`810875a`. **Linux round-2 working tree:** `fix/hardening-linux-round-2` (uncommitted; not pushed).
 **Panel:** 7 independent Claude reviewers + Kimi K3 + Codex (`gpt-5.6-sol`, max reasoning), separate
 scopes, plus a live production probe. Three adversarial consensus rounds followed; the exchange is
 recorded in `CONSENSUS_DIALOGUE.md`.
 
-**Sign-off:** Codex — `CONSENSUS: AGREED`. Kimi — `AGREED WITH CORRECTIONS`, all folded in.
+**Historical sign-off:** Codex — `CONSENSUS: AGREED`. Kimi — `AGREED WITH CORRECTIONS`, all folded in.
+Those signatures cover the report committed at **`d1b8c38` only**. This file was substantively amended at
+`c5398e7` after sign-off and is therefore **AMENDED — NOT RE-SIGNED** pending exact-text reconfirmation.
 
 **Evidence convention (corrected after Codex's objection):** every **Critical** and every **disputed**
 finding has a dedicated evidence section in `verified_findings_working.md` with reproduction commands.
@@ -33,14 +37,16 @@ must be verified rather than inferred — and then rated three findings from mig
 checking the deployed ledger. Third time this project has hit that trap; first time it was this report
 doing it.
 
-## ⛔ DEPLOYMENT BLOCKER — 0063 MUST NOT SHIP ALONE
+## ⛔ DEPLOYMENT BLOCKER — THE 0056→0064 BATCH MUST STAY ORDERED
 
 `0063` modifies `cleanup_ephemeral_data` using **0059's body**, which references `rssi_samples`,
 `venue_anchors` and `proximity_wake_requests`. Verified: prod's current `cleanup_ephemeral_data` has
 **zero** references to those tables and **none of them exist in prod**. Pushing 0063 by itself would
 install a function referencing non-existent tables and **break `run_maintenance` in production** — the job
-that performs every retention purge. 0063 ships **only** as part of the 0056→0063 batch, in order.
-(Caught by Kimi during migration review.)
+that performs every retention purge. `0063` ships **only** as part of the ordered 0056→0064 batch.
+`0064_token_claim_ownership_repair.sql` is an append-only follow-up that closes the foreign batch-token
+squat which remained in the final `0063`; it also must not be deployed independently. (The 0063
+deployment hazard was caught by Kimi during migration review.)
 
 ---
 
@@ -48,26 +54,49 @@ that performs every retention purge. 0063 ships **only** as part of the 0056→0
 - **C-PROD-1 — FIXED AND VERIFIED IN PRODUCTION.** `send-push` and `photo-review` redeployed with the auth
   gate; `config.toml` corrected (`verify_jwt=false` on both, plus the missing `[functions.proximity-wake]`
   block). Re-probed: unauthenticated `POST` → `401`, `GET` → `405`, wrong bearer → `401`. Hole closed.
-- **C-SQL-1 / C-SQL-3 / C-SQL-4 — FIXED IN `0063_audit_2026_08_01_critical_fixes.sql`, NOT DEPLOYED, and
-  MUST NOT be deployed alone (see DEPLOYMENT BLOCKER above).**
-  Rehearsed: 0020→0063 apply cleanly in sequence on a locally-scaffolded database, all three changes
-  verified present via `pg_get_functiondef`. Awaiting panel review + owner go-ahead; unlike the redeploy
-  this is new code, and C-SQL-4 changes encounter-correlation semantics.
-- Everything in the High tier is untouched.
+- **C-SQL-1 / C-SQL-3 / C-SQL-4 — PATCHED LOCALLY BY THE ORDERED `0063` + `0064` SET, NOT DEPLOYED, and
+  MUST NOT be deployed piecemeal (see DEPLOYMENT BLOCKER above).** `0064` closes the squat-first
+  residual in `0063`: authoritative `beacon_token_batch` ownership is checked even while the rollout
+  flag is off, and only the proven owner can repair poisoned `token_claims` and
+  `token_claim_history` rows. If the foreign rows are under legal hold, repair instead fails before any
+  write and preserves both rows; a released hold permits the next owner claim to repair them. The squat
+  rejection arm was observed red on `0063`; owner recovery, poisoned-row repair, hold preservation and
+  post-release repair all pass on `0064` (the latter pre-fix failures are statically traced, not separately
+  observed red). `run_security_tests.sh` replays 0020→0064 in order through raw `psql`, then passes the
+  privilege/RLS suite and its existing encounter advisory-lock race; that race does **not** exercise
+  0064's `FOR KEY SHARE`. A standard local migration run now records ledger head `0064`.
+  **Review status:** Kimi and Codex reviewed only a 313-line draft of `0063` and returned
+  `SAFE WITH CHANGES`; neither approved its committed 380-line final bytes. Kimi K3 and Claude Opus each
+  returned `SAFE WITH EXACT CHANGES` on the first 0064 working-tree packet, then withdrew two incorrect
+  objections during adversarial exchange (legacy compatibility and cross-account token caching). Their
+  legal-hold disagreement produced the conservative fail-before-write behavior now in the file. This
+  changed the bytes, so exact-final-packet re-review is still required. No consensus or deployment
+  approval may be claimed until both reviewers see that final packet.
+- **H-RT-5 / H-RT-7 — PATCHED LOCALLY, NOT PUSHED.** Batch tokens are filtered through one canonical
+  32-lowercase-hex decoder before they reach BLE, and encounter queries now rebuild on active-user
+  changes and return no data while signed out. Seven new Dart regressions bring this working tree to
+  190/190 with `flutter analyze` clean.
+- The High tier remains open except H-CFG-1's deployment/config defect (closed with C-PROD-1) and
+  H-ORCH-1's missing-probe defect (remediated on PR #9 at `810875a`).
 
-**Baseline:** `flutter analyze` clean; `flutter test` 183/183 on `main`, 233/233 on the W5 branch. Both
-suites green — **no defect below is caught by an existing test.**
+**Historical baseline:** `flutter analyze` clean; `flutter test` 183/183 on `main`, 233/233 on the
+pre-reconstruction W5 branch. Those suites were green while every finding below existed. The current
+Linux round-2 working tree is 190/190 after adding regressions for H-RT-5 and H-RT-7.
 
 ---
 
-## VERDICT
+## CURRENT VERDICT — amended after production verification
 
-**Not ready to trust in the wild.** **Four** Critical findings, all server-side and all reachable today:
+**Not ready to trust in the wild or ship the pending migration batch.** The original audit found four
+server-side Criticals on the release path. Post-sign-off verification changed their current status:
 
-- **one live in production, remotely exploitable by anyone** — C-PROD-1;
-- **two exploitable today by any authenticated user with a modified client** — C-SQL-1, C-SQL-4;
-- **one server-side retention defect requiring no attacker** — C-SQL-3, which leaves a de-anonymisable
-  proximity graph at rest.
+- **C-PROD-1 was the only finding live in production; it is fixed and re-probed.**
+- **C-SQL-1, C-SQL-3 and C-SQL-4 exist on `main`'s pending app-rollout path, not in the deployed schema.**
+  The local `0063` + `0064` set attempts to fix them and the newly proven squat residual, but is
+  undeployed, must ship only as the ordered 0056→0064 batch, and lacks exact-final-diff panel approval.
+- No known Critical from this report remains live in production, based on the post-sign-off migration
+  ledger/schema verification. The `cron.job` schedule and production privilege sweep remain unverified,
+  so this is not a blanket production clearance.
 
 Plus a large High tier that blocks the W5 merge and the Phase-5 hardware matrix.
 
@@ -98,9 +127,11 @@ Criticals and one High** at authoring time — C-SQL-3, C-PROD-1 (three weeks ag
 
 ---
 
-## CRITICAL — reachable today on `main`
+## ORIGINAL CRITICAL FINDINGS — current status above overrides historical wording
 
 ### C-PROD-1 🔴 `photo-review` and `send-push` accept unauthenticated requests in production
+**Current status: FIXED AND RE-PROBED after sign-off.** The paragraphs below preserve the original
+finding and evidence.
 Deploy drift; the repo code is correct. Probed: `POST /photo-review` no auth → `200`; wrong bearer →
 `200`; **`GET` no auth → `200`**. `requireServiceRole` rejects non-POST with 405 *before* anything else,
 so a 200 on GET proves the deployed binary lacks the check. `POST /send-push` no auth → `200`,
@@ -115,6 +146,8 @@ discoverability (0052) — a moderation step adjacent to child-safety obligation
 missing `[functions.proximity-wake]` block (it currently 404s).
 
 ### C-SQL-1 🔴 `claim_token` overwrites another user's `token_claim_history` row
+**Current status: present in migration 0060 on `main`, absent from the deployed schema; patched in the
+local undeployed 0063+0064 set and awaiting exact-final-diff review.**
 `0060:149-159` — `ON CONFLICT (token) DO UPDATE` with **no `WHERE user_id = v_uid`**. The `COALESCE`
 "guard" is dead code: `0060:117-118` rejects NULL coordinates, so `EXCLUDED.approx_lat` always wins.
 Tokens are broadcast in plaintext over BLE. Neutralises the GPS veto — `correlate_encounter`
@@ -122,6 +155,8 @@ Tokens are broadcast in plaintext over BLE. Neutralises the GPS veto — `correl
 would stop it sits behind `enforce_batch_tokens`, which is **0**.
 
 ### C-SQL-3 🔴 `beacon_token_batch` has no scheduled purge — a permanent token→user_id map
+**Current status: the unpurged table exists in production, but its `rssi_samples` join target does not;
+the full harm arrives with 0056. Patched in undeployed 0063; ordered-batch review remains open.**
 `cleanup_ephemeral_data()` (latest `0059:477-580`) purges 9 tables; not this one. Joining it to
 `rssi_samples` on the shared token yields a de-anonymised proximity graph. **Nuance accepted from Kimi:**
 active users' rows rotate out at next batch issue (~1–2 day window); it is **lapsed** users whose token
@@ -129,6 +164,8 @@ set persists indefinitely. Two-line fix:
 `DELETE FROM public.beacon_token_batch WHERE valid_until < NOW() - INTERVAL '24 hours';`
 
 ### C-SQL-4 🔴 Batch-pre-claimed tokens skip the GPS veto entirely *(found by Kimi)*
+**Current status: reachable on `main` through undeployed 0060, not through the deployed schema; attempted
+fix in undeployed 0063; ordered-batch review remains open.**
 `0053:179-182` wraps the veto in `IF ... v_claim.approx_lat IS NOT NULL ...`. `claim_token_batch`
 (`0060:25`) pre-claims with NULL location — the locked-phone path. For those tokens the veto never runs.
 Independent of C-SQL-1; fixing one does not close the other.
@@ -196,11 +233,15 @@ to each other (always present).
   such file exists at HEAD or in `git log --all` — it was a temporary artifact created by one of this
   audit's own subagents and mistaken for committed code. **Standing rule: no review round may cite an
   uncommitted test file as sign-off evidence.**
+  **Remediation:** PR #9 commit `810875a` reconstructs nine recorded probe classes as committed tests;
+  this closes the missing-regression artifact, not the historical overclaim.
 
 **Server / web (Linux side):**
 - **H-CFG-1** `verify_jwt` is **true in config but not yet effective** on the deployed builds (the probe
   proves the gateway is not enforcing). On redeploy it *would* take effect and lock out the legitimate
   `sb_secret_` caller. `proximity-wake` has no config entry at all.
+  **Remediation:** closed after sign-off in `c5398e7`; all three config entries were corrected and the two
+  exposed functions redeployed/re-probed.
 - **H-WL-1 / H-WL-2** `waitlist-join` performs an **unauthenticated cross-user UPDATE** and returns
   another person's `ref_code`, zone and position (`0062:100-104`, `:120-131`); and it is an **email
   enumeration oracle** — `0054:74-76` shipped `RETURNS VOID` with a comment promising exactly that
@@ -292,18 +333,24 @@ as **wildcards**, so v5.2 correction #5 has zero coverage.
 3. A deploy-parity probe asserting `405` on `GET` for every service-role function → catches C-PROD-1, and
    would have caught it three weeks ago.
 
-## FIX ORDER
+## CURRENT FIX ORDER
 
-1. **C-PROD-1** — redeploy, fix `verify_jwt`, add the `proximity-wake` entry.
-2. **C-SQL-1, C-SQL-3, C-SQL-4** — three small server-side SQL fixes, all reachable today.
-3. **H-WL-1 / H-WL-2** — the only endpoints an anonymous attacker can reach.
-4. **H-W5-1** (two-line hoist + the vector that pins it), then **H-W5-5** *before* the Phase-5 matrix.
-5. **H-W5-2, H-W5-3, H-RT-1** — the wedges. Then **H-DIAG-1 / H-DIAG-4** (compile-out + flavor stamp).
-6. Systemic tests, then the rest of the High tier.
+1. **Re-review the exact final `0063` + local `0064` repair and expanded T9.** Generic `22023` is the
+   recorded choice; the held-squat path now preserves both rows and fails before any write. Do not deploy
+   either migration alone; any production action is the ordered 0056→0064 batch with owner approval.
+2. **H-WL-1 / H-WL-2** — the remaining live anonymous endpoint exposure; its status/recovery response
+   needs an authenticated receipt or a deliberately generic public response.
+3. **H-W5-1** (two-line hoist + the vector that pins it), then **H-W5-5** *before* the Phase-5 matrix.
+4. **H-W5-2, H-W5-3, H-RT-1** — the wedges. H-RT-5 and H-RT-7 are patched locally with regressions.
+   Then **H-DIAG-1 / H-DIAG-4** (compile-out + flavor stamp).
+5. Systemic tests, then the rest of the High tier. C-PROD-1 and H-CFG-1 are closed; H-ORCH-1 is
+   remediated on PR #9.
 
 ## COVERAGE AND LIMITATIONS
 
-- **Verified against production:** only the Edge Function auth probe. Everything else is source-verified.
+- **Verified against production:** the Edge Function auth re-probe plus the migration ledger/live-schema
+  dump used by the severity correction. Application behaviour, `cron.job`, and the privilege sweep are
+  not thereby cleared.
 - **⚠️ UNVERIFIED, NOT CLEARED — the `cron.job` retention schedule.** Every retention claim in this report
   assumes `run_maintenance` is actually scheduled. `0015`'s `cron.schedule` is wrapped in
   `DO $$ … EXCEPTION WHEN OTHERS THEN NULL`, so a failed schedule fails **silently**. Nobody on this panel

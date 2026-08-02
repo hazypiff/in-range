@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import 'package:in_range/features/beacon/ephemeral_token_generator.dart';
+import 'package:in_range/features/beacon/opaque_token.dart';
 
 /// One slot of a server-issued token batch (#6 step 2).
 class BatchSlot {
@@ -118,7 +119,15 @@ class BatchTokenSource {
       fetchTolerant(today),
       fetchTolerant(today.add(const Duration(days: 1))),
     ]);
-    final combined = <BatchSlot>[...results[0], ...results[1]];
+    // A malformed server/cache row must not reach the BLE encoder. Short
+    // values used to throw during rotation, while long values were silently
+    // truncated to a different token and then could never resolve server-side.
+    // Dropping invalid rows preserves the class contract: nextToken never
+    // throws and falls back to a local random token when necessary.
+    final combined = <BatchSlot>[
+      ...results[0],
+      ...results[1],
+    ].where((slot) => isCanonicalOpaqueToken(slot.token)).toList();
     if (combined.isNotEmpty) {
       _slots
         ..clear()

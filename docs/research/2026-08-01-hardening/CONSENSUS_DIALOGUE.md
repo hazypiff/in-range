@@ -1,5 +1,13 @@
 # Consensus dialogue — hardening audit 2026-08-01
 
+> **Post-sign-off status:** this dialogue records the exact consensus reached for commit `d1b8c38`.
+> The report was substantively amended at `c5398e7` after production-ledger verification; those changes
+> have not been re-confirmed by either external auditor. A later read-only Kimi K3 / Claude Opus round
+> found that the final 0063 bytes were never approved and identified its foreign batch-token squat
+> residual; the local 0064 repair is also awaiting exact-diff review. Statements below that all four
+> Criticals were live are historical and superseded by the amended report's production-severity
+> correction. Nothing after `d1b8c38` is signed consensus yet.
+
 Three participants, each with independent tooling and separate scopes:
 
 - **Claude** (coordinator; 7 subordinate reviewers on separate scopes, plus a live production probe)
@@ -257,4 +265,6 @@ rewritten, so the corrections stay auditable.
 the mapping to their final identifiers is in the amendment table at the top of
 `verified_findings_working.md`.
 
-**Final state: four Criticals, all server-side and live. Both auditors re-confirmed.**
+**Historical final state at `d1b8c38`: four Criticals, all described as server-side and live. Both
+auditors re-confirmed that text. Superseded after sign-off by `c5398e7`; the amended text is not yet
+re-signed.**

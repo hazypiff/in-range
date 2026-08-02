@@ -194,7 +194,8 @@ END $$;
 -- from the fixtures above.
 DO $$
 DECLARE v_cnt INT; v_distinct INT; v_hexok BOOLEAN; v_first TEXT[]; v_second TEXT[];
-        v_a_tok TEXT; v_b_tok TEXT;
+        v_a_tok TEXT; v_b_tok TEXT; v_b_squat TEXT; v_b_poison TEXT;
+        v_b_held TEXT;
 BEGIN
   PERFORM set_config('request.jwt.claims','{"sub":"a0000000-0000-0000-0000-00000000000a","role":"authenticated"}', true);
   SELECT count(*), count(DISTINCT token), bool_and(token ~ '^[0-9a-f]{32}$')
@@ -213,6 +214,22 @@ BEGIN
   PERFORM public.issue_token_batch(CURRENT_DATE, 15);
   SELECT token INTO v_b_tok FROM public.beacon_token_batch
     WHERE user_id='b0000000-0000-0000-0000-00000000000b' AND valid_from<=now() AND valid_until>now() LIMIT 1;
+  SELECT token INTO v_b_squat FROM public.beacon_token_batch
+    WHERE user_id='b0000000-0000-0000-0000-00000000000b'
+      AND valid_until>now()
+    ORDER BY slot LIMIT 1 OFFSET 1;
+  SELECT token INTO v_b_poison FROM public.beacon_token_batch
+    WHERE user_id='b0000000-0000-0000-0000-00000000000b'
+      AND valid_until>now()
+    ORDER BY slot LIMIT 1 OFFSET 2;
+  SELECT token INTO v_b_held FROM public.beacon_token_batch
+    WHERE user_id='b0000000-0000-0000-0000-00000000000b'
+      AND valid_until>now()
+    ORDER BY slot LIMIT 1 OFFSET 3;
+
+  -- Mirror the locked/native path: B pre-claims its issued slots into history,
+  -- but token_claims is still empty until Dart single-claims the active slot.
+  PERFORM public.claim_token_batch('feet_10');
 
   -- enforcement ON for the binding checks
   UPDATE public.app_settings SET value_num=1 WHERE key='enforce_batch_tokens';
@@ -236,6 +253,120 @@ BEGIN
     PERFORM public.claim_token(v_b_tok, now()+interval '15 min',38.9,-76.9,'feet_10',10.0);
     ASSERT false, 'T9 cross-user batch token accepted';
   EXCEPTION WHEN sqlstate '22023' THEN NULL; END;
+
+  -- Enforcement remains OFF during the batch-aware client rollout. Even then,
+  -- authoritative batch ownership must win: A's attempt to squat B's token is
+  -- rejected with the same generic ownership error used after enforcement,
+  -- and B must still be able to claim it normally.
+  UPDATE public.app_settings SET value_num=0 WHERE key='enforce_batch_tokens';
+  UPDATE public.token_claims SET last_claimed_at=now()-interval '1 min'
+    WHERE user_id='a0000000-0000-0000-0000-00000000000a';
+  BEGIN
+    PERFORM public.claim_token(v_b_squat, now()+interval '15 min',38.9,-76.9,'feet_10',10.0);
+    ASSERT false, 'T9 foreign batch squat accepted while enforcement was off';
+  EXCEPTION WHEN sqlstate '22023' THEN NULL; END;
+  ASSERT NOT EXISTS (
+    SELECT 1 FROM public.token_claims
+    WHERE user_id='a0000000-0000-0000-0000-00000000000a' AND token=v_b_squat
+  ), 'T9 foreign batch squat mutated token_claims while enforcement was off';
+  ASSERT (SELECT user_id='b0000000-0000-0000-0000-00000000000b'::uuid
+            FROM public.token_claim_history WHERE token=v_b_squat),
+    'T9 foreign batch squat changed the pre-claimed history owner';
+
+  PERFORM set_config('request.jwt.claims','{"sub":"b0000000-0000-0000-0000-00000000000b","role":"authenticated"}', true);
+  PERFORM public.claim_token(v_b_squat, now()+interval '15 min',38.9,-76.9,'feet_10',10.0);
+  ASSERT EXISTS (
+    SELECT 1 FROM public.token_claims
+    WHERE user_id='b0000000-0000-0000-0000-00000000000b' AND token=v_b_squat
+  ), 'T9 rightful batch owner could not claim after a foreign squat attempt';
+
+  -- Recreate the pre-fix poisoned state directly. A proven batch owner must be
+  -- able to evict only the foreign squat and repair both ownership tables.
+  DELETE FROM public.token_claim_history WHERE token=v_b_poison;
+  INSERT INTO public.token_claim_history
+    (token,user_id,valid_from,valid_until,approx_lat,approx_lon,range_type,accuracy_m,created_at)
+  VALUES
+    (v_b_poison,'a0000000-0000-0000-0000-00000000000a',now(),now()+interval '15 min',0,0,'feet_10',10,now());
+  INSERT INTO public.token_claims
+    (user_id,token,valid_from,valid_until,approx_lat,approx_lon,range_type,accuracy_m,created_at,last_claimed_at)
+  VALUES
+    ('a0000000-0000-0000-0000-00000000000a',v_b_poison,now(),now()+interval '15 min',0,0,'feet_10',10,now(),now()-interval '1 min')
+  ON CONFLICT (user_id) DO UPDATE SET
+    token=EXCLUDED.token, valid_from=EXCLUDED.valid_from,
+    valid_until=EXCLUDED.valid_until, approx_lat=EXCLUDED.approx_lat,
+    approx_lon=EXCLUDED.approx_lon, range_type=EXCLUDED.range_type,
+    accuracy_m=EXCLUDED.accuracy_m,
+    last_claimed_at=EXCLUDED.last_claimed_at;
+  UPDATE public.token_claims SET last_claimed_at=now()-interval '1 min'
+    WHERE user_id='b0000000-0000-0000-0000-00000000000b';
+
+  PERFORM public.claim_token(v_b_poison, now()+interval '15 min',38.91,-76.91,'feet_10',7.0);
+  ASSERT EXISTS (
+    SELECT 1 FROM public.token_claims
+    WHERE user_id='b0000000-0000-0000-0000-00000000000b' AND token=v_b_poison
+  ) AND NOT EXISTS (
+    SELECT 1 FROM public.token_claims
+    WHERE user_id<>'b0000000-0000-0000-0000-00000000000b' AND token=v_b_poison
+  ), 'T9 proven batch owner did not repair poisoned token_claims ownership';
+  ASSERT (SELECT user_id='b0000000-0000-0000-0000-00000000000b'::uuid
+            FROM public.token_claim_history WHERE token=v_b_poison),
+    'T9 proven batch owner did not repair poisoned history ownership';
+
+  -- Preservation beats repair while a foreign squatter is under legal hold.
+  -- Both rows must remain intact and consumed_at must remain untouched; after
+  -- the hold is released, the same rightful-owner claim must repair atomically.
+  DELETE FROM public.token_claim_history WHERE token=v_b_held;
+  INSERT INTO public.token_claim_history
+    (token,user_id,valid_from,valid_until,approx_lat,approx_lon,range_type,accuracy_m,created_at)
+  VALUES
+    (v_b_held,'a0000000-0000-0000-0000-00000000000a',now(),now()+interval '15 min',0,0,'feet_10',10,now());
+  INSERT INTO public.token_claims
+    (user_id,token,valid_from,valid_until,approx_lat,approx_lon,range_type,accuracy_m,created_at,last_claimed_at)
+  VALUES
+    ('a0000000-0000-0000-0000-00000000000a',v_b_held,now(),now()+interval '15 min',0,0,'feet_10',10,now(),now()-interval '1 min')
+  ON CONFLICT (user_id) DO UPDATE SET
+    token=EXCLUDED.token, valid_from=EXCLUDED.valid_from,
+    valid_until=EXCLUDED.valid_until, approx_lat=EXCLUDED.approx_lat,
+    approx_lon=EXCLUDED.approx_lon, range_type=EXCLUDED.range_type,
+    accuracy_m=EXCLUDED.accuracy_m,
+    last_claimed_at=EXCLUDED.last_claimed_at;
+  INSERT INTO public.legal_holds
+    (user_id,reason,detail,placed_by)
+  VALUES
+    ('a0000000-0000-0000-0000-00000000000a','safety_investigation',
+     'T9 ownership-repair preservation fixture','security_test');
+  UPDATE public.token_claims SET last_claimed_at=now()-interval '1 min'
+    WHERE user_id='b0000000-0000-0000-0000-00000000000b';
+
+  BEGIN
+    PERFORM public.claim_token(v_b_held, now()+interval '15 min',38.92,-76.92,'feet_10',6.0);
+    ASSERT false, 'T9 held foreign squat was erased by an ordinary owner claim';
+  EXCEPTION WHEN sqlstate '22023' THEN NULL; END;
+  ASSERT (SELECT user_id='a0000000-0000-0000-0000-00000000000a'::uuid
+            FROM public.token_claims WHERE token=v_b_held),
+    'T9 held token_claims evidence was changed';
+  ASSERT (SELECT user_id='a0000000-0000-0000-0000-00000000000a'::uuid
+            FROM public.token_claim_history WHERE token=v_b_held),
+    'T9 held history evidence was changed';
+  ASSERT (SELECT consumed_at IS NULL FROM public.beacon_token_batch WHERE token=v_b_held),
+    'T9 held repair attempt changed consumed_at';
+
+  UPDATE public.legal_holds
+     SET released_at=now(), released_by='security_test'
+   WHERE user_id='a0000000-0000-0000-0000-00000000000a'
+     AND released_at IS NULL;
+  UPDATE public.token_claims SET last_claimed_at=now()-interval '1 min'
+    WHERE user_id='b0000000-0000-0000-0000-00000000000b';
+  PERFORM public.claim_token(v_b_held, now()+interval '15 min',38.92,-76.92,'feet_10',6.0);
+  ASSERT (SELECT user_id='b0000000-0000-0000-0000-00000000000b'::uuid
+            FROM public.token_claims WHERE token=v_b_held),
+    'T9 released hold did not permit token_claims repair';
+  ASSERT (SELECT user_id='b0000000-0000-0000-0000-00000000000b'::uuid
+            FROM public.token_claim_history WHERE token=v_b_held),
+    'T9 released hold did not permit history repair';
+
+  -- Preserve the suite's historical post-T9 state for later controls.
+  UPDATE public.app_settings SET value_num=1 WHERE key='enforce_batch_tokens';
 END $$;
 
 -- ============ TEST 10: relay-abuse detection (#6 step 4) ============
@@ -821,7 +952,9 @@ BEGIN
 
   -- Isolate from earlier tests: T9 leaves enforce_batch_tokens = 1, and the
   -- whole harness runs in one transaction. This test is about the CONSENT
-  -- gate, so the batch gate must not fire first and mask the result.
+  -- gate, so the batch gate must not fire first and mask the result. This also
+  -- pins 0064's rollout contract: a no-batch-row legacy token still succeeds
+  -- while enforce_batch_tokens is off.
   UPDATE public.app_settings SET value_num = 0 WHERE key = 'enforce_batch_tokens';
   UPDATE public.app_settings SET value_num = 0 WHERE key = 'require_attestation';
 
