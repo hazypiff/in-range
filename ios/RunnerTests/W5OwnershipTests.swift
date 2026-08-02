@@ -497,6 +497,22 @@ final class W5OwnershipTests: XCTestCase {
       ])
   }
 
+  // H-W5-5 — the grace observation the discovery bypass keys on.
+  func testHW55IsInGraceTracksReconnectWindow() {
+    let a = established("L1")
+    XCTAssertFalse(a.isInGrace(leaseId))
+    _ = a.onLinkDown(handle: "p1")
+    XCTAssertTrue(a.isInGrace(leaseId))
+    _ = a.onControl(
+      handle: "p3", role: .outbound, myCandidate: candA, peerCandidate: candB,
+      peerAlias: aliasB, linkId: "L3")
+    XCTAssertFalse(a.isInGrace(leaseId))
+    _ = a.onLinkDown(handle: "p3")
+    _ = a.onGraceExpiry(leaseId: leaseId)
+    XCTAssertFalse(a.isInGrace(leaseId))
+    XCTAssertEqual(a.activeLeases, 0)
+  }
+
   // H-W5-1 — a committed encounter reached only via realId (unknown rotated
   // alias, no prevAlias, lease keyed by the PEER's candidate) must hit the
   // sticky-keeper branch: intruder rejected, keeper unmoved.

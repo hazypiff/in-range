@@ -71,6 +71,29 @@ void main() {
     expect(a.committedLinkId('cand-a'), 'L5');
   });
 
+  // H-W5-5 — the grace observation the recovery bypass keys on: true only
+  // between keeper loss and re-establishment/expiry.
+  test('probe: isInGrace tracks the reconnect window exactly', () {
+    final a = established('L1');
+    expect(a.isInGrace(leaseId), isFalse);
+    a.onLinkDown(handle: 'p1');
+    expect(a.isInGrace(leaseId), isTrue);
+    // Re-establishment clears grace...
+    a.onControl(
+        handle: 'p3',
+        role: W5Role.outbound,
+        myCandidate: candA,
+        peerCandidate: candB,
+        peerAlias: aliasB,
+        linkId: 'L3');
+    expect(a.isInGrace(leaseId), isFalse);
+    // ...and expiry erases: no lease, no grace.
+    a.onLinkDown(handle: 'p3');
+    a.onGraceExpiry(leaseId: leaseId);
+    expect(a.isInGrace(leaseId), isFalse);
+    expect(a.activeLeases, 0);
+  });
+
   // R7 probe 1 — proposals are encounterId-bound: a same-generation proposal
   // for a DIFFERENT encounter never collides into this one's gen space.
   test('probe: foreign-encounter proposal is inert at any generation', () {

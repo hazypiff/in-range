@@ -964,6 +964,11 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
       let id = peripheral.identifier
       if w5LinksEnabled, w5[id] == nil, inflight[id] == nil,
          let myToken = currentTokenHex(), myToken < peerToken {
+        // H-W5-5: an in-grace lease out-ranks the retry floor — the 120 s
+        // reconnect window is the entire point of the lease.
+        if w5Link.wantsGraceRecovery(alias: peerToken) {
+          lastConnectAttempt.removeValue(forKey: id)
+        }
         let recent = lastConnectAttempt[id].map {
           Date().timeIntervalSince($0) < Self.connectRetryFloor } ?? false
         if !recent, w5Link.willDial(peerTokenHex: peerToken, peripheralID: id) {
@@ -1010,8 +1015,15 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
     let id = peripheral.identifier
     if let cached = tokenCache[id], Date().timeIntervalSince(cached.at) < Self.tokenCacheTTL {
       emitSighting(tokenHex: cached.hex, rssi: rssi)
-      scheduleScanRestart()
-      return
+      // H-W5-5: a cached token mapping to an in-grace lease must NOT
+      // suppress the reconnect dial (cache TTL 15 min >> grace 120 s).
+      if w5LinksEnabled, w5Link.wantsGraceRecovery(alias: cached.hex) {
+        lastConnectAttempt.removeValue(forKey: id)
+        tokenCache.removeValue(forKey: id)  // fall through to the dial path
+      } else {
+        scheduleScanRestart()
+        return
+      }
     }
     if inflight[id] != nil { return }
     if let last = lastConnectAttempt[id],

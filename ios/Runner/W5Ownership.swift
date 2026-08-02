@@ -243,6 +243,7 @@ final class W5Ownership {
 
   func keeperOf(_ leaseId: String) -> String? { enc[leaseId]?.winner()?.handle }
   func isCommitted(_ leaseId: String) -> Bool { enc[leaseId]?.committed ?? false }
+  func isInGrace(_ leaseId: String) -> Bool { enc[leaseId]?.inGrace ?? false }
   func leaseForAlias(_ alias: String) -> String? { aliasTo[alias] }
 
   /// Endpoint-global handle → leaseId bijection (read-only for restore adapters).

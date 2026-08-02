@@ -107,6 +107,17 @@ final class W5LinkController {
     return out
   }
 
+  /// H-W5-5: bounded W5 grace recovery. True while the alias maps to a lease
+  /// inside its 120 s reconnect grace — the ONLY window where the discovery
+  /// path must bypass the 15 min token cache and 5 min retry floor, or the
+  /// lease is erased before any reconnect is ever attempted.
+  func wantsGraceRecovery(alias: String) -> Bool {
+    guard bb.w5LinksEnabled, let lease = ownership.leaseForAlias(alias) else {
+      return false
+    }
+    return ownership.isInGrace(lease)
+  }
+
   // MARK: - central side (outbound links)
 
   /// Ownership gate for a dial the existing tiebreak already approved.

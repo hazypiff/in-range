@@ -247,6 +247,7 @@ class W5Ownership {
 
   String? keeperOf(String leaseId) => _enc[leaseId]?.winner()?.$2;
   bool isCommitted(String leaseId) => _enc[leaseId]?.committed ?? false;
+  bool isInGrace(String leaseId) => _enc[leaseId]?.inGrace ?? false;
   String? leaseForAlias(String alias) => _aliasTo[alias];
   W5Proposal? currentProposal(String leaseId) {
     final e = _enc[leaseId];
