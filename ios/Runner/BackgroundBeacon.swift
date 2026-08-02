@@ -1337,6 +1337,11 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
   }
 
   func dropPeerByToken(_ tokenHex: String) {
+    // H-W5-6: erase the ownership lease AND disconnect inbound keepers, not
+    // just the outbound session — otherwise the lease survives a user
+    // rejection and the app can re-dial. The controller's onTeardown path
+    // emits the role-correct closes; then reap any raw session by token.
+    if w5LinksEnabled { w5Link.dropPeer(alias: tokenHex) }
     for (id, s) in w5 where s.tokenHex == tokenHex { w5End(id) }
   }
 }

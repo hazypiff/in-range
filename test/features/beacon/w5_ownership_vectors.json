@@ -417,6 +417,140 @@
         },
         "comment": "This IS the hijack entry point — pinned identically in both languages so neither oracle can drift toward silently 'fixing' it and masking the adapter contract."
       }
+    },
+    {
+      "name": "H-vec: >=3 links out of insertion order — close/route order is handle-sorted (Dart/Swift parity)",
+      "steps": [
+        {
+          "event": "control",
+          "handle": "p3",
+          "role": "inbound",
+          "myCandidate": "cand-a",
+          "peerCandidate": "cand-b",
+          "peerAlias": "aliasB",
+          "linkId": "L3",
+          "expectEffects": [
+            {
+              "kind": "sendPropose",
+              "routes": [
+                "p3"
+              ]
+            }
+          ]
+        },
+        {
+          "event": "control",
+          "handle": "p1",
+          "role": "inbound",
+          "myCandidate": "cand-a",
+          "peerCandidate": "cand-b",
+          "peerAlias": "aliasB",
+          "linkId": "L1",
+          "expectEffects": [
+            {
+              "kind": "sendPropose",
+              "routes": [
+                "p1",
+                "p3"
+              ]
+            }
+          ]
+        },
+        {
+          "event": "control",
+          "handle": "p2",
+          "role": "inbound",
+          "myCandidate": "cand-a",
+          "peerCandidate": "cand-b",
+          "peerAlias": "aliasB",
+          "linkId": "L2",
+          "expectEffects": [
+            {
+              "kind": "sendPropose",
+              "routes": [
+                "p1",
+                "p2",
+                "p3"
+              ]
+            }
+          ]
+        },
+        {
+          "event": "teardown",
+          "leaseId": "cand-a",
+          "expectEffects": [
+            {
+              "kind": "rejectInbound",
+              "handle": "p1"
+            },
+            {
+              "kind": "rejectInbound",
+              "handle": "p2"
+            },
+            {
+              "kind": "rejectInbound",
+              "handle": "p3"
+            },
+            {
+              "kind": "ended",
+              "leaseId": "cand-a"
+            }
+          ]
+        }
+      ],
+      "finalObs": {
+        "activeLeases": 0
+      }
+    },
+    {
+      "name": "H-vec: aliasRoll + prevAliasExpiry + beaconOff entry points",
+      "steps": [
+        {
+          "event": "control",
+          "handle": "p1",
+          "role": "outbound",
+          "myCandidate": "cand-a",
+          "peerCandidate": "cand-b",
+          "peerAlias": "aliasB",
+          "linkId": "L1",
+          "expectEffects": [
+            {
+              "kind": "sendPropose",
+              "routes": [
+                "p1"
+              ]
+            }
+          ]
+        },
+        {
+          "event": "aliasRoll",
+          "leaseId": "cand-a",
+          "newAlias": "aliasB2"
+        },
+        {
+          "event": "prevAliasExpiry",
+          "leaseId": "cand-a"
+        },
+        {
+          "event": "beaconOff",
+          "expectEffects": [
+            {
+              "kind": "closeOutbound",
+              "handle": "p1"
+            },
+            {
+              "kind": "ended",
+              "leaseId": "cand-a"
+            }
+          ]
+        }
+      ],
+      "finalObs": {
+        "activeLeases": 0,
+        "leaseForAlias": {
+          "aliasB2": null
+        }
+      }
     }
   ]
 }

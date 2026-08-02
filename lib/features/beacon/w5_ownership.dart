@@ -206,8 +206,11 @@ class _Enc {
   }
 
   String get viewHash => w5ViewHash(contenders());
-  List<W5Route> routes() =>
-      [for (final e in links.entries) (handle: e.key, role: e.value.$1)];
+  List<W5Route> routes() => [
+        for (final e
+            in (links.entries.toList()..sort((a, b) => a.key.compareTo(b.key))))
+          (handle: e.key, role: e.value.$1)
+      ]; // sorted → PROPOSE route order matches Swift (route-identity parity)
 
   (String linkId, String handle)? winner() {
     W5Contender? best;
@@ -612,7 +615,13 @@ class W5Ownership {
     final w = e.winner()!;
     e.committedWinner = (w.$1, w.$2);
     final fx = <W5Effect>[W5Owns(w.$2)];
-    for (final entry in e.links.entries) {
+    // Sort by handle so Dart and Swift emit close effects in IDENTICAL order
+    // (Swift sorts; Dart used insertion order — a latent cross-language
+    // divergence the exact-index vector matcher would otherwise let pass on
+    // only one platform).
+    final losers = e.links.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+    for (final entry in losers) {
       if (entry.key != w.$2) fx.add(_closeLoser(entry.key, entry.value.$1));
     }
     return fx;

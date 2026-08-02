@@ -50,6 +50,18 @@ final class W5OwnershipVectorTests: XCTestCase {
           viewHash: cur.viewHash))
     case "linkDown":
       return a.onLinkDown(handle: str("handle"))
+    case "dialFailed":
+      return a.onDialFailed(linkId: str("linkId"))
+    case "aliasRoll":
+      a.onAliasRoll(leaseId: str("leaseId"), newAlias: str("newAlias"))
+      return []
+    case "prevAliasExpiry":
+      a.onPrevAliasExpiry(leaseId: str("leaseId"))
+      return []
+    case "retryTimer":
+      return a.onRetryTimer(leaseId: str("leaseId"))
+    case "beaconOff":
+      return a.onBeaconOff()
     case "teardown":
       return a.onTeardown(leaseId: str("leaseId"))
     case "graceExpiry":
@@ -76,9 +88,17 @@ final class W5OwnershipVectorTests: XCTestCase {
       case "ended":
         XCTAssertEqual(g, .ended(leaseId: e["leaseId"] as! String), ctx)
       case "sendPropose":
-        if case .sendPropose = g {} else { XCTFail("\(ctx): expected sendPropose, got \(g)") }
+        if case .sendPropose(_, let routes) = g {
+          if let want = e["routes"] as? [String] {
+            XCTAssertEqual(routes.map { $0.handle }, want, "\(ctx): propose routes")
+          }
+        } else { XCTFail("\(ctx): expected sendPropose, got \(g)") }
       case "sendAck":
-        if case .sendAck = g {} else { XCTFail("\(ctx): expected sendAck, got \(g)") }
+        if case .sendAck(_, let route) = g {
+          if let want = e["route"] as? String {
+            XCTAssertEqual(route.handle, want, "\(ctx): ack route")
+          }
+        } else { XCTFail("\(ctx): expected sendAck, got \(g)") }
       default:
         XCTFail("\(ctx): unknown expected kind")
       }

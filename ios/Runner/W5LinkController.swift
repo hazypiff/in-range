@@ -399,6 +399,24 @@ final class W5LinkController {
   }
 
   /// Central unsubscribed/vanished — the inbound physical link is gone.
+  /// H-W5-6: peer rejected (Dart dropPeer). Erase the lease via onTeardown —
+  /// which emits role-correct closes for EVERY live link (outbound cancel +
+  /// inbound REJECT) — then clear controller bookkeeping so the app cannot
+  /// re-dial someone the user just dismissed. Resolves by alias OR by any
+  /// live outbound peripheral carrying that token.
+  func dropPeer(alias: String) {
+    guard let lease = ownership.leaseForAlias(alias) else {
+      // No lease yet (dropped mid-handshake): still cancel any raw session.
+      return
+    }
+    // onTeardown emits closes for each live link; apply() routes them.
+    apply(ownership.onTeardown(leaseId: lease))
+    // apply()'s .ended path (endedCleanup) already drops leaseByHandle +
+    // disconnects bound links; clear any residual per-link metadata.
+    outLinks = outLinks.filter { leaseByHandle[outHandle($0.key)] != nil }
+    inLinks = inLinks.filter { leaseByHandle[inHandle($0.key)] != nil }
+  }
+
   func inboundGone(_ central: CBCentral) {
     let key = central.identifier.uuidString
     guard let link = inLinks.removeValue(forKey: key), link.established else {

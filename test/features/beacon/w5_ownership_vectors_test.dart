@@ -44,6 +44,18 @@ void main() {
             ack: W5Ack(cur.encounterId, cur.viewGen, cur.viewHash));
       case 'linkDown':
         return a.onLinkDown(handle: step['handle']);
+      case 'dialFailed':
+        return a.onDialFailed(linkId: step['linkId']);
+      case 'aliasRoll':
+        a.onAliasRoll(leaseId: step['leaseId'], newAlias: step['newAlias']);
+        return const [];
+      case 'prevAliasExpiry':
+        a.onPrevAliasExpiry(leaseId: step['leaseId']);
+        return const [];
+      case 'retryTimer':
+        return a.onRetryTimer(leaseId: step['leaseId']);
+      case 'beaconOff':
+        return a.onBeaconOff();
       case 'teardown':
         return a.onTeardown(leaseId: step['leaseId']);
       case 'graceExpiry':
@@ -73,8 +85,16 @@ void main() {
           expect(g, W5Ended(e['leaseId']), reason: ctx);
         case 'sendPropose':
           expect(g, isA<W5SendPropose>(), reason: ctx);
+          if (e['routes'] != null) {
+            final got = [for (final r in (g as W5SendPropose).routes) r.handle];
+            expect(got, e['routes'], reason: '$ctx: propose route handles');
+          }
         case 'sendAck':
           expect(g, isA<W5SendAck>(), reason: ctx);
+          if (e['route'] != null) {
+            expect((g as W5SendAck).route.handle, e['route'],
+                reason: '$ctx: ack route handle');
+          }
         default:
           fail('$ctx: unknown expected kind $kind');
       }
