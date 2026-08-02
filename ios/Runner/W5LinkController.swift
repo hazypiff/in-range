@@ -29,6 +29,7 @@ final class W5LinkController {
     var controlChar: CBCharacteristic?
     var helloSent = false
     var established = false  // HELLO_ACK received → onControl fed
+    var dialedAt = Date()   // H-W5-3 TTL anchor
   }
   struct InLink {
     let central: CBCentral
@@ -272,7 +273,18 @@ final class W5LinkController {
 
   /// Outbound physical link died (didDisconnectPeripheral).
   func linkDown(_ peripheralID: UUID) {
-    guard outLinks.removeValue(forKey: peripheralID) != nil else { return }
+    guard let link = outLinks.removeValue(forKey: peripheralID) else { return }
+    // H-W5-3: a link that connected but died BEFORE HELLO_ACK was never
+    // mapped in ownership (onControl needs HELLO_ACK), so onLinkDown would
+    // no-op and its pendingDial would leak forever — the encounter can then
+    // never commit (maybeCommit bails on non-empty pendingDials) and never
+    // re-dials (onDiscovered returns [] while !inGrace). Route the
+    // unestablished case through onDialFailed, which clears the pending dial.
+    if !link.established {
+      apply(ownership.onDialFailed(linkId: link.linkIdHex))
+      sweepTimers()
+      return
+    }
     let handle = outHandle(peripheralID)
     let lease = leaseByHandle.removeValue(forKey: handle)
     apply(ownership.onLinkDown(handle: handle))
@@ -283,6 +295,24 @@ final class W5LinkController {
   private func closeOutboundLink(_ id: UUID) {
     outLinks.removeValue(forKey: id)
     bb.w5End(id)  // cancels the connection; didDisconnect → linkDown bookkeeping
+  }
+
+  /// H-W5-3 belt: a bounded TTL sweep for dials that neither established nor
+  /// disconnected (10s connect watchdog cancelled without dialFailed, a peer
+  /// with no CA6E). Called from the scan-restart cadence. Any outbound link
+  /// still un-established past the deadline is failed closed.
+  static let pendingDialTTL: TimeInterval = 20
+  func sweepStalePendingDials(now: Date) {
+    let stale = outLinks.filter {
+      !$0.value.established
+        && now.timeIntervalSince($0.value.dialedAt) > Self.pendingDialTTL
+    }
+    for (id, link) in stale {
+      outLinks.removeValue(forKey: id)
+      apply(ownership.onDialFailed(linkId: link.linkIdHex))
+      bb.logWake("w5c-pendingdial-ttl")
+    }
+    if !stale.isEmpty { sweepTimers() }
   }
 
   // MARK: - peripheral side (inbound links)

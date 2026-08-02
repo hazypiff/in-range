@@ -94,6 +94,27 @@ void main() {
     expect(a.activeLeases, 0);
   });
 
+  // H-W5-3 — a pending dial that never establishes must be reclaimable:
+  // onDialFailed clears it so the encounter erases and rediscovery re-dials
+  // (the leak was the ADAPTER routing an unestablished disconnect to
+  // onLinkDown, which no-ops; the oracle contract this relies on is here).
+  test('probe: unestablished pending dial is reclaimed via onDialFailed', () {
+    final a = W5Ownership();
+    expect(
+        a.onDiscovered(
+            alias: aliasB, wouldDial: true, candidateId: candA, linkId: 'L1'),
+        [const W5Dial('L1')]);
+    // Never established (no onControl). Dial-fail clears the pending dial and
+    // erases the link-less encounter.
+    expect(a.onDialFailed(linkId: 'L1'), [const W5Ended(candA)]);
+    expect(a.activeLeases, 0);
+    // Rediscovery re-dials — no permanent wedge.
+    expect(
+        a.onDiscovered(
+            alias: aliasB, wouldDial: true, candidateId: candA, linkId: 'L2'),
+        [const W5Dial('L2')]);
+  });
+
   // R7 probe 1 — proposals are encounterId-bound: a same-generation proposal
   // for a DIFFERENT encounter never collides into this one's gen space.
   test('probe: foreign-encounter proposal is inert at any generation', () {

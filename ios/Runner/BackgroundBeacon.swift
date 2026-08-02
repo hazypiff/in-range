@@ -462,6 +462,8 @@ final class BackgroundBeacon: NSObject {
   private func restartScanNow() {
     guard let cm = centralMgr, cm.state == .poweredOn, enabled else { return }
     lastScanRestart = Date()
+    // H-W5-3: piggyback the pending-dial TTL sweep on the scan cadence.
+    if w5LinksEnabled { w5Link.sweepStalePendingDials(now: Date()) }
     cm.stopScan()
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
       guard let self = self, self.enabled,
@@ -746,7 +748,26 @@ extension BackgroundBeacon: CBPeripheralManagerDelegate {
         if (svc.characteristics ?? []).contains(where: { $0.uuid == Self.tokenCharUUID }) {
           serviceAdded = true
         }
+        // H-W5-2: re-bind BOTH notify characteristic references from the
+        // restored service. They are created only inside the !serviceAdded
+        // branch of reconfigureAdvertising, so without this they stay nil for
+        // the process lifetime: the device keeps advertising and answering
+        // reads (looks healthy) while every notifyControl/keepalive notify
+        // silently drops — a HELLO gets .success and its HELLO_ACK vanishes,
+        // stalling both endpoints. Restoration is the NORMAL launch path.
+        for ch in (svc.characteristics ?? []) {
+          if let mutable = ch as? CBMutableCharacteristic {
+            if ch.uuid == Self.keepaliveCharUUID { keepaliveNotifyChar = mutable }
+            if ch.uuid == Self.controlCharUUID { controlNotifyChar = mutable }
+          }
+        }
       }
+    }
+    // If either notify reference could not be recovered, force a clean
+    // service rebuild rather than run half-mute.
+    if serviceAdded && (keepaliveNotifyChar == nil || controlNotifyChar == nil) {
+      logWake("restore-notify-rebuild")
+      serviceAdded = false
     }
     // W5 lease restoration: load persisted ownership so inbound subscriptions
     // that re-attach via didSubscribeTo are recognized instead of re-minted.
