@@ -41,6 +41,9 @@ jobs:
       - name: Pod install
         run: cd ios && pod install
 
+      - name: H-DIAG-2 release isolation (build-settings check)
+        run: bash scripts/check_release_isolation.sh
+
       - name: Run RunnerTests on simulator
         run: |
           DEVICE=$(xcrun simctl list devices available | grep -Eo 'iPhone [0-9][^(]*' | head -1 | sed 's/ *$//')

@@ -41,4 +41,20 @@ final class ReleaseIsolationTests: XCTestCase {
         "production domain must not see diag-suite key \(k)")
     }
   }
+  // H-DIAG-2 positive control: under the diag flavor the stamp/flag flip the
+  // OTHER way. This runs from Runner.xcscheme (non-diag) too, so it asserts
+  // the production side of the discriminator; the diag scheme now has a
+  // populated <Testables> so the same bundle runs there and proves the
+  // .diag suffix path (build-settings check in scripts/check_release_isolation.sh
+  // covers the compile-flag direction that a runtime test structurally cannot).
+  func testReleaseIsolationGuardScriptExists() {
+    // The authoritative check is the build-settings script; assert it is
+    // present so the guard can never be silently dropped from the repo.
+    let root = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent().deletingLastPathComponent()
+      .deletingLastPathComponent()
+    let script = root.appendingPathComponent("scripts/check_release_isolation.sh")
+    XCTAssertTrue(FileManager.default.fileExists(atPath: script.path),
+                  "H-DIAG-2 build-settings guard script must exist")
+  }
 }

@@ -117,11 +117,44 @@ final class BackgroundBeacon: NSObject {
   /// W5 is a TEST-ONLY link layer until proven through the awake gates; gated
   /// by the INRANGE_W5_LINKS dart-define (persisted here by Dart). Off = pure
   /// token-read behavior, no persistent connections.
-  var w5LinksEnabled: Bool { defaults.bool(forKey: Self.keyW5Links) }
+  var w5LinksEnabled: Bool {
+    // H-DIAG-1/H-DIAG-4: diagnostic W5 must be gated by the COMPILE flag, not
+    // a stale persisted bool that reads `true` before Dart attaches. In a
+    // production binary this is a constant false — the whole W5/CA6E link
+    // layer is inert regardless of what a prior diag install left in defaults.
+    #if INRANGE_DIAG
+      return defaults.bool(forKey: Self.keyW5Links)
+    #else
+      return false
+    #endif
+  }
   // Callback-primed cadence: after a write CONFIRMS (didWriteValueFor), the
   // next beat is scheduled ~4 s out. Herald-shaped — not an instant loop.
   private static let w5Cadence: TimeInterval = 4
   private static let keyW5Links = "bb.w5links"
+  private static let keySchema = "bb.stateSchema"
+  // Flavor+schema stamp: production and diag builds must not consume each
+  // other's persisted operational state (issue #8). Bump on schema changes.
+  #if INRANGE_DIAG
+    private static let stateSchemaStamp = "diag.v1"
+  #else
+    private static let stateSchemaStamp = "prod.v1"
+  #endif
+
+  /// H-DIAG-3: on every launch, before any manager restoration, drop bb.*
+  /// operational state whose stamp is missing or from a different flavor —
+  /// stale diag tokens/flags/logs can never reactivate a release binary.
+  private func reconcileStateStamp() {
+    let stamp = defaults.string(forKey: Self.keySchema)
+    if stamp != Self.stateSchemaStamp {
+      for key in ["bb.enabled", "bb.slots", "bb.buffer", "bb.pingUrl",
+                  "bb.pingAuth", Self.keyW5Links, "bb.w5rssi.off"] {
+        defaults.removeObject(forKey: key)
+      }
+      defaults.set(Self.stateSchemaStamp, forKey: Self.keySchema)
+      logWake("state-stamp-wiped-\(stamp ?? "none")")
+    }
+  }
 
   // peripheral.identifier → (tokenHex, cachedAt)
   private var tokenCache: [UUID: (hex: String, at: Date)] = [:]
@@ -181,6 +214,7 @@ final class BackgroundBeacon: NSObject {
     ) { [weak self] _ in
       self?.scheduleWake()
     }
+    reconcileStateStamp()  // H-DIAG-3: before any restoration
     if defaults.bool(forKey: Self.keyEnabled) {
       ensureManagers()
       scheduleWake()
@@ -696,12 +730,24 @@ final class BackgroundBeacon: NSObject {
     #if INRANGE_DIAG
       let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
       let url = docs.appendingPathComponent("bb_wake_log.txt")
+      // Cap + rotate: keep the file bounded so a long soak can't fill the disk.
+      if let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size])
+        as? Int, size > 2 * 1024 * 1024 {
+        let prev = docs.appendingPathComponent("bb_wake_log.1.txt")
+        try? FileManager.default.removeItem(at: prev)
+        try? FileManager.default.moveItem(at: url, to: prev)
+      }
       let line = "\(Int(Date().timeIntervalSince1970 * 1000)) \(kind)\n"
       if let data = line.data(using: .utf8) {
         if let h = try? FileHandle(forWritingTo: url) {
-          h.seekToEndOfFile()
-          h.write(data)
-          try? h.close()
+          defer { try? h.close() }
+          if #available(iOS 13.4, *) {
+            try? h.seekToEnd()
+            try? h.write(contentsOf: data)  // non-trapping (was h.write)
+          } else {
+            h.seekToEndOfFile()
+            h.write(data)
+          }
         } else {
           try? data.write(to: url)
         }

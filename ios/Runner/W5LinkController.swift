@@ -791,13 +791,26 @@ final class W5LinkController {
     }
     let line = "{\"token\":\"\(tokenHex)\",\"rssi\":\(rssi),\"ts\":\(ts)}\n"
     guard let data = line.data(using: .utf8) else { return }
-    let url = rssiFileURL
+    var url = rssiFileURL
     if let h = try? FileHandle(forWritingTo: url) {
-      h.seekToEndOfFile()
-      h.write(data)
-      try? h.close()
+      defer { try? h.close() }
+      if #available(iOS 13.4, *) {
+        do {
+          try h.seekToEnd()
+          try h.write(contentsOf: data)  // non-trapping (was h.write → ENOSPC crash)
+        } catch {
+          return  // a full disk drops the sample, never crashes the BLE process
+        }
+      } else {
+        h.seekToEndOfFile()
+        h.write(data)
+      }
     } else {
-      try? data.write(to: url)
+      // First write: create with data protection + exclude from backup.
+      try? data.write(to: url, options: .completeFileProtectionUnlessOpen)
+      var res = URLResourceValues()
+      res.isExcludedFromBackup = true
+      try? url.setResourceValues(res)
     }
     trimRssiFileIfNeeded()
   }
