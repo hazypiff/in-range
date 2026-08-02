@@ -49,6 +49,7 @@ final class W5LinkController {
   private var prevAliasTimers: [String: Timer] = [:]
   /// Control notifies refused by the queue; flushed from isReady.
   private var pendingControl: [(Data, CBCentral)] = []
+  private var persistTimer: Timer?
   private var lastAdvertisedToken: String?
   private var myPrevTokenHex: String?
   /// R7 ratification hardening: HELLO carries prevAlias only during the
@@ -59,6 +60,10 @@ final class W5LinkController {
   static let retransmit: TimeInterval = 8
   private static let rssiFileCap = 4 * 1024 * 1024  // trim threshold
   private static let keyRssiOffset = "bb.w5rssi.off"
+  // #8 isolation: all W5 persistence lands in BackgroundBeacon.operationalDefaults(),
+  // never UserDefaults.standard directly.
+  private static let keyW5Snapshot = "bb.w5.snapshot"
+  private static let aliasTTL: TimeInterval = 15 * 60  // mirrors tokenCacheTTL
 
   init(bb: BackgroundBeacon) { self.bb = bb }
 
@@ -138,8 +143,13 @@ final class W5LinkController {
     _ peripheral: CBPeripheral, peerToken: String, controlChar: CBCharacteristic?
   ) {
     let id = peripheral.identifier
-    if outLinks[id] != nil {
-      if let cc = controlChar, outLinks[id]?.controlChar == nil {
+    if var existing = outLinks[id] {
+      // Restoration path: a restored peripheral is pre-registered with the
+      // persisted linkId/candidate so we never mint a fresh id for a live/grace
+      // encounter. Just wire up the control characteristic if we found it.
+      if let cc = controlChar, existing.controlChar == nil {
+        existing.controlChar = cc
+        outLinks[id] = existing
         controlCharFound(peripheral, cc)
       }
       return
@@ -476,6 +486,7 @@ final class W5LinkController {
         endedCleanup(leaseId)
       }
     }
+    requestPersist()
   }
 
   private func uuidOf(_ handle: String) -> UUID? {
@@ -539,6 +550,98 @@ final class W5LinkController {
     let sent = bb.peripheralMgr?.updateValue(frame, for: ch, onSubscribedCentrals: [central])
       ?? false
     if !sent { pendingControl.append((frame, central)) }
+  }
+
+  // MARK: - persistence / restoration
+
+  /// Persist on every ownership state change. Debounced: rapid effect batches
+  /// coalesce into one cheap JSON write to operationalDefaults (#8 isolation).
+  private func requestPersist() {
+    guard bb.w5LinksEnabled else { return }
+    persistTimer?.invalidate()
+    persistTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: false) {
+      [weak self] _ in self?.persistNow()
+    }
+  }
+
+  private func persistNow() {
+    let snapshot = ownership.snapshot()
+    var linkMeta: [String: [String: Any]] = [:]
+    for (id, link) in outLinks {
+      linkMeta[outHandle(id)] = [
+        "linkIdHex": link.linkIdHex,
+        "myCandidateHex": link.myCandidateHex,
+        "peerAliasHex": link.peerAliasHex,
+        "helloSent": link.helloSent,
+        "established": link.established,
+      ]
+    }
+    for (key, link) in inLinks {
+      linkMeta[inHandle(key)] = [
+        "linkIdHex": link.linkIdHex ?? "",
+        "myCandidateHex": link.myCandidateHex ?? "",
+        "peerAliasHex": link.peerAliasHex ?? "",
+        "established": link.established,
+      ]
+    }
+    let payload: [String: Any] = [
+      "snapshot": snapshot.base64EncodedString(),
+      "linkMeta": linkMeta,
+      "candidateByAlias": candidateByAlias,
+    ]
+    bb.defaults.set(payload, forKey: Self.keyW5Snapshot)
+  }
+
+  private func clearPersistedState() {
+    bb.defaults.removeObject(forKey: Self.keyW5Snapshot)
+  }
+
+  /// Load persisted ownership + link metadata. Called from BackgroundBeacon's
+  /// willRestoreState flows. Re-populates outLinks so restored CB peripherals
+  /// are re-bound without minting fresh ids. Inbound subscriptions re-attach
+  /// through the normal controlSubscribed/controlWrite path once the restored
+  /// CBCentral subscribes again.
+  func restoreFromPersistence(restoredPeripherals: [CBPeripheral] = []) {
+    guard bb.w5LinksEnabled else { return }
+    guard let payload = bb.defaults.dictionary(forKey: Self.keyW5Snapshot) as? [String: Any],
+      let snapB64 = payload["snapshot"] as? String,
+      let snapData = Data(base64Encoded: snapB64)
+    else { return }
+    let linkMeta = payload["linkMeta"] as? [String: [String: Any]] ?? [:]
+    candidateByAlias = payload["candidateByAlias"] as? [String: String] ?? [:]
+
+    let restored = ownership.restore(
+      from: snapData,
+      reconnectGrace: Self.reconnectGrace,
+      aliasTTL: Self.aliasTTL)
+    guard restored else {
+      clearPersistedState()
+      return
+    }
+
+    // Rebuild leaseByHandle from the restored ownership bijection.
+    leaseByHandle.removeAll()
+    for (handle, leaseId) in ownership.handleToLease {
+      leaseByHandle[handle] = leaseId
+    }
+
+    // Re-bind restored outbound peripherals using the persisted linkIds and
+    // candidates — no fresh mint for a live/grace encounter.
+    for p in restoredPeripherals {
+      let handle = outHandle(p.identifier)
+      guard let meta = linkMeta[handle],
+        let linkIdHex = meta["linkIdHex"] as? String, !linkIdHex.isEmpty,
+        let myCandidateHex = meta["myCandidateHex"] as? String, !myCandidateHex.isEmpty,
+        let peerAliasHex = meta["peerAliasHex"] as? String, !peerAliasHex.isEmpty
+      else { continue }
+      outLinks[p.identifier] = OutLink(
+        linkIdHex: linkIdHex,
+        myCandidateHex: myCandidateHex,
+        peerAliasHex: peerAliasHex,
+        controlChar: nil,
+        helloSent: (meta["helloSent"] as? Bool) ?? false,
+        established: (meta["established"] as? Bool) ?? false)
+    }
   }
 
   /// Called from peripheralManagerIsReady — retry refused control notifies.
@@ -614,6 +717,8 @@ final class W5LinkController {
     for t in retryTimers.values { t.invalidate() }
     for t in graceTimers.values { t.invalidate() }
     for t in prevAliasTimers.values { t.invalidate() }
+    persistTimer?.invalidate()
+    persistTimer = nil
     retryTimers.removeAll()
     graceTimers.removeAll()
     prevAliasTimers.removeAll()
@@ -622,6 +727,7 @@ final class W5LinkController {
     leaseByHandle.removeAll()
     candidateByAlias.removeAll()
     pendingControl.removeAll()
+    clearPersistedState()
   }
 
   // MARK: - W5 RSSI persistence (file-backed; survives suspension + cap)

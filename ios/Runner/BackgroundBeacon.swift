@@ -748,6 +748,9 @@ extension BackgroundBeacon: CBPeripheralManagerDelegate {
         }
       }
     }
+    // W5 lease restoration: load persisted ownership so inbound subscriptions
+    // that re-attach via didSubscribeTo are recognized instead of re-minted.
+    if w5LinksEnabled { w5Link.restoreFromPersistence() }
   }
 
   func peripheralManagerDidStartAdvertising(
@@ -891,20 +894,26 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
     // preserved point: a restored CONNECTED peripheral picks its token read
     // back up (the whole reason we connected), and a CONNECTING one is kept
     // strongly so its didConnect/didFail has somewhere to land.
+    var restoredPeripherals: [CBPeripheral] = []
     if let peripherals = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral] {
       for p in peripherals {
         p.delegate = self
         switch p.state {
         case .connected:
           inflight[p.identifier] = p
+          restoredPeripherals.append(p)
           resumeTokenRead(on: p)
         case .connecting:
           inflight[p.identifier] = p
+          restoredPeripherals.append(p)
         default:
           break
         }
       }
     }
+    // W5 lease restoration: rebuild ownership from persisted state and re-bind
+    // restored outbound peripherals so a relaunch does not re-mint ids.
+    if w5LinksEnabled { w5Link.restoreFromPersistence(restoredPeripherals: restoredPeripherals) }
     if enabled {
       ensureScanning()
     }

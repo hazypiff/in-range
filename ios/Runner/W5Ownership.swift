@@ -117,11 +117,21 @@ private final class W5Enc {
   var inGrace = false
   var aliasCurrent: String
   var aliasPrevious: String?
+  // Persistence timestamps: refreshedAt is the last moment this encounter was
+  // known live (used for alias-TTL expiry); graceStartedAt is set when the
+  // keeper drops and we enter the reconnect window (used for grace expiry).
+  var refreshedAt: TimeInterval
+  var graceStartedAt: TimeInterval?
 
   init(_ leaseId: String, _ aliasCurrent: String, _ myCandidate: String) {
     self.leaseId = leaseId
     self.aliasCurrent = aliasCurrent
     self.myCandidate = myCandidate
+    self.refreshedAt = Date().timeIntervalSince1970
+  }
+
+  fileprivate func touch() {
+    refreshedAt = Date().timeIntervalSince1970
   }
 
   func contenders() -> [W5Contender] {
@@ -161,6 +171,52 @@ private final class W5Enc {
   }
 }
 
+// MARK: - persistence schema (design §Restoration / persistence)
+
+private struct W5OwnershipSnapshot: Codable {
+  let version: Int
+  let encounters: [W5EncounterSnapshot]
+  let aliasTo: [String: String]
+  let handleTo: [String: String]
+  let linkIdToLease: [String: String]
+  let dialInFlight: [String: String]
+}
+
+private struct W5EncounterSnapshot: Codable {
+  let leaseId: String
+  let myCandidate: String
+  let aliasCurrent: String
+  let aliasPrevious: String?
+  let links: [W5LinkSnapshot]
+  let pendingDials: [String]
+  let viewGen: Int
+  let peerProposal: W5ProposalSnapshot?
+  let peerViewGen: Int?
+  let peerAckedMine: Bool
+  let committed: Bool
+  let inGrace: Bool
+  let refreshedAt: TimeInterval
+  let graceStartedAt: TimeInterval?
+}
+
+private struct W5LinkSnapshot: Codable {
+  let handle: String
+  let role: String
+  let centralCand: String
+  let linkId: String
+}
+
+private struct W5ProposalSnapshot: Codable {
+  let encounterId: String
+  let viewGen: Int
+  let contenders: [W5ContenderSnapshot]
+}
+
+private struct W5ContenderSnapshot: Codable {
+  let central: String
+  let linkId: String
+}
+
 final class W5Ownership {
   private var enc: [String: W5Enc] = [:]
   private var aliasTo: [String: String] = [:]
@@ -186,9 +242,133 @@ final class W5Ownership {
   func isCommitted(_ leaseId: String) -> Bool { enc[leaseId]?.committed ?? false }
   func leaseForAlias(_ alias: String) -> String? { aliasTo[alias] }
 
+  /// Endpoint-global handle → leaseId bijection (read-only for restore adapters).
+  var handleToLease: [String: String] { handleTo }
+
   func currentProposal(_ leaseId: String) -> W5Proposal? {
     guard let e = enc[leaseId] else { return nil }
     return W5Proposal(encounterId: e.leaseId, viewGen: e.viewGen, contenders: e.contenders())
+  }
+
+  // MARK: - persistence
+
+  /// JSON export of all live/grace encounters and the endpoint-global maps.
+  /// The snapshot captures the raw timestamps needed to decide staleness on
+  /// restore; expiry constants live in the adapter (W5LinkController).
+  func snapshot() -> Data {
+    let encounters = enc.values.sorted { w5Cmp($0.leaseId, $1.leaseId) < 0 }.map { e in
+      W5EncounterSnapshot(
+        leaseId: e.leaseId,
+        myCandidate: e.myCandidate,
+        aliasCurrent: e.aliasCurrent,
+        aliasPrevious: e.aliasPrevious,
+        links: e.links.sorted { w5Cmp($0.key, $1.key) < 0 }.map { (handle, v) in
+          W5LinkSnapshot(
+            handle: handle,
+            role: v.role == .outbound ? "outbound" : "inbound",
+            centralCand: v.centralCand,
+            linkId: v.linkId)
+        },
+        pendingDials: Array(e.pendingDials).sorted { w5Cmp($0, $1) < 0 },
+        viewGen: e.viewGen,
+        peerProposal: e.peerProposal.map {
+          W5ProposalSnapshot(
+            encounterId: $0.encounterId,
+            viewGen: $0.viewGen,
+            contenders: $0.contenders.map {
+              W5ContenderSnapshot(central: $0.central, linkId: $0.linkId)
+            })
+        },
+        peerViewGen: e.peerViewGen,
+        peerAckedMine: e.peerAckedMine,
+        committed: e.committed,
+        inGrace: e.inGrace,
+        refreshedAt: e.refreshedAt,
+        graceStartedAt: e.graceStartedAt)
+    }
+    let snap = W5OwnershipSnapshot(
+      version: 1,
+      encounters: encounters,
+      aliasTo: aliasTo,
+      handleTo: handleTo,
+      linkIdToLease: linkIdToLease,
+      dialInFlight: dialInFlight)
+    return (try? JSONEncoder().encode(snap)) ?? Data()
+  }
+
+  /// Rebuild ownership from a persisted snapshot. Drops stale encounters
+  /// (grace-expired or alias-TTL-expired). Returns true if any state was
+  /// restored. Never mints fresh ids: every restored linkId, candidate, and
+  /// leaseId is taken verbatim from the snapshot.
+  @discardableResult
+  func restore(
+    from data: Data,
+    reconnectGrace: TimeInterval,
+    aliasTTL: TimeInterval,
+    now: TimeInterval = Date().timeIntervalSince1970
+  ) -> Bool {
+    guard let snap = try? JSONDecoder().decode(W5OwnershipSnapshot.self, from: data),
+      snap.version == 1
+    else { return false }
+
+    var restoredEnc: [String: W5Enc] = [:]
+    var restoredAliasTo: [String: String] = [:]
+    var restoredHandleTo: [String: String] = [:]
+    var restoredLinkIdToLease: [String: String] = [:]
+    var restoredDialInFlight: [String: String] = [:]
+
+    for s in snap.encounters.sorted(by: { w5Cmp($0.leaseId, $1.leaseId) < 0 }) {
+      let deadline: TimeInterval
+      if s.inGrace, let gs = s.graceStartedAt {
+        deadline = gs + reconnectGrace
+      } else {
+        deadline = s.refreshedAt + aliasTTL
+      }
+      guard now < deadline else { continue } // stale: drop silently
+
+      let e = W5Enc(s.leaseId, s.aliasCurrent, s.myCandidate)
+      e.aliasPrevious = s.aliasPrevious
+      e.viewGen = s.viewGen
+      e.peerAckedMine = s.peerAckedMine
+      e.committed = s.committed
+      e.inGrace = s.inGrace
+      e.refreshedAt = s.refreshedAt
+      e.graceStartedAt = s.graceStartedAt
+      e.pendingDials = Set(s.pendingDials)
+      for l in s.links {
+        let role: W5Role = l.role == "outbound" ? .outbound : .inbound
+        e.links[l.handle] = (role: role, centralCand: l.centralCand, linkId: l.linkId)
+        e.linkIdToHandle[l.linkId] = l.handle
+      }
+      if let pp = s.peerProposal {
+        e.peerProposal = W5Proposal(
+          encounterId: pp.encounterId,
+          viewGen: pp.viewGen,
+          contenders: pp.contenders.map {
+            W5Contender(central: $0.central, linkId: $0.linkId)
+          })
+        e.peerViewGen = s.peerViewGen
+      }
+      restoredEnc[s.leaseId] = e
+
+      for l in s.links {
+        restoredHandleTo[l.handle] = s.leaseId
+        restoredLinkIdToLease[l.linkId] = s.leaseId
+      }
+      for alias in [s.aliasCurrent, s.aliasPrevious].compactMap({ $0 }) {
+        restoredAliasTo[alias] = s.leaseId
+      }
+      for (linkId, leaseId) in snap.dialInFlight where leaseId == s.leaseId {
+        restoredDialInFlight[linkId] = leaseId
+      }
+    }
+
+    enc = restoredEnc
+    aliasTo = restoredAliasTo
+    handleTo = restoredHandleTo
+    linkIdToLease = restoredLinkIdToLease
+    dialInFlight = restoredDialInFlight
+    return !enc.isEmpty
   }
 
   // MARK: - events
@@ -210,6 +390,7 @@ final class W5Ownership {
       aliasTo[alias] = e.leaseId  // rediscovery alias joins the lease
       e.pendingDials.insert(linkId)
       bumpView(e)
+      e.touch()
       if e.viewGen > kW5U32Max { return saturate(e) }
       dialInFlight[linkId] = e.leaseId
     } else {
@@ -249,6 +430,7 @@ final class W5Ownership {
 
     if let ec = e, ec.committed {
       bindAlias(ec, peerAlias)
+      ec.touch()
       let w = ec.winner()
       if let w, w.linkId == linkId, w.handle == handle {
         return [.owns(handle: handle)]
@@ -270,6 +452,7 @@ final class W5Ownership {
         map(ec, handle, role,
             role == .outbound ? myCandidate : peerCandidate, linkId)
         bumpView(ec)
+        ec.touch()
         if ec.viewGen > kW5U32Max { return saturate(ec) }
         return [propose(ec), closeLoser(handle, role)]
       }
@@ -299,6 +482,7 @@ final class W5Ownership {
       return [closeLoser(handle, role)]
     }
     ec.inGrace = false
+    ec.graceStartedAt = nil
     bindAlias(ec, peerAlias)
     map(ec, handle, role,
         role == .outbound ? myCandidate : peerCandidate, linkId)
@@ -307,6 +491,7 @@ final class W5Ownership {
       dialInFlight.removeValue(forKey: linkId)
     }
     bumpView(ec)
+    ec.touch()
     if ec.viewGen > kW5U32Max {
       return saturate(ec) // generation overflow → teardown
     }
@@ -337,6 +522,7 @@ final class W5Ownership {
     }
     e.peerViewGen = proposal.viewGen
     e.peerProposal = proposal
+    e.touch()
     var fx: [W5Effect] = []
     if proposal.contenders == e.contenders() {
       let r: W5Route
@@ -360,6 +546,7 @@ final class W5Ownership {
     else { return [] }
     if ack.ackViewGen == e.viewGen && ack.viewHash == e.viewHash {
       e.peerAckedMine = true
+      e.touch()
     }
     return maybeCommit(e)
   }
@@ -379,12 +566,14 @@ final class W5Ownership {
     if let twoAgo, twoAgo != e.aliasCurrent, twoAgo != e.aliasPrevious {
       aliasTo.removeValue(forKey: twoAgo)
     }
+    e.touch()
   }
 
   func onPrevAliasExpiry(leaseId: String) {
     guard let e = enc[leaseId], let prev = e.aliasPrevious else { return }
     aliasTo.removeValue(forKey: prev)
     e.aliasPrevious = nil
+    e.touch()
   }
 
   func onLinkDown(handle: String) -> [W5Effect] {
@@ -399,8 +588,10 @@ final class W5Ownership {
     if wasWinner {
       e.committed = false
       e.inGrace = true
+      e.graceStartedAt = Date().timeIntervalSince1970
     }
     bumpView(e)
+    e.touch()
     if e.viewGen > kW5U32Max { return saturate(e) }
     return []
   }
@@ -417,12 +608,14 @@ final class W5Ownership {
     else { return [] }
     e.pendingDials.remove(linkId)
     bumpView(e)
+    e.touch()
     if e.viewGen > kW5U32Max { return saturate(e) }
     if e.links.isEmpty && !e.committed && !e.inGrace {
       erase(leaseId)
       return [.ended(leaseId: leaseId)]
     }
     e.inGrace = true
+    e.graceStartedAt = Date().timeIntervalSince1970
     return []
   }
 
@@ -520,6 +713,7 @@ final class W5Ownership {
     else { return [] }
     if !e.peerAckedMine { return [] }
     e.committed = true
+    e.touch()
     let w = e.winner()!
     var fx: [W5Effect] = [.owns(handle: w.handle)]
     for (handle, v) in e.links.sorted(by: { w5Cmp($0.key, $1.key) < 0 })
@@ -551,6 +745,7 @@ final class W5Ownership {
     e.peerProposal = nil // peer proposals were bound to the old encounterId
     e.peerViewGen = nil
     e.peerAckedMine = false
+    e.touch()
     enc[newId] = e
     return true
   }
