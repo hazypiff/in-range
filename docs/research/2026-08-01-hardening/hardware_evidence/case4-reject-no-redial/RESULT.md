@@ -1,4 +1,23 @@
-# Case 4 — rejection prevents redial (H-W5-6) — 2026-08-03
+# Case 4 — current mapped lease torn down on pass (H-W5-6) — 2026-08-03
+
+RECLASSIFIED per Linux panel (MAC_HARDWARE_PANEL_WORK_ORDER_2026-08-03, Phase 1):
+this is NOT a durable no-redial guarantee. It proves the CURRENT MAPPED local
+radio lease is torn down on pass; a later onDiscovered can re-establish, and the
+5-min retry floor + lower-token-initiator rule confound a short no-redial
+interval. A real bug was also found and fixed (see below).
+
+## BUG FOUND + FIXED (Dart): server card fed encounter_id to alias-keyed dropPeer
+
+swipe_feed._doPass passed SwipeCard.id to native dropPeer. For SERVER cards id
+is encounter_id (not a radio token) → native lookup MISS → no teardown, silently.
+The original Case-4 run used a LOCAL card (token==alias) so it worked, but the
+"rejection prevents redial" claim was over-generalized. Fixed: SwipeCard gains a
+separate evidence-backed `radioAlias` (local=token, server=null); _doPass calls
+dropPeer ONLY with a non-null alias; server-only cards report teardown
+unavailable honestly. Dart contract test: test/features/encounters/
+swipe_card_alias_test.dart (server-id-never-an-alias, local-alias-carried).
+
+## Original local-card evidence (still valid for the NARROW contract)
 
 Build: 53ed423 (diag, INRANGE_W5_LINKS=true). Fleet: A=iPhone14, B=iPhone13
 (C=Pro Max beacon OFF → A has exactly one peer, so any post-reject w5-start = a

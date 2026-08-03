@@ -113,10 +113,16 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
             otherUserId: c.otherUserId,
             range: c.rangeType,
           );
-      // W5 owner rule: a pass resolves the pair — drop its live radio
-      // session right now. (Undo doesn't resurrect it; the next natural
-      // contact re-establishes if they're still near.)
-      ref.read(beaconServiceProvider).dropPeer(c.id);
+      // W5 owner rule: a pass tears down the currently MAPPED radio lease —
+      // but only via an evidence-backed radio alias, NEVER the dismissal id
+      // (which is encounter_id for server cards; H-W5-6 fix). No alias
+      // (server-only card) → teardown is unavailable, and we do not pretend
+      // it happened. This is "current mapped lease torn down on pass", not a
+      // durable no-redial guarantee (a later onDiscovered can re-establish).
+      final alias = c.radioAlias;
+      if (alias != null) {
+        ref.read(beaconServiceProvider).dropPeer(alias);
+      }
       await _showUndo();
       return true;
     } catch (e) {

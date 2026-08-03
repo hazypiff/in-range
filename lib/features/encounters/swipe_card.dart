@@ -10,6 +10,7 @@ class SwipeCard {
     required this.neighborhood,
     required this.rangeType,
     required this.isServer,
+    this.radioAlias,
     this.photoUrls = const [],
     this.otherUserId,
     this.encounterTime,
@@ -21,8 +22,17 @@ class SwipeCard {
     this.firstSeenAt,
   });
 
-  /// Dismiss / swipe key: server encounter_id as string, or local corr-id.
+  /// Dismiss / swipe key ONLY — server `encounter_id` as string, or local
+  /// corr-id. Two different identifier DOMAINS: never hand this to an
+  /// alias-keyed native API (H-W5-6 fix).
   final String id;
+
+  /// Evidence-backed CURRENT radio token/alias, or null when none can be
+  /// supplied safely. Local cards carry their correlation token here; server
+  /// feed rows carry no rotating radio token, so it is null → W5 lease
+  /// teardown is UNAVAILABLE for server-only cards (do not fabricate one from
+  /// `encounter_id`). This is the only value that may reach native `dropPeer`.
+  final String? radioAlias;
   final String displayLabel;
   final String neighborhood;
   final String rangeType;
@@ -85,14 +95,12 @@ class SwipeCard {
   factory SwipeCard.fromServer(Map<String, dynamic> row) {
     final encId = row['encounter_id'];
     final id = encId?.toString() ?? '';
-    final photos = (row['photo_urls'] as List?)
-            ?.map((e) => e.toString())
-            .toList() ??
-        const <String>[];
+    final photos =
+        (row['photo_urls'] as List?)?.map((e) => e.toString()).toList() ??
+            const <String>[];
     final rt = row['range_type']?.toString() ?? 'feet_10';
     final et = DateTime.tryParse(row['encounter_time']?.toString() ?? '');
-    final lastSeen =
-        DateTime.tryParse(row['last_seen_at']?.toString() ?? '');
+    final lastSeen = DateTime.tryParse(row['last_seen_at']?.toString() ?? '');
     DateTime? exp;
     if (rt.startsWith('feet')) {
       // 24h lifetime runs from LAST seen, not first meeting — a peer seen again
@@ -102,6 +110,9 @@ class SwipeCard {
     }
     return SwipeCard(
       id: id,
+      // Server feed rows are keyed by encounter_id and carry no rotating radio
+      // token, so no evidence-backed alias exists → teardown unavailable.
+      radioAlias: null,
       displayLabel: 'Someone nearby',
       neighborhood: row['neighborhood']?.toString() ?? 'Nearby',
       rangeType: rt,
@@ -119,11 +130,12 @@ class SwipeCard {
   factory SwipeCard.fromLocal(LocalEncounter e) {
     return SwipeCard(
       id: e.correlationId,
+      // Local correlation id IS the current radio token → valid alias.
+      radioAlias: e.correlationId,
       displayLabel: 'Someone nearby',
       neighborhood: e.neighborhoodLabel,
-      rangeType: e.rangeType.startsWith('feet')
-          ? e.estimatedFeetBand
-          : e.rangeType,
+      rangeType:
+          e.rangeType.startsWith('feet') ? e.estimatedFeetBand : e.rangeType,
       isServer: false,
       photoUrls: const [],
       encounterTime: e.firstSeenAt,
