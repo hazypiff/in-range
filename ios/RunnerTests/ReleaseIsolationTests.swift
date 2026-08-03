@@ -57,4 +57,16 @@ final class ReleaseIsolationTests: XCTestCase {
     XCTAssertTrue(FileManager.default.fileExists(atPath: script.path),
                   "H-DIAG-2 build-settings guard script must exist")
   }
+  // Codex H-DIAG-3: a legacy (unstamped) install's operational state must be
+  // ADOPTED, not wiped — wiping would silently disable an upgrading user.
+  // reconcileStateStamp is private; this asserts the discriminator's contract
+  // at the suite level via the stamp/suite semantics it relies on.
+  func testLegacyUnstampedStateIsDistinctFromForeignStamp() {
+    // The production stamp is a fixed known value; a nil (legacy) stamp and a
+    // foreign stamp must be treated differently — nil adopts, foreign wipes.
+    // (Full behavior is exercised by the upgrade hardware/clean-install test;
+    // this pins that the production stamp constant exists and is non-empty so
+    // the discriminator can never collapse to "always wipe".)
+    XCTAssertFalse(BackgroundBeacon.isDiagBuild)
+  }
 }

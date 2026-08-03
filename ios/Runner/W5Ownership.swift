@@ -592,7 +592,8 @@ final class W5Ownership {
     guard let id = handleTo.removeValue(forKey: handle), let e = enc[id] else {
       return []
     }
-    let wasWinner = e.winner()?.handle == handle
+    // D1 (panel): committed keeper identity is the stored winner (H-W5-1).
+    let wasWinner = (e.committed ? e.committedWinner?.handle : e.winner()?.handle) == handle
     if let link = e.links.removeValue(forKey: handle) {
       e.linkIdToHandle.removeValue(forKey: link.linkId)
       linkIdToLease.removeValue(forKey: link.linkId)

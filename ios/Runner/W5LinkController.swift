@@ -406,7 +406,8 @@ final class W5LinkController {
   /// live outbound peripheral carrying that token.
   func dropPeer(alias: String) {
     guard let lease = ownership.leaseForAlias(alias) else {
-      // No lease yet (dropped mid-handshake): still cancel any raw session.
+      // No lease yet (dropped mid-handshake): nothing to erase here; the raw
+      // CA5E/token session is reaped by BackgroundBeacon.dropPeerByToken.
       return
     }
     // onTeardown emits closes for each live link; apply() routes them.
@@ -820,8 +821,12 @@ final class W5LinkController {
           return  // a full disk drops the sample, never crashes the BLE process
         }
       } else {
-        h.seekToEndOfFile()
-        h.write(data)
+        // iOS 13.0–13.3: no non-trapping FileHandle API. Read-append-write
+        // via Data.write (throwing) so ENOSPC drops the line, never crashes
+        // the BLE process (Codex log-write finding).
+        try? h.close()
+        let existing = (try? Data(contentsOf: url)) ?? Data()
+        try? (existing + data).write(to: url, options: .atomic)
       }
     } else {
       // First write: create with data protection + exclude from backup.

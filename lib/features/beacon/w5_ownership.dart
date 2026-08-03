@@ -476,7 +476,10 @@ class W5Ownership {
     if (id == null) return const [];
     final e = _enc[id];
     if (e == null) return const [];
-    final wasWinner = e.winner()?.$2 == handle;
+    // D1 (panel): the committed keeper's identity is the STORED winner, never
+    // recomputed from the mutable link map (H-W5-1 intent).
+    final wasWinner =
+        (e.committed ? e.committedWinner?.$2 : e.winner()?.$2) == handle;
     final link = e.links.remove(handle);
     if (link != null) {
       e.linkIdToHandle.remove(link.$3);

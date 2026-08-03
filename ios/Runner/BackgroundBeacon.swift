@@ -146,14 +146,22 @@ final class BackgroundBeacon: NSObject {
   /// stale diag tokens/flags/logs can never reactivate a release binary.
   private func reconcileStateStamp() {
     let stamp = defaults.string(forKey: Self.keySchema)
-    if stamp != Self.stateSchemaStamp {
-      for key in ["bb.enabled", "bb.slots", "bb.buffer", "bb.pingUrl",
-                  "bb.pingAuth", Self.keyW5Links, "bb.w5rssi.off"] {
-        defaults.removeObject(forKey: key)
-      }
+    if stamp == Self.stateSchemaStamp { return }
+    if stamp == nil {
+      // Legacy install predating the stamp: this is legitimate same-flavor
+      // state (an existing production user upgrading). Adopt it — wiping here
+      // would silently disable a real user's beacon (Codex H-DIAG-3).
       defaults.set(Self.stateSchemaStamp, forKey: Self.keySchema)
-      logWake("state-stamp-wiped-\(stamp ?? "none")")
+      logWake("state-stamp-adopted-legacy")
+      return
     }
+    // A DIFFERENT non-nil stamp = genuine cross-flavor collision: wipe.
+    for key in ["bb.enabled", "bb.slots", "bb.buffer", "bb.pingUrl",
+                "bb.pingAuth", Self.keyW5Links, "bb.w5rssi.off"] {
+      defaults.removeObject(forKey: key)
+    }
+    defaults.set(Self.stateSchemaStamp, forKey: Self.keySchema)
+    logWake("state-stamp-wiped-\(stamp!)")
   }
 
   // peripheral.identifier → (tokenHex, cachedAt)
@@ -745,8 +753,11 @@ final class BackgroundBeacon: NSObject {
             try? h.seekToEnd()
             try? h.write(contentsOf: data)  // non-trapping (was h.write)
           } else {
-            h.seekToEndOfFile()
-            h.write(data)
+            // iOS 13.0–13.3: no non-trapping FileHandle API — read-append-write
+            // via Data.write so ENOSPC drops the line, never crashes (Codex).
+            try? h.close()
+            let existing = (try? Data(contentsOf: url)) ?? Data()
+            try? (existing + data).write(to: url, options: .atomic)
           }
         } else {
           try? data.write(to: url)
@@ -810,9 +821,16 @@ extension BackgroundBeacon: CBPeripheralManagerDelegate {
       }
     }
     // If either notify reference could not be recovered, force a clean
-    // service rebuild rather than run half-mute.
+    // service rebuild: REMOVE the restored service first (Codex H-W5-2 — a
+    // bare serviceAdded=false leaves the live service registered, so
+    // reconfigureAdvertising adds a second one and binds the refs to an
+    // unregistered replacement while the restored service stays mute). Clear
+    // both refs so reconfigureAdvertising rebuilds from scratch.
     if serviceAdded && (keepaliveNotifyChar == nil || controlNotifyChar == nil) {
       logWake("restore-notify-rebuild")
+      peripheral.removeAllServices()
+      keepaliveNotifyChar = nil
+      controlNotifyChar = nil
       serviceAdded = false
     }
     // W5 lease restoration: load persisted ownership so inbound subscriptions
