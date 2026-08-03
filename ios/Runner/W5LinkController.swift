@@ -18,6 +18,33 @@ import UIKit
 /// iteration — a restoration relaunch re-handshakes over restored links and
 /// the oracle's replay idempotence absorbs the re-delivery; the persisted
 /// schema of design §Restoration is the tracked follow-up.
+/// Structured teardown outcome (H-W5-6 Phase 1) — no raw identifiers.
+struct W5TeardownResult {
+  var lookupHit = false          // did the alias resolve to a live lease?
+  var rolesClosed: [String] = [] // "outbound" / "inbound" per closed link
+  var leaseEnded = false         // did the ownership lease erase?
+  var asDict: [String: Any] {
+    ["lookupHit": lookupHit, "rolesClosed": rolesClosed, "leaseEnded": leaseEnded]
+  }
+
+  /// Pure derivation from onTeardown effects (unit-testable without CB).
+  /// `hit` = the alias resolved to a live lease.
+  static func from(hit: Bool, effects: [W5Effect]) -> W5TeardownResult {
+    var r = W5TeardownResult()
+    r.lookupHit = hit
+    guard hit else { return r }
+    for f in effects {
+      switch f {
+      case .closeOutbound: r.rolesClosed.append("outbound")
+      case .rejectInbound: r.rolesClosed.append("inbound")
+      case .ended: r.leaseEnded = true
+      default: break
+      }
+    }
+    return r
+  }
+}
+
 final class W5LinkController {
   unowned let bb: BackgroundBeacon
   let ownership = W5Ownership()
@@ -432,18 +459,22 @@ final class W5LinkController {
   /// inbound REJECT) — then clear controller bookkeeping so the app cannot
   /// re-dial someone the user just dismissed. Resolves by alias OR by any
   /// live outbound peripheral carrying that token.
-  func dropPeer(alias: String) {
+  @discardableResult
+  func dropPeer(alias: String) -> W5TeardownResult {
+    var res = W5TeardownResult()
     guard let lease = ownership.leaseForAlias(alias) else {
-      // No lease yet (dropped mid-handshake): nothing to erase here; the raw
-      // CA5E/token session is reaped by BackgroundBeacon.dropPeerByToken.
-      return
+      // MISS: no live lease for this alias (server-id-as-alias, rotated-away,
+      // or dropped mid-handshake). Report honestly; no teardown occurred here.
+      return res
     }
-    // onTeardown emits closes for each live link; apply() routes them.
-    apply(ownership.onTeardown(leaseId: lease))
+    let fx = ownership.onTeardown(leaseId: lease)
+    res = W5TeardownResult.from(hit: true, effects: fx)
+    apply(fx)
     // apply()'s .ended path (endedCleanup) already drops leaseByHandle +
     // disconnects bound links; clear any residual per-link metadata.
     outLinks = outLinks.filter { leaseByHandle[outHandle($0.key)] != nil }
     inLinks = inLinks.filter { leaseByHandle[inHandle($0.key)] != nil }
+    return res
   }
 
   func inboundGone(_ central: CBCentral) {

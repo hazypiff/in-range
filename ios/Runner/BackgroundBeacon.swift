@@ -329,8 +329,12 @@ final class BackgroundBeacon: NSObject {
       case "dropPeer":
         // Owner rule: a resolved pair (pass/reject) drops its W5 session
         // immediately — no tracking anyone the user said no to.
-        if let hex = call.arguments as? String { self.dropPeerByToken(hex) }
-        result(nil)
+        if let hex = call.arguments as? String {
+          result(self.dropPeerByToken(hex))
+        } else {
+          result(["lookupHit": false, "rolesClosed": [String](),
+                  "leaseEnded": false, "rawSessionsReaped": 0])
+        }
       case "setWakePing":
         // Crack #1 client half (issue #4): {url, auth} for the coarse
         // co-presence ping fired on every background wake. Flag-gated:
@@ -1370,12 +1374,25 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
     if w5[id] != nil { w5[id]?.tokenHex = hex }
   }
 
-  func dropPeerByToken(_ tokenHex: String) {
+  @discardableResult
+  func dropPeerByToken(_ tokenHex: String) -> [String: Any] {
     // H-W5-6: erase the ownership lease AND disconnect inbound keepers, not
-    // just the outbound session — otherwise the lease survives a user
-    // rejection and the app can re-dial. The controller's onTeardown path
-    // emits the role-correct closes; then reap any raw session by token.
-    if w5LinksEnabled { w5Link.dropPeer(alias: tokenHex) }
-    for (id, s) in w5 where s.tokenHex == tokenHex { w5End(id) }
+    // just the outbound session. Returns a STRUCTURED diagnostic (no raw ids):
+    // ownership lookup hit/miss, roles closed, lease ended, and how many raw
+    // CA5E/token sessions were reaped.
+    var result: [String: Any] = [
+      "lookupHit": false, "rolesClosed": [String](), "leaseEnded": false,
+      "rawSessionsReaped": 0,
+    ]
+    if w5LinksEnabled {
+      result = w5Link.dropPeer(alias: tokenHex).asDict
+    }
+    var reaped = 0
+    for (id, session) in w5 where session.tokenHex == tokenHex {
+      w5End(id)
+      reaped += 1
+    }
+    result["rawSessionsReaped"] = reaped
+    return result
   }
 }

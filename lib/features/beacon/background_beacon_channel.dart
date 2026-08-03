@@ -317,11 +317,16 @@ class BackgroundBeaconChannel {
 
   /// W5 owner rule: a resolved pair (pass/reject) drops its live session
   /// immediately — the app never tracks someone the user said no to.
-  Future<void> dropPeer(String tokenHex) async {
+  /// Returns a structured teardown diagnostic (no raw ids):
+  /// {lookupHit, rolesClosed:[roles], leaseEnded, rawSessionsReaped}, or null
+  /// when the native side is unavailable.
+  Future<Map<String, dynamic>?> dropPeer(String tokenHex) async {
     try {
-      await _channel.invokeMethod<void>('dropPeer', tokenHex);
+      final res = await _channel.invokeMethod<dynamic>('dropPeer', tokenHex);
+      return res == null ? null : Map<String, dynamic>.from(res as Map);
     } catch (e) {
       debugPrint('BackgroundBeacon dropPeer failed: $e');
+      return null;
     }
   }
 
