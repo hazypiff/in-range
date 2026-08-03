@@ -3,7 +3,14 @@
 Build: f989231 (diag + attribution logging + 4s HELLO delay hook). Anchor 17:14:39Z.
 Attributed logs (p=/L=/link= tags, sanitized) alongside.
 
-## Verdict: PASS (strong)
+## Verdict: PASS (surrogate) — literal third-peer-in-window NOT staged
+
+Per Kimi final review (session fb9b38ff): H-W5-3's no-leak property is proven
+via a SURROGATE stressor — a real simultaneous-open race + zero pendingdial-ttl
+sweeps across the 4s-delayed windows — NOT via the literal "C arrives during
+A's 4s HELLO delay to B" instant (C entered range after A-B settled). The
+surrogate exercises the same pendingDial cleanup path; the exact staged instant
+is deterministically reproducible with the delay hook but was not executed.
 
 - 0 w5c-pendingdial-ttl sweeps, 0 protocol violations (all three phones, post-anchor).
 - Every outbound w5-start reached a terminal (owns or clean w5-end) — zero orphans.
