@@ -73,6 +73,27 @@ final class ReleaseIsolationTests: XCTestCase {
       "H-DIAG-2 build-settings guard script must exist")
   }
 
+  // Phase 3: a foreign-flavor boot must wipe EVERY diagnostic file, not just
+  // UserDefaults keys. wipeDiagnosticFiles() removes them all from Documents.
+  func testForeignFlavorWipeRemovesAllDiagnosticFiles() throws {
+    let docs = FileManager.default.urls(
+      for: .documentDirectory, in: .userDomainMask)[0]
+    // Plant a probe under each documented diagnostic file name.
+    for name in BackgroundBeacon.diagnosticFileNames {
+      try "poison".data(using: .utf8)!.write(to: docs.appendingPathComponent(name))
+    }
+    for name in BackgroundBeacon.diagnosticFileNames {
+      XCTAssertTrue(FileManager.default.fileExists(
+        atPath: docs.appendingPathComponent(name).path))
+    }
+    BackgroundBeacon.wipeDiagnosticFiles()
+    for name in BackgroundBeacon.diagnosticFileNames {
+      XCTAssertFalse(
+        FileManager.default.fileExists(atPath: docs.appendingPathComponent(name).path),
+        "foreign-flavor wipe must remove \(name)")
+    }
+  }
+
   func testProductionStampConstantIsNonEmpty() {
     // The stamp discriminator must never collapse to "always wipe": a nil
     // (legacy) stamp adopts, a foreign stamp wipes. Pin that the stamp

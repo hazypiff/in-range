@@ -93,6 +93,13 @@ enum W5Diag {
     private static var faultPeerHandle: String?
     private(set) static var droppedWrites: Int = 0
     private static let cap = 4 * 1024 * 1024
+    // Persist to the diag operational suite so the NEXT boot can surface it.
+    private static let diagDefaults = UserDefaults(suiteName: "io.inrange.diag")
+    private static func noteDropped() {
+      droppedWrites += 1
+      let n = (diagDefaults?.integer(forKey: "bb.w5events.dropped") ?? 0) + 1
+      diagDefaults?.set(n, forKey: "bb.w5events.dropped")
+    }
 
     /// In-memory only. Injected shared secret if present, else per-process
     /// random. Never persisted, never logged.
@@ -154,7 +161,7 @@ enum W5Diag {
       guard let data = try? JSONSerialization.data(withJSONObject: obj),
         let bytes = (String(data: data, encoding: .utf8).map { $0 + "\n" })?
           .data(using: .utf8)
-      else { droppedWrites += 1; return }
+      else { noteDropped(); return }
       let url = fileURL
       // Cap + rotate.
       if let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size])
@@ -175,10 +182,10 @@ enum W5Diag {
           let existing = (try? Data(contentsOf: url)) ?? Data()
           do { try (existing + bytes).write(to: url, options: .atomic) } catch { ok = false }
         }
-        if !ok { droppedWrites += 1; return }
+        if !ok { noteDropped(); return }
       } else {
         do { try bytes.write(to: url, options: .completeFileProtectionUnlessOpen) }
-        catch { droppedWrites += 1; return }
+        catch { noteDropped(); return }
       }
       applyProtection(url)
     }

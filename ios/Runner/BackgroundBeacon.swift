@@ -152,6 +152,20 @@ final class BackgroundBeacon: NSObject {
   /// H-DIAG-3: on every launch, before any manager restoration, drop bb.*
   /// operational state whose stamp is missing or from a different flavor —
   /// stale diag tokens/flags/logs can never reactivate a release binary.
+  /// Documented diagnostic-file location: the app container's Documents
+  /// directory (USB-pullable via devicectl). Every diagnostic artifact lives
+  /// here; a foreign-flavor boot wipes them all.
+  static let diagnosticFileNames = [
+    "bb_wake_log.txt", "bb_wake_log.1.txt",
+    "w5_events.jsonl", "w5_events.1.jsonl", "w5_rssi_log.jsonl",
+  ]
+  static func wipeDiagnosticFiles() {
+    let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    for name in diagnosticFileNames {
+      try? FileManager.default.removeItem(at: docs.appendingPathComponent(name))
+    }
+  }
+
   private func reconcileStateStamp() {
     let stamp = defaults.string(forKey: Self.keySchema)
     if stamp == Self.stateSchemaStamp { return }
@@ -163,11 +177,16 @@ final class BackgroundBeacon: NSObject {
       logWake("state-stamp-adopted-legacy")
       return
     }
-    // A DIFFERENT non-nil stamp = genuine cross-flavor collision: wipe.
+    // A DIFFERENT non-nil stamp = genuine cross-flavor collision: wipe ALL
+    // foreign operational state — UserDefaults keys, the persisted W5 lease
+    // snapshot, AND every diagnostic file — so nothing from another flavor
+    // survives into this launch (Phase 3 complete foreign-flavor wipe).
     for key in ["bb.enabled", "bb.slots", "bb.buffer", "bb.pingUrl",
-                "bb.pingAuth", Self.keyW5Links, "bb.w5rssi.off"] {
+                "bb.pingAuth", Self.keyW5Links, "bb.w5rssi.off",
+                "bb.w5.snapshot", "bb.w5events.dropped"] {
       defaults.removeObject(forKey: key)
     }
+    Self.wipeDiagnosticFiles()
     defaults.set(Self.stateSchemaStamp, forKey: Self.keySchema)
     logWake("state-stamp-wiped-\(stamp!)")
   }
@@ -232,7 +251,12 @@ final class BackgroundBeacon: NSObject {
     }
     reconcileStateStamp()  // H-DIAG-3: before any restoration
     logWake("boot enabled=\(defaults.bool(forKey: Self.keyEnabled))")
-    W5Diag.emit(.boot, role: .app, result: defaults.bool(forKey: Self.keyEnabled) ? "enabled" : "disabled")
+    // Surface the PRIOR run's dropped-write count (integrity) then reset it.
+    let priorDropped = defaults.integer(forKey: "bb.w5events.dropped")
+    W5Diag.emit(.boot, role: .app,
+      result: defaults.bool(forKey: Self.keyEnabled) ? "enabled" : "disabled",
+      count: priorDropped)
+    defaults.set(0, forKey: "bb.w5events.dropped")
     if defaults.bool(forKey: Self.keyEnabled) {
       ensureManagers()
       scheduleWake()
