@@ -1,0 +1,40 @@
+1785774518093 state-stamp-adopted-legacy
+1785774652492 periph-state:poweredOn
+1785774652498 central-state:poweredOn
+1785774814400 gatt-read
+1785774814547 w5-subscribed
+1785774814788 w5c-in-hello
+1785774814904 w5c-owns
+1785775811514 w5c-ended
+1785775811522 bgtask
+1785776876004 bgtask
+1785777278907 boot enabled=true
+1785777278982 w5-restored-periph n=1
+1785777278983 w5-restored-central n=0
+1785777278984 periph-state:poweredOn
+1785777278986 central-state:poweredOn
+1785777280080 w5-connect p=828516
+1785777280393 w5-start p=828516
+1785777280395 gatt-read
+1785777280510 w5-notify-ready
+1785777280511 w5-beat-1
+1785777280513 w5-subscribed ch=keepalive
+1785777280662 w5c-hello-delay p=828516 link=a8dc43
+1785777280664 w5-subscribed ch=control
+1785777284863 w5c-hello p=828516 L=- link=a8dc43 prev=fa1aa0
+1785777284865 w5-beat-2
+1785777284922 w5c-helloack p=d5f726 L=0d2114
+1785777284925 w5c-in-hello p=d5f726 prev=828516
+1785777285102 w5c-rejected
+1785777285103 w5-end p=828516
+1785777285105 w5c-owns h=in:E3080EDB-46B3-03CF-BDB5-83158A8F935D L=0d2114 gen=2
+1785777347593 gatt-read
+1785777347714 w5-subscribed ch=keepalive
+1785777347832 w5-subscribed ch=control
+1785777352093 w5c-in-hello p=d09f54 prev=d5f726
+1785777352273 w5c-owns h=in:E3080EDB-46B3-03CF-BDB5-83158A8F935D L=1533f4 gen=1
+1785777355830 gatt-read
+1785777355949 w5-subscribed ch=keepalive
+1785777356097 w5-subscribed ch=control
+1785777360358 w5c-in-hello p=646f57 prev=-
+1785777360538 w5c-owns h=in:B91CED0E-D051-173F-4D48-7B63AF85798C L=179300 gen=1
