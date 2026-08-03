@@ -132,6 +132,14 @@ final class BackgroundBeacon: NSObject {
   // next beat is scheduled ~4 s out. Herald-shaped — not an instant loop.
   private static let w5Cadence: TimeInterval = 4
   private static let keyW5Links = "bb.w5links"
+  /// (b) H-W5-3 determinism: diag-only delay between didConnect and the
+  /// outbound HELLO so a third peer can be brought into the connect↔HELLO_ACK
+  /// window on real hardware. 0 = no delay. Compiles out of release.
+  #if INRANGE_DIAG
+    static let diagHelloDelaySeconds: TimeInterval = 4
+  #else
+    static let diagHelloDelaySeconds: TimeInterval = 0
+  #endif
   private static let keySchema = "bb.stateSchema"
   // Flavor+schema stamp: production and diag builds must not consume each
   // other's persisted operational state (issue #8). Bump on schema changes.
@@ -223,6 +231,7 @@ final class BackgroundBeacon: NSObject {
       self?.scheduleWake()
     }
     reconcileStateStamp()  // H-DIAG-3: before any restoration
+    logWake("boot enabled=\(defaults.bool(forKey: Self.keyEnabled))")
     if defaults.bool(forKey: Self.keyEnabled) {
       ensureManagers()
       scheduleWake()
@@ -800,6 +809,8 @@ extension BackgroundBeacon: CBPeripheralManagerDelegate {
     // holding their characteristics — mark registration recovered and let
     // didUpdateState re-assert the advert without re-adding the service.
     didRestorePeripheral = true
+    let _restSvc = (dict[CBPeripheralManagerRestoredStateServicesKey] as? [CBMutableService])?.count ?? 0
+    logWake("w5-restored-periph n=\(_restSvc)")
     if let services = dict[CBPeripheralManagerRestoredStateServicesKey] as? [CBMutableService] {
       for svc in services where svc.uuid == Self.serviceUUID {
         if (svc.characteristics ?? []).contains(where: { $0.uuid == Self.tokenCharUUID }) {
@@ -827,7 +838,7 @@ extension BackgroundBeacon: CBPeripheralManagerDelegate {
     // unregistered replacement while the restored service stays mute). Clear
     // both refs so reconfigureAdvertising rebuilds from scratch.
     if serviceAdded && (keepaliveNotifyChar == nil || controlNotifyChar == nil) {
-      logWake("restore-notify-rebuild")
+      logWake("w5-restored-periph notifyRebind=forced")
       peripheral.removeAllServices()
       keepaliveNotifyChar = nil
       controlNotifyChar = nil
@@ -896,12 +907,13 @@ extension BackgroundBeacon: CBPeripheralManagerDelegate {
     didSubscribeTo characteristic: CBCharacteristic
   ) {
     if characteristic.uuid == Self.controlCharUUID {
+      logWake("w5-subscribed ch=control")
       if w5LinksEnabled { w5Link.controlSubscribed(central) }
       return
     }
     guard characteristic.uuid == Self.keepaliveCharUUID,
           let ch = keepaliveNotifyChar else { return }
-    logWake("w5-subscribed")
+    logWake("w5-subscribed ch=keepalive")
     // First beat immediately; the central's writes drive the loop after.
     peripheralMgr?.updateValue(Data([0x01]), for: ch, onSubscribedCentrals: [central])
   }
@@ -980,6 +992,8 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
     // back up (the whole reason we connected), and a CONNECTING one is kept
     // strongly so its didConnect/didFail has somewhere to land.
     var restoredPeripherals: [CBPeripheral] = []
+    let restoredCount = (dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral])?.count ?? 0
+    logWake("w5-restored-central n=\(restoredCount)")
     if let peripherals = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral] {
       for p in peripherals {
         p.delegate = self
@@ -1131,6 +1145,7 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
   }
 
   func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+    logWake("w5-connect p=\(String((tokenCache[peripheral.identifier]?.hex ?? "-").prefix(6)))")
     peripheral.discoverServices([Self.serviceUUID])
   }
 
@@ -1233,7 +1248,7 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
         peripheral: peripheral, tokenHex: hex, lastEvent: Date(),
         keepaliveChar: ka, lastRssiAt: .distantPast, lastBeatAt: .distantPast,
         writeInFlight: false, notifyReady: false, seq: 0, lastGattOp: "start")
-      logWake("w5-start")
+      logWake("w5-start p=\(String(hex.prefix(6)))")
       inflight.removeValue(forKey: id)  // session owns the peripheral now
       if let ka = ka {
         // Subscribe first; the first beat fires from didUpdateNotificationState.
@@ -1337,8 +1352,9 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
   /// Session teardown — owner rule: drop on part (disconnect), drop on
   /// resolve (Dart's dropPeer), never linger past the encounter.
   func w5End(_ id: UUID) {
+    let _endTok = w5[id]?.tokenHex
     if let s = w5.removeValue(forKey: id) {
-      logWake("w5-end")
+      logWake("w5-end p=\(String((_endTok ?? "-").prefix(6)))")
       centralMgr?.cancelPeripheralConnection(s.peripheral)
     }
   }
