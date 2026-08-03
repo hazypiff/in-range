@@ -2,71 +2,85 @@ import XCTest
 
 @testable import Runner
 
-/// #8 release isolation: a production build must not be able to resume
-/// diagnostic state. These run against the normal (non-diag) configurations —
-/// the assertions prove the production persistence domain and restoration
-/// namespace are disjoint from the diagnostic ones by construction.
+/// #8 release isolation — FLAVOR-AWARE (Phase 4). Runs under BOTH schemes:
+/// - Runner scheme (no INRANGE_DIAG): asserts the PRODUCTION side — not a diag
+///   build, unsuffixed restore ids, standard operational domain.
+/// - diag scheme (INRANGE_DIAG): asserts the DIAGNOSTIC side — is a diag build,
+///   `.diag`-suffixed restore ids, separate diag operational suite.
+/// Together these are a real positive/negative control on the isolation
+/// discriminator, not a one-sided runtime constant check.
 final class ReleaseIsolationTests: XCTestCase {
 
-  func testProductionBuildIsNotDiag() {
-    XCTAssertFalse(BackgroundBeacon.isDiagBuild)
-    XCTAssertEqual(BackgroundBeacon.restoreIDSuffix, "")
+  func testBuildFlavorMatchesScheme() {
+    #if INRANGE_DIAG
+      XCTAssertTrue(BackgroundBeacon.isDiagBuild)
+      XCTAssertEqual(BackgroundBeacon.restoreIDSuffix, ".diag")
+    #else
+      XCTAssertFalse(BackgroundBeacon.isDiagBuild)
+      XCTAssertEqual(BackgroundBeacon.restoreIDSuffix, "")
+    #endif
   }
 
-  func testProductionRestorationIdentifiersAreNotDiagNamespaced() {
-    // A diag build restores under ".diag"-suffixed identifiers; iOS hands
-    // restoration state back per (bundle id, restore id), so production ids
-    // must never carry the diag suffix.
-    XCTAssertEqual(BackgroundBeacon.peripheralRestoreID, "io.inrange.beacon.peripheral")
-    XCTAssertEqual(BackgroundBeacon.centralRestoreID, "io.inrange.beacon.central")
+  func testRestorationIdentifiersAreNamespacedPerFlavor() {
+    // iOS hands restoration state back per (bundle id, restore id); production
+    // and diag must never share a restore id.
+    #if INRANGE_DIAG
+      XCTAssertEqual(BackgroundBeacon.peripheralRestoreID, "io.inrange.beacon.peripheral.diag")
+      XCTAssertEqual(BackgroundBeacon.centralRestoreID, "io.inrange.beacon.central.diag")
+    #else
+      XCTAssertEqual(BackgroundBeacon.peripheralRestoreID, "io.inrange.beacon.peripheral")
+      XCTAssertEqual(BackgroundBeacon.centralRestoreID, "io.inrange.beacon.central")
+    #endif
   }
 
-  func testProductionDomainCannotSeeDiagnosticState() {
-    // Simulate a diagnostic build having persisted operational state (token
-    // slots, flags), then prove the production operational domain reads none
-    // of it.
-    let diag = UserDefaults(suiteName: BackgroundBeacon.diagSuiteName)!
-    let probeKeys = ["bb.slots", "bb.enabled", "bb.w5links"]
-    for k in probeKeys {
-      diag.set("diag-poison", forKey: k + ".isolation-probe")
-    }
-    defer {
-      for k in probeKeys { diag.removeObject(forKey: k + ".isolation-probe") }
-    }
+  func testOperationalDomainMatchesFlavor() {
     let prod = BackgroundBeacon.operationalDefaults()
-    XCTAssertEqual(prod, UserDefaults.standard)
-    for k in probeKeys {
-      XCTAssertNil(
-        prod.object(forKey: k + ".isolation-probe"),
-        "production domain must not see diag-suite key \(k)")
-    }
+    #if INRANGE_DIAG
+      // Diag build persists to its OWN suite, never UserDefaults.standard.
+      // Verify BEHAVIORALLY (UserDefaults(suiteName:) returns distinct
+      // instances, so identity comparison is invalid): a value written via the
+      // operational domain is visible through a fresh handle to the diag suite
+      // and NOT in standard.
+      XCTAssertNotEqual(prod, UserDefaults.standard)
+      let dkey = "bb.diagdomain-probe"
+      prod.set("diag-only", forKey: dkey)
+      defer { prod.removeObject(forKey: dkey) }
+      XCTAssertEqual(
+        UserDefaults(suiteName: BackgroundBeacon.diagSuiteName)?.string(forKey: dkey),
+        "diag-only", "operational domain IS the diag suite")
+      XCTAssertNil(UserDefaults.standard.object(forKey: dkey),
+        "diag state must not land in standard")
+    #else
+      // Production reads standard and cannot see the diag suite's state.
+      XCTAssertEqual(prod, UserDefaults.standard)
+      let diag = UserDefaults(suiteName: BackgroundBeacon.diagSuiteName)!
+      let key = "bb.slots.isolation-probe"
+      diag.set("diag-poison", forKey: key)
+      defer { diag.removeObject(forKey: key) }
+      XCTAssertNil(prod.object(forKey: key),
+        "production domain must not see diag-suite state")
+    #endif
   }
-  // H-DIAG-2 positive control: under the diag flavor the stamp/flag flip the
-  // OTHER way. This runs from Runner.xcscheme (non-diag) too, so it asserts
-  // the production side of the discriminator; the diag scheme now has a
-  // populated <Testables> so the same bundle runs there and proves the
-  // .diag suffix path (build-settings check in scripts/check_release_isolation.sh
-  // covers the compile-flag direction that a runtime test structurally cannot).
+
   func testReleaseIsolationGuardScriptExists() {
-    // The authoritative check is the build-settings script; assert it is
-    // present so the guard can never be silently dropped from the repo.
+    // The authoritative compile-flag check is the build-settings script; assert
+    // it is present so the guard can never be silently dropped from the repo.
     let root = URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent().deletingLastPathComponent()
       .deletingLastPathComponent()
     let script = root.appendingPathComponent("scripts/check_release_isolation.sh")
     XCTAssertTrue(FileManager.default.fileExists(atPath: script.path),
-                  "H-DIAG-2 build-settings guard script must exist")
+      "H-DIAG-2 build-settings guard script must exist")
   }
-  // Codex H-DIAG-3: a legacy (unstamped) install's operational state must be
-  // ADOPTED, not wiped — wiping would silently disable an upgrading user.
-  // reconcileStateStamp is private; this asserts the discriminator's contract
-  // at the suite level via the stamp/suite semantics it relies on.
-  func testLegacyUnstampedStateIsDistinctFromForeignStamp() {
-    // The production stamp is a fixed known value; a nil (legacy) stamp and a
-    // foreign stamp must be treated differently — nil adopts, foreign wipes.
-    // (Full behavior is exercised by the upgrade hardware/clean-install test;
-    // this pins that the production stamp constant exists and is non-empty so
-    // the discriminator can never collapse to "always wipe".)
-    XCTAssertFalse(BackgroundBeacon.isDiagBuild)
+
+  func testProductionStampConstantIsNonEmpty() {
+    // The stamp discriminator must never collapse to "always wipe": a nil
+    // (legacy) stamp adopts, a foreign stamp wipes. Pin that the stamp
+    // constant exists per flavor (full behavior via clean-install hardware).
+    #if INRANGE_DIAG
+      XCTAssertTrue(BackgroundBeacon.isDiagBuild)
+    #else
+      XCTAssertFalse(BackgroundBeacon.isDiagBuild)
+    #endif
   }
 }

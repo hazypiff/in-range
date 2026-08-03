@@ -232,6 +232,7 @@ final class BackgroundBeacon: NSObject {
     }
     reconcileStateStamp()  // H-DIAG-3: before any restoration
     logWake("boot enabled=\(defaults.bool(forKey: Self.keyEnabled))")
+    W5Diag.emit(.boot, role: .app, result: defaults.bool(forKey: Self.keyEnabled) ? "enabled" : "disabled")
     if defaults.bool(forKey: Self.keyEnabled) {
       ensureManagers()
       scheduleWake()
@@ -343,6 +344,11 @@ final class BackgroundBeacon: NSObject {
           self.defaults.set(args["url"] as? String, forKey: Self.keyPingURL)
           self.defaults.set(args["auth"] as? String, forKey: Self.keyPingAuth)
         }
+        result(nil)
+      case "armW5Fault":
+        // Diag-only: arm a one-shot pre-HELLO_ACK drop for a peer token
+        // (nil/absent = any next outbound dial). No-op in a release binary.
+        W5Diag.armFault(peerRaw: call.arguments as? String)
         result(nil)
       case "setW5Links":
         // Test-only gate for W5 persistent links (INRANGE_W5_LINKS).
@@ -815,6 +821,7 @@ extension BackgroundBeacon: CBPeripheralManagerDelegate {
     didRestorePeripheral = true
     let _restSvc = (dict[CBPeripheralManagerRestoredStateServicesKey] as? [CBMutableService])?.count ?? 0
     logWake("w5-restored-periph n=\(_restSvc)")
+    W5Diag.emit(.restorePeriph, role: .app, count: _restSvc)
     if let services = dict[CBPeripheralManagerRestoredStateServicesKey] as? [CBMutableService] {
       for svc in services where svc.uuid == Self.serviceUUID {
         if (svc.characteristics ?? []).contains(where: { $0.uuid == Self.tokenCharUUID }) {
@@ -843,6 +850,7 @@ extension BackgroundBeacon: CBPeripheralManagerDelegate {
     // both refs so reconfigureAdvertising rebuilds from scratch.
     if serviceAdded && (keepaliveNotifyChar == nil || controlNotifyChar == nil) {
       logWake("w5-restored-periph notifyRebind=forced")
+      W5Diag.emit(.restoreRebind, role: .app, result: "forced")
       peripheral.removeAllServices()
       keepaliveNotifyChar = nil
       controlNotifyChar = nil
@@ -998,6 +1006,7 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
     var restoredPeripherals: [CBPeripheral] = []
     let restoredCount = (dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral])?.count ?? 0
     logWake("w5-restored-central n=\(restoredCount)")
+    W5Diag.emit(.restoreCentral, role: .app, count: restoredCount)
     if let peripherals = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral] {
       for p in peripherals {
         p.delegate = self
@@ -1071,6 +1080,7 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
         // reconnect window is the entire point of the lease.
         if w5Link.wantsGraceRecovery(alias: peerToken) {
           lastConnectAttempt.removeValue(forKey: id)
+          W5Diag.emit(.graceBypass, role: .outbound, peer: peerToken, reason: "retryFloor")
         }
         let recent = lastConnectAttempt[id].map {
           Date().timeIntervalSince($0) < Self.connectRetryFloor } ?? false
@@ -1123,6 +1133,7 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
       if w5LinksEnabled, w5Link.wantsGraceRecovery(alias: cached.hex) {
         lastConnectAttempt.removeValue(forKey: id)
         tokenCache.removeValue(forKey: id)  // fall through to the dial path
+        W5Diag.emit(.graceBypass, role: .outbound, peer: cached.hex, reason: "tokenCache")
       } else {
         scheduleScanRestart()
         return

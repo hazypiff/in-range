@@ -95,13 +95,6 @@ final class W5LinkController {
 
   init(bb: BackgroundBeacon) { self.bb = bb }
 
-  /// Diag-log short id (first 6 hex) for readability; the sanitizer still maps
-  /// full 32-hex ids, but shortened tags keep the wake log compact.
-  private func s6(_ hex: String?) -> String {
-    guard let hex, hex.count >= 6 else { return "-" }
-    return String(hex.prefix(6))
-  }
-
   // MARK: - id helpers
 
   private func hex(_ d: Data) -> String {
@@ -169,6 +162,7 @@ final class W5LinkController {
     outLinks[peripheralID] = OutLink(
       linkIdHex: linkId, myCandidateHex: cand, peerAliasHex: peerTokenHex,
       controlChar: nil)
+    W5Diag.emit(.dialPending, role: .outbound, peer: peerTokenHex, link: linkId)
     apply(fx.filter { $0 != .dial(linkId: linkId) })
     return true
   }
@@ -240,29 +234,37 @@ final class W5LinkController {
     link.helloSent = true
     outLinks[id] = link
     lastAdvertisedToken = curHex
-    let prevHex = myPrevTokenHex
-    // (b) H-W5-3 determinism (Kimi): a diag-only delay between didConnect and
-    // the outbound HELLO widens the connect↔HELLO_ACK window so a third peer
-    // can be brought in deterministically. Compiles out of release entirely.
+    // Pre-HELLO_ACK fault (Case 1 reclamation): if armed for this peer, DROP
+    // the connection before HELLO instead of sending it — leaving a stale
+    // pending dial that must be reclaimed by failure or the TTL sweep.
+    if W5Diag.consumePreAckFault(peerRaw: link.peerAliasHex) {
+      W5Diag.emit(.faultInject, role: .outbound, peer: link.peerAliasHex,
+        link: link.linkIdHex, reason: "preAckDrop")
+      bb.w5End(id)
+      return
+    }
+    let peerRaw = link.peerAliasHex
+    let linkRaw = link.linkIdHex
+    func sendHello() {
+      peripheral.writeValue(frame, for: char, type: .withResponse)
+      W5Diag.emit(.hello, role: .outbound, peer: peerRaw,
+        lease: leaseByHandle[outHandle(id)], link: linkRaw)
+    }
+    // (b) H-W5-3 determinism: a diag-only delay between didConnect and the
+    // outbound HELLO widens the connect↔HELLO_ACK window. Compiles out of
+    // release entirely.
     #if INRANGE_DIAG
-      bb.logWake("w5c-hello-delay p=\(s6(link.peerAliasHex)) link=\(s6(link.linkIdHex))")
       let delaySec = BackgroundBeacon.diagHelloDelaySeconds
       if delaySec > 0 {
         DispatchQueue.main.asyncAfter(deadline: .now() + delaySec) { [weak self] in
           guard let self, self.outLinks[id]?.helloSent == true,
             peripheral.state == .connected else { return }
-          peripheral.writeValue(frame, for: char, type: .withResponse)
-          self.bb.logWake(
-            "w5c-hello p=\(self.s6(link.peerAliasHex)) L=\(self.s6(self.leaseByHandle[self.outHandle(id)])) "
-              + "link=\(self.s6(link.linkIdHex)) prev=\(self.s6(prevHex))")
+          sendHello()
         }
         return
       }
     #endif
-    peripheral.writeValue(frame, for: char, type: .withResponse)
-    bb.logWake(
-      "w5c-hello p=\(s6(link.peerAliasHex)) L=\(s6(leaseByHandle[outHandle(id)])) "
-        + "link=\(s6(link.linkIdHex)) prev=\(s6(prevHex))")
+    sendHello()
   }
 
   /// CA6E notify arrived on an outbound link.
@@ -292,7 +294,7 @@ final class W5LinkController {
         handle: handle, role: .outbound, myCandidate: link.myCandidateHex,
         peerCandidate: hex(peerCand), peerAlias: aliasHex, linkId: link.linkIdHex)
       leaseByHandle[handle] = ownership.leaseForAlias(aliasHex)
-      bb.logWake("w5c-helloack p=\(s6(aliasHex)) L=\(s6(ownership.leaseForAlias(aliasHex)))")
+      W5Diag.emit(.helloAck, role: .outbound, peer: aliasHex, lease: ownership.leaseForAlias(aliasHex))
       apply(fx)
       sweepTimers()
     case .propose(let enc, let gen, let contenders):
@@ -306,7 +308,7 @@ final class W5LinkController {
     case .reject(_, _, let linkId):
       // The peripheral cannot cancel a CBCentral; it asks us to close.
       guard let link = outLinks[id], hex(linkId) == link.linkIdHex else { return }
-      bb.logWake("w5c-rejected")
+      W5Diag.emit(.reject, role: .outbound, peer: link.peerAliasHex, link: link.linkIdHex)
       closeOutboundLink(id)
     case .aliasRoll(let newAlias):
       guard let link = outLinks[id], link.established else { return }
@@ -365,7 +367,7 @@ final class W5LinkController {
     for (id, link) in stale {
       outLinks.removeValue(forKey: id)
       apply(ownership.onDialFailed(linkId: link.linkIdHex))
-      bb.logWake("w5c-pendingdial-ttl p=\(s6(link.peerAliasHex)) link=\(s6(link.linkIdHex))")
+      W5Diag.emit(.ttlSweep, role: .outbound, peer: link.peerAliasHex, link: link.linkIdHex, result: "reclaimed")
     }
     if !stale.isEmpty { sweepTimers() }
   }
@@ -428,7 +430,8 @@ final class W5LinkController {
         peerCandidate: hex(centralCand), peerAlias: aliasHex, linkId: linkHex,
         peerPrevAlias: prevHex == zero ? nil : prevHex)
       leaseByHandle[handle] = ownership.leaseForAlias(aliasHex)
-      bb.logWake("w5c-in-hello p=\(s6(aliasHex)) prev=\(prevHex == zero ? "-" : s6(prevHex))")
+      W5Diag.emit(.hello, role: .inbound, peer: aliasHex,
+        reason: prevHex == zero ? "noPrev" : "hasPrev")
       apply(fx)
       sweepTimers()
     case .propose(let enc, let gen, let contenders):
@@ -465,6 +468,7 @@ final class W5LinkController {
     guard let lease = ownership.leaseForAlias(alias) else {
       // MISS: no live lease for this alias (server-id-as-alias, rotated-away,
       // or dropped mid-handshake). Report honestly; no teardown occurred here.
+      W5Diag.emit(.dropPeer, peer: alias, result: "miss")
       return res
     }
     let fx = ownership.onTeardown(leaseId: lease)
@@ -474,6 +478,8 @@ final class W5LinkController {
     // disconnects bound links; clear any residual per-link metadata.
     outLinks = outLinks.filter { leaseByHandle[outHandle($0.key)] != nil }
     inLinks = inLinks.filter { leaseByHandle[inHandle($0.key)] != nil }
+    W5Diag.emit(.dropPeer, peer: alias, lease: lease,
+      result: res.leaseEnded ? "ended" : "hit", count: res.rolesClosed.count)
     return res
   }
 
@@ -547,7 +553,7 @@ final class W5LinkController {
   private func peerAliasRolled(handle: String, old: String, new: String) {
     guard let lease = leaseByHandle[handle] ?? ownership.leaseForAlias(old) else { return }
     ownership.onAliasRoll(leaseId: lease, newAlias: new)
-    bb.logWake("w5c-alias-roll L=\(s6(lease)) new=\(s6(new))")
+    W5Diag.emit(.aliasRollRecv, lease: lease)
     prevAliasTimers[lease]?.invalidate()
     prevAliasTimers[lease] = Timer.scheduledTimer(
       withTimeInterval: Self.reconnectGrace, repeats: false
@@ -591,8 +597,9 @@ final class W5LinkController {
       case .dial:
         break  // the dial call site initiates the connect itself
       case .owns(let handle):
-        bb.logWake(
-          "w5c-owns h=\(handle) L=\(s6(leaseByHandle[handle])) gen=\(ownership.currentProposal(leaseByHandle[handle] ?? "")?.viewGen ?? -1)")
+        W5Diag.emit(
+          .commit, lease: leaseByHandle[handle], link: handle,
+          count: ownership.currentProposal(leaseByHandle[handle] ?? "")?.viewGen)
         // keepalive already runs on the surviving link (CA5E)
       case .closeOutbound(let handle):
         if let id = uuidOf(handle) { closeOutboundLink(id) }
@@ -776,6 +783,7 @@ final class W5LinkController {
   // MARK: - timers
 
   private func scheduleGrace(_ lease: String) {
+    W5Diag.emit(.graceEnter, lease: lease)
     graceTimers[lease]?.invalidate()
     graceTimers[lease] = Timer.scheduledTimer(
       withTimeInterval: Self.reconnectGrace, repeats: false
@@ -813,7 +821,8 @@ final class W5LinkController {
   }
 
   private func endedCleanup(_ lease: String) {
-    bb.logWake("w5c-ended L=\(s6(lease)) gen=\(ownership.currentProposal(lease)?.viewGen ?? -1)")
+    W5Diag.emit(.linkDown, lease: lease, result: "ended",
+      count: ownership.currentProposal(lease)?.viewGen)
     retryTimers.removeValue(forKey: lease)?.invalidate()
     graceTimers.removeValue(forKey: lease)?.invalidate()
     prevAliasTimers.removeValue(forKey: lease)?.invalidate()
