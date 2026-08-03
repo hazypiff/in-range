@@ -114,13 +114,26 @@ comment / merge / deploy performed. Everything is local on
   reuse. The three-phone matrix must cover **lost `ALIAS_ROLL` + rotation
   during grace**.
 
-## 6. Owed / unverified
+## 6. Hardware matrix — RUN 2026-08-03, all four cases PASS
 
-1. **Three-iPhone hardware matrix** (phones uncabled): 3rd-peer-mid-dial;
-   keeper-drop+rotate+reconnect <120 s; restoration w/ committed lease +
-   stale-gen; rejection-prevents-redial. Gate items that turn the native-only
-   fixes (H-W5-2, H-W5-5 discovery bypass, H-W5-3 sweep) from logic-verified to
-   behavior-verified.
+Diag flavor (instrumented, `f989231`), 3 iPhones (14, 13, 15 Pro Max substituted
+for the 15 Plus — registered a device slot). Sanitized attributed logs in
+`hardware_evidence/`. Final Kimi review `fb9b38ff`: gate MET; instrumentation
+release-safe (confirmed from code + CI); delay hook cannot mask a leak.
+
+| Case | Fix | Result |
+|---|---|---|
+| 1 — third peer / concurrency | H-W5-3 | **PASS (surrogate)** — 0 pendingdial-ttl + simultaneous-open race resolved cleanly across 4s-delayed windows; literal C-in-delay-window instant NOT staged (honestly qualified) |
+| 2 — grace reconnect + rotation | H-W5-5 / DL-3 | **PASS (full)** — drop + rotation(f0a381→c0500b) + ALIAS_ROLL suppressed + prevAlias rejoin ~73s (<120s); rekey confirmed (Kimi + committed vector) |
+| 3 — iOS state restoration | H-W5-2 | **PASS (full)** — devicectl system-kill → willRestoreState (w5-restored-periph n=1) → both notify chars recovered + re-subscribed → session re-committed |
+| 4 — reject → no redial | H-W5-6 | **PASS (full)** — w5c-ended lease erase, 0 redial (2-phone isolation) |
+
+Bonus field-verified: H-DIAG-3 `state-stamp-adopted-legacy` on device.
+
+## 6b. Still owed / unverified
+
+1. Case 1 literal instant (surrogate accepted per Kimi; deterministic re-run
+   available via the delay hook if the criterion demands the exact staged moment).
 2. Clean-install + upgrade-from-diagnostic tests (real devices) for H-DIAG-3
    legacy-adopt.
 3. Linux SQL/audit packet (0063/0064) — separate track, owner/prod only.
