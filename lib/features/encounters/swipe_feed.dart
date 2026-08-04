@@ -9,6 +9,7 @@ import 'package:in_range/core/privacy/safety_store.dart';
 import 'package:in_range/features/beacon/beacon_provider.dart';
 import 'package:in_range/features/encounters/encounters_provider.dart';
 import 'package:in_range/features/encounters/local_encounter_store.dart';
+import 'package:in_range/features/encounters/pass_teardown.dart';
 import 'package:in_range/features/encounters/swipe_card.dart';
 import 'package:in_range/features/matches/match_store.dart';
 import 'package:in_range/features/widgets/ad_banner.dart';
@@ -29,6 +30,12 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
   final _notifiedExpiring = <String>{};
   int _prevNew = 0;
   bool _actionInFlight = false;
+  // Last pass's radio-lease teardown result (honest observability; may be a
+  // server-card 'unavailable' or a stale miss). Read in tests/diagnostics.
+  TeardownOutcome? _lastTeardown;
+
+  /// Most recent pass teardown outcome, for diagnostics/tests.
+  TeardownOutcome? get lastTeardownOutcome => _lastTeardown;
 
   @override
   void initState() {
@@ -114,14 +121,22 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
             range: c.rangeType,
           );
       // W5 owner rule: a pass tears down the currently MAPPED radio lease —
-      // but only via an evidence-backed radio alias, NEVER the dismissal id
-      // (which is encounter_id for server cards; H-W5-6 fix). No alias
-      // (server-only card) → teardown is unavailable, and we do not pretend
-      // it happened. This is "current mapped lease torn down on pass", not a
-      // durable no-redial guarantee (a later onDiscovered can re-establish).
-      final alias = c.radioAlias;
-      if (alias != null) {
-        ref.read(beaconServiceProvider).dropPeer(alias);
+      // but only via an evidence-backed, still-FRESH radio alias, NEVER the
+      // dismissal id (which is encounter_id for server cards; H-W5-6 fix). The
+      // resolver awaits native's structured result so we never *report* a
+      // teardown that did not happen: a server card is 'unavailable', a stale
+      // alias that misses is surfaced, only a real hit tears a lease down. This
+      // is "current mapped lease torn down on pass", not a durable no-redial
+      // guarantee (a later onDiscovered can re-establish).
+      final beacon = ref.read(beaconServiceProvider);
+      final outcome = await resolvePassTeardown(c, beacon.dropPeer);
+      _lastTeardown = outcome;
+      if (!outcome.isUnavailable && !outcome.tore) {
+        // Attempted a teardown that found no live lease (stale/rotated alias
+        // or native unavailable). The card is still dismissed; we just don't
+        // claim a lease was torn down. Kept quiet in the UI (a miss is common
+        // and benign) but observable for diagnostics.
+        debugPrint('W5 pass teardown: ${outcome.summary}');
       }
       await _showUndo();
       return true;

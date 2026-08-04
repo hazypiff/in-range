@@ -109,6 +109,34 @@ final class W5TeardownTests: XCTestCase {
     XCTAssertFalse(r.leaseEnded)
   }
 
+  // REAL CONTROLLER ENTRY (B1): drive the actual W5LinkController.dropPeer, not
+  // a reconstruction. An unknown/rotated/stale alias on a controller with no
+  // live lease must miss through the real method — nothing torn down.
+  func testControllerDropPeerRealEntryMissesUnknownAlias() {
+    let ctl = W5LinkController(bb: BackgroundBeacon())
+    let r = ctl.dropPeer(alias: "12345")  // encounter_id-shaped, never an alias
+    XCTAssertFalse(r.lookupHit)
+    XCTAssertTrue(r.rolesClosed.isEmpty)
+    XCTAssertFalse(r.leaseEnded)
+    // Idempotent: a second real call is still a clean miss.
+    let r2 = ctl.dropPeer(alias: "aabbccddeeff00112233445566778899")
+    XCTAssertFalse(r2.lookupHit)
+  }
+
+  // REAL CHANNEL ENTRY (B1): the platform-channel handler itself. A server
+  // encounter_id fed through dropPeerByToken tears down nothing and reaps no
+  // raw sessions — the H-W5-6 guarantee at the real boundary Dart calls.
+  func testChannelDropPeerByTokenServerIdIsInert() {
+    let dict = BackgroundBeacon().dropPeerByToken("0badc0de5758583300000000deadbeef")
+    XCTAssertEqual(dict["lookupHit"] as? Bool, false)
+    XCTAssertEqual(dict["leaseEnded"] as? Bool, false)
+    XCTAssertEqual(dict["rawSessionsReaped"] as? Int, 0)
+    XCTAssertEqual((dict["rolesClosed"] as? [String])?.isEmpty, true)
+    // No raw identifier ever appears in the structured result.
+    XCTAssertNil(dict["alias"])
+    XCTAssertNil(dict["token"])
+  }
+
   // Result → dict shape (channel contract, no raw ids).
   func testResultDictShape() {
     let r = W5TeardownResult.from(

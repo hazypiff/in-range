@@ -2,6 +2,20 @@ import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/features/beacon/range_estimator.dart';
 import 'package:in_range/features/encounters/local_encounter_store.dart';
 
+/// Trust classification for a card's radio alias at the moment of a pass.
+///
+/// A pass tears down the CURRENTLY MAPPED radio lease only when a trustworthy
+/// alias exists (owner-confirmed narrow contract). This tri-state is what the
+/// pass path consumes:
+/// - [unavailable]: no evidence-backed alias (server-only card). Teardown is
+///   genuinely unavailable; never fabricate an alias from `encounter_id`.
+/// - [fresh]: an alias observed within the native alias TTL — a hit is likely.
+/// - [stale]: an alias exists but was last seen beyond the TTL, so the peer's
+///   token has almost certainly rotated and the native alias has expired; a
+///   teardown attempt is expected to MISS. Native remains authoritative on the
+///   actual hit/miss — this classification only drives honest reporting.
+enum RadioAliasState { unavailable, fresh, stale }
+
 /// Unified swipe deck item — local BLE run-in or server encounter.
 class SwipeCard {
   SwipeCard({
@@ -11,6 +25,7 @@ class SwipeCard {
     required this.rangeType,
     required this.isServer,
     this.radioAlias,
+    this.radioAliasSeenAt,
     this.photoUrls = const [],
     this.otherUserId,
     this.encounterTime,
@@ -33,6 +48,12 @@ class SwipeCard {
   /// teardown is UNAVAILABLE for server-only cards (do not fabricate one from
   /// `encounter_id`). This is the only value that may reach native `dropPeer`.
   final String? radioAlias;
+
+  /// When [radioAlias] was last observed on the radio (local card's
+  /// last-seen). Null for server cards (no radio observation). Freshness is
+  /// measured against this, NOT the card's 24h display lifetime — a local card
+  /// can live 24h while the peer's token rotates every ~15 min.
+  final DateTime? radioAliasSeenAt;
   final String displayLabel;
   final String neighborhood;
   final String rangeType;
@@ -48,6 +69,22 @@ class SwipeCard {
   final int sessionCount;
   final int distinctDayCount;
   final DateTime? firstSeenAt;
+
+  /// Native alias TTL (`W5LinkController.aliasTTL`) — an alias last seen longer
+  /// ago than this has almost certainly rotated away natively. Kept in sync
+  /// with the Swift constant by the shared-contract note in both files.
+  static const radioAliasTtl = Duration(minutes: 15);
+
+  /// Classify the alias trust at [now] (defaults to wall clock). Drives whether
+  /// a pass attempts a native teardown and how the outcome is reported.
+  RadioAliasState radioAliasStateAt([DateTime? now]) {
+    if (radioAlias == null) return RadioAliasState.unavailable;
+    final seen = radioAliasSeenAt;
+    // An alias with no observation time cannot be trusted as current.
+    if (seen == null) return RadioAliasState.stale;
+    final age = (now ?? DateTime.now()).difference(seen);
+    return age <= radioAliasTtl ? RadioAliasState.fresh : RadioAliasState.stale;
+  }
 
   bool get isFeet => rangeType.startsWith('feet');
 
@@ -113,6 +150,7 @@ class SwipeCard {
       // Server feed rows are keyed by encounter_id and carry no rotating radio
       // token, so no evidence-backed alias exists → teardown unavailable.
       radioAlias: null,
+      radioAliasSeenAt: null,
       displayLabel: 'Someone nearby',
       neighborhood: row['neighborhood']?.toString() ?? 'Nearby',
       rangeType: rt,
@@ -130,8 +168,11 @@ class SwipeCard {
   factory SwipeCard.fromLocal(LocalEncounter e) {
     return SwipeCard(
       id: e.correlationId,
-      // Local correlation id IS the current radio token → valid alias.
+      // Local correlation id IS the peer's observed radio token → candidate
+      // alias. Trust is time-bounded: freshness is judged against last-seen
+      // (radioAliasSeenAt), not the 24h card lifetime.
       radioAlias: e.correlationId,
+      radioAliasSeenAt: e.lastSeenAt,
       displayLabel: 'Someone nearby',
       neighborhood: e.neighborhoodLabel,
       rangeType:

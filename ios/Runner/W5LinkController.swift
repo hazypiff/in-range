@@ -91,6 +91,8 @@ final class W5LinkController {
   // #8 isolation: all W5 persistence lands in BackgroundBeacon.operationalDefaults(),
   // never UserDefaults.standard directly.
   private static let keyW5Snapshot = "bb.w5.snapshot"
+  // Shared contract: Dart's `SwipeCard.radioAliasTtl` mirrors this value so the
+  // app only attempts a teardown for an alias still likely-live natively.
   private static let aliasTTL: TimeInterval = 15 * 60  // mirrors tokenCacheTTL
 
   init(bb: BackgroundBeacon) { self.bb = bb }

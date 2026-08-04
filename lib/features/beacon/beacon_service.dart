@@ -2169,11 +2169,15 @@ class BeaconService {
   }
 
   /// W5 owner rule (2026-07-24): a pass/reject resolves the pair — its live
-  /// session (if any) is torn down immediately. No-op off-iOS / no session.
-  void dropPeer(String tokenHex) {
+  /// session (if any) is torn down immediately. Returns the native structured
+  /// teardown result (`lookupHit`/`rolesClosed`/`leaseEnded`/
+  /// `rawSessionsReaped`) so the caller can report honestly whether a lease was
+  /// actually torn down; null off-iOS (native unavailable).
+  Future<Map<String, dynamic>?> dropPeer(String tokenHex) async {
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
-      unawaited(_bgBeacon.dropPeer(tokenHex));
+      return _bgBeacon.dropPeer(tokenHex);
     }
+    return null;
   }
 
   /// Single ingest point for a foreign token sample — scan results and the
