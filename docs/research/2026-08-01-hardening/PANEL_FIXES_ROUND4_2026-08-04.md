@@ -103,7 +103,7 @@ their concrete findings were fixed in-round:
 - **Bundle scan was not recursive** — `check_final_binary_isolation.sh` now finds
   EVERY Mach-O via `find … | file … Mach-O` (catches `.appex`, nested
   frameworks, dylibs), not just top-level `Frameworks/*.framework`.
-- **A missed device serial** (`324c305855433498` in `install-and-run.sh`/`GO.sh`)
+- **A missed device serial** (an Android serial in `install-and-run.sh`/`GO.sh`)
   scrubbed → env; and a tilde-expansion bug I introduced (`PROJECT="~/in-range"`
   does not expand) fixed to `"$HOME/in-range"` across the monitor scripts.
 - **`build_diag_artifact.sh`** now validates the secret is `>=64` HEX (native
