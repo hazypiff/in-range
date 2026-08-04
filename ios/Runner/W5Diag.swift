@@ -56,7 +56,6 @@ enum W5Diag {
         "epoch": bootEpoch,
         "wallMs": Int(Date().timeIntervalSince1970 * 1000),
         "monoNs": DispatchTime.now().uptimeNanoseconds,
-        "seq": nextSeq(),
         "event": event.rawValue,
       ]
       if let role { obj["role"] = role.rawValue }
@@ -67,7 +66,19 @@ enum W5Diag {
       if let result = result() { obj["result"] = result }
       if let reason = reason() { obj["reason"] = reason }
       if let count = count() { obj["count"] = count }
-      write(obj)
+      // B4: assign `seq` and append in ONE critical section on the events
+      // writer's lock, so a line's seq always matches its file order even under
+      // concurrent emits (previously seq and append used different locks).
+      eventWriter.withLock {
+        obj["seq"] = nextSeqLocked()
+        guard let data = try? JSONSerialization.data(withJSONObject: obj),
+          let s = String(data: data, encoding: .utf8)
+        else {
+          eventWriter.droppedLocked()
+          return
+        }
+        _ = eventWriter.appendLocked(s + "\n")
+      }
     #endif
   }
 
@@ -97,6 +108,10 @@ enum W5Diag {
   ///   per-process label that distinguishes relaunches in the log; the secret
   ///   is private and keys the handles. They are independent by design.
   ///
+  /// CONTRACT RATIFIED BY THE OWNER (2026-08-04): persist the secret per-install
+  /// in the diag suite (this behavior), NOT Keychain and NOT regenerate-per-
+  /// launch. (Panel B3 ruling — "Persist per-install".)
+  ///
   /// Clears the persisted run/provisioned secret + per-family dropped counters.
   /// In-process `runSecret` is already resolved (a `let`), so this takes effect
   /// on the NEXT launch — call it between matrix cases (before relaunch) to
@@ -115,6 +130,11 @@ enum W5Diag {
   static func armFault(peerRaw: String?) {
     #if INRANGE_DIAG
       faultPeerHandle = handle("peer", peerRaw) ?? "*"  // "*" = any next dial
+      // Make the fault lifecycle observable in the JSONL: armed → fired
+      // (preAckDrop) → [disarmed]. Case 1's story is then complete, not just
+      // an unexplained pending-dial reclamation.
+      emit(.faultInject, role: .outbound, peer: peerRaw,
+        reason: peerRaw == nil ? "armed-any" : "armed")
     #endif
   }
 
@@ -122,7 +142,9 @@ enum W5Diag {
   /// armed-but-never-consumed fault can't fire on a later unrelated dial).
   static func disarmFault() {
     #if INRANGE_DIAG
+      let was = faultPeerHandle != nil
       faultPeerHandle = nil
+      if was { emit(.faultInject, role: .app, reason: "disarmed") }
     #endif
   }
 
@@ -154,7 +176,6 @@ enum W5Diag {
 
     private static let bootEpoch = UInt64.random(in: 0...UInt64.max)
     private static var seqCounter: UInt64 = 0
-    private static let seqLock = NSLock()
     private static var faultPeerHandle: String?
     // B4: the events JSONL now shares the one serialized evidence writer with
     // the wake + RSSI logs (absent-vs-inaccessible, protection/backup after
@@ -239,20 +260,12 @@ enum W5Diag {
       return mac.prefix(7).map { String(format: "%02x", $0) }.joined()  // 14 hex
     }
 
-    private static func nextSeq() -> UInt64 {
-      seqLock.lock(); defer { seqLock.unlock() }
+    /// Next monotonic sequence. The CALLER MUST hold the events writer's lock
+    /// (emit calls this inside `eventWriter.withLock`), so seq-assign + append
+    /// are atomic and no separate seq lock is needed.
+    private static func nextSeqLocked() -> UInt64 {
       seqCounter += 1
       return seqCounter
-    }
-
-    private static func write(_ obj: [String: Any]) {
-      guard let data = try? JSONSerialization.data(withJSONObject: obj),
-        let s = String(data: data, encoding: .utf8)
-      else {
-        eventWriter.noteExternalDrop()
-        return
-      }
-      eventWriter.append(s + "\n")  // absent/inaccessible/protection handled here
     }
   #endif
 

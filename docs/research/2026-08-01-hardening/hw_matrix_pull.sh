@@ -33,20 +33,30 @@ pull w5_rssi_log.jsonl
 pull w5_rssi_log.1.jsonl
 pull in_range_local.db
 
-# Sanitize: replace any raw identifier with a STABLE short hash tag, so
-# co-presence/timeline structure survives but no raw id is exposed. Matches both
-# 32-hex tokens/16-byte ids AND UUID-format CoreBluetooth peripheral handles
-# (the previous regex missed UUIDs, which is how raw h=out:<uuid> reached the
-# committed logs). Same raw → same tag, so cross-file correlation is preserved.
+# Sanitize with the SAME keyed, run-scoped handle the live layer uses. Set
+# INRANGE_DIAG_RUN_SECRET to the fleet run secret the diag build was built with
+# (dart-define), and each raw id becomes id:<14hex> = truncated
+# HMAC-SHA256(secret, "peer\0"+raw) — identical to W5Diag.handle("peer", raw).
+# So a token's tag in the committed wake/RSSI logs MATCHES its handle in the
+# live w5_events.jsonl (and across fleet devices sharing the secret). Without a
+# secret it falls back to an unkeyed sha256[:6] tag (still stable, but NOT
+# aligned with the live handles) and warns. Matches UUID-format ids AND 32-hex.
 sanitize() {
   local f="$1"
   [ -f "$RAW/$f" ] || return 0
-  python3 - "$RAW/$f" "$OUT/${LABEL}_$f" <<'PY'
-import sys, re, hashlib
+  INRANGE_DIAG_RUN_SECRET="${INRANGE_DIAG_RUN_SECRET:-}" python3 - "$RAW/$f" "$OUT/${LABEL}_$f" <<'PY'
+import sys, os, re, hmac, hashlib
 src, dst = sys.argv[1], sys.argv[2]
+sec = os.environ.get("INRANGE_DIAG_RUN_SECRET", "")
+key = bytes.fromhex(sec) if len(sec) >= 32 else None
+if key is None:
+    sys.stderr.write("  WARN: no INRANGE_DIAG_RUN_SECRET; unkeyed tags won't align with live handles\n")
 def tag(m):
-    h = hashlib.sha256(m.group(0).lower().encode()).hexdigest()[:6]
-    return f"id:{h}"
+    raw = m.group(0)
+    if key is not None:  # keyed, run-scoped: matches W5Diag.handle("peer", raw)
+        mac = hmac.new(key, b"peer\x00" + raw.encode(), hashlib.sha256).digest()
+        return "id:" + mac[:7].hex()  # 14 hex
+    return "id:" + hashlib.sha256(raw.lower().encode()).hexdigest()[:6]
 data = open(src, 'r', errors='replace').read()
 # UUID-format first (longer, more specific), then bare 32-hex.
 data = re.sub(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', tag, data)

@@ -48,15 +48,24 @@ import Foundation
     }
 
     /// Append one already-formatted line (caller includes any trailing newline).
-    /// Returns false and accounts a drop on any failure.
+    /// Returns false and accounts a drop on any failure. Takes the lock.
     @discardableResult
     func append(_ text: String) -> Bool {
-      guard let bytes = text.data(using: .utf8) else {
-        noteDropped()
-        return false
-      }
       lock.lock()
       defer { lock.unlock() }
+      return appendLocked(text)
+    }
+
+    /// Core append; the CALLER MUST hold the lock (via `append` or `withLock`).
+    /// This lets the events writer make seq-assignment + append ONE atomic
+    /// critical section, so a line's `seq` always matches its file order even
+    /// under concurrent emits (B4).
+    @discardableResult
+    func appendLocked(_ text: String) -> Bool {
+      guard let bytes = text.data(using: .utf8) else {
+        droppedLocked()
+        return false
+      }
       let fm = FileManager.default
 
       // Rotate BEFORE writing when over cap (dotOne only).
@@ -70,7 +79,7 @@ import Foundation
         // ABSENT → create fresh, protected (locked-state-writable), excluded.
         do { try bytes.write(to: url, options: .completeFileProtectionUntilFirstUserAuthentication) }
         catch {
-          noteDropped()
+          droppedLocked()
           return false
         }
         applyProtection(url)
@@ -80,7 +89,7 @@ import Foundation
       // EXISTS → append. If it cannot be OPENED it is inaccessible, NOT absent:
       // drop the line, never overwrite an existing (possibly locked) log.
       guard let h = try? FileHandle(forWritingTo: url) else {
-        noteDropped()
+        droppedLocked()
         return false
       }
       var ok = true
@@ -103,7 +112,7 @@ import Foundation
         }
       }
       if !ok {
-        noteDropped()
+        droppedLocked()
         return false
       }
       applyProtection(url)
@@ -142,7 +151,8 @@ import Foundation
       return body()
     }
 
-    private func noteDropped() {
+    /// Account a drop; the CALLER MUST hold the lock (append/withLock).
+    func droppedLocked() {
       dropped += 1
       let n = (Self.diagDefaults?.integer(forKey: droppedKey) ?? 0) + 1
       Self.diagDefaults?.set(n, forKey: droppedKey)
@@ -152,7 +162,7 @@ import Foundation
     /// failed), so no integrity loss is silent regardless of where it occurs.
     func noteExternalDrop() {
       lock.lock(); defer { lock.unlock() }
-      noteDropped()
+      droppedLocked()
     }
 
     /// The persisted dropped-write keys for every family — summed + reset at

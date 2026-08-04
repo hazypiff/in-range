@@ -142,8 +142,10 @@ final class W5TeardownTests: XCTestCase {
         peripheralID: UUID(), myCand: "cand-a", peerCand: "cand-b",
         alias: "aliasB", linkId: "L1")
       XCTAssertEqual(ctl.testActiveLeaseCount, 1, "seed established a live lease")
+      XCTAssertTrue(ctl.testIsCommitted(alias: "aliasB"),
+        "seed COMMITTED the lease (propose+ack), not merely established")
       let r = ctl.dropPeer(alias: "aliasB")
-      XCTAssertTrue(r.lookupHit, "a genuinely live lease is a HIT")
+      XCTAssertTrue(r.lookupHit, "a genuinely committed lease is a HIT")
       XCTAssertTrue(r.leaseEnded)
       XCTAssertEqual(r.rolesClosed, ["outbound"])
       XCTAssertEqual(ctl.testActiveLeaseCount, 0, "lease erased")

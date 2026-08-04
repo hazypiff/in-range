@@ -103,6 +103,47 @@ void main() {
     });
   });
 
+  // The exact _doPass teardown-and-report logic (extracted as reportPassTeardown
+  // so it is directly testable): onMiss fires ONLY when we attempted a teardown
+  // that found no live lease.
+  group('reportPassTeardown (the _doPass step)', () {
+    test('real tear → onMiss NOT called', () async {
+      final misses = <String>[];
+      final card = localCard(seenAgo: const Duration(minutes: 1));
+      final out = await reportPassTeardown(card, (a) async => {
+            'lookupHit': true,
+            'leaseEnded': true,
+            'rolesClosed': ['outbound'],
+          }, onMiss: misses.add);
+      expect(out.tore, isTrue);
+      expect(misses, isEmpty);
+    });
+
+    test('server card (unavailable) → onMiss NOT called', () async {
+      final misses = <String>[];
+      await reportPassTeardown(serverCard(), (a) async => {'lookupHit': true},
+          onMiss: misses.add);
+      expect(misses, isEmpty);
+    });
+
+    test('stale miss → onMiss called with the summary', () async {
+      final misses = <String>[];
+      final card = localCard(seenAgo: const Duration(minutes: 30));
+      await reportPassTeardown(card, (a) async => {'lookupHit': false},
+          onMiss: misses.add);
+      expect(misses, hasLength(1));
+      expect(misses.single, contains('teardown-miss(stale)'));
+    });
+
+    test('native unavailable → onMiss called', () async {
+      final misses = <String>[];
+      final card = localCard(seenAgo: const Duration(minutes: 1));
+      await reportPassTeardown(card, (a) async => null, onMiss: misses.add);
+      expect(misses, hasLength(1));
+      expect(misses.single, contains('unavailable(native)'));
+    });
+  });
+
   // UI-channel coverage: the REAL platform-channel wrapper the pass path uses
   // (BackgroundBeaconChannel.dropPeer), not an injected fake. Proves the card's
   // radioAlias — never its id — crosses the boundary, and the native structured

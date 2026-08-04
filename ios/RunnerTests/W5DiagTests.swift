@@ -101,6 +101,31 @@ final class W5DiagTests: XCTestCase {
       suite?.removeObject(forKey: key)
     }
 
+    // B4: seq is assigned in the SAME critical section as the append, so a
+    // line's seq always matches its file order (monotonic, no interleave).
+    func testEventSeqMatchesFileOrder() throws {
+      let docs = FileManager.default.urls(
+        for: .documentDirectory, in: .userDomainMask)[0]
+      let url = docs.appendingPathComponent("w5_events.jsonl")
+      try? FileManager.default.removeItem(at: url)
+      try? FileManager.default.removeItem(
+        at: docs.appendingPathComponent("w5_events.1.jsonl"))
+      for _ in 0..<6 { W5Diag.emit(.beat, role: .app) }
+      let lines = try String(contentsOf: url, encoding: .utf8)
+        .split(separator: "\n", omittingEmptySubsequences: true)
+      XCTAssertEqual(lines.count, 6)
+      var seqs: [Int] = []
+      for l in lines {
+        let obj = try JSONSerialization.jsonObject(with: Data(l.utf8))
+          as! [String: Any]
+        seqs.append((obj["seq"] as? NSNumber)?.intValue ?? -1)
+      }
+      XCTAssertEqual(seqs, seqs.sorted(), "seq monotonic in file order")
+      for i in 1..<seqs.count {
+        XCTAssertGreaterThan(seqs[i], seqs[i - 1], "strictly increasing")
+      }
+    }
+
     // B3 lifecycle: resetDiagSession clears the persisted run/provisioned
     // secret + dropped counters, so the next launch starts a fresh session.
     func testResetDiagSessionClearsPersistedSecretsAndCounters() {

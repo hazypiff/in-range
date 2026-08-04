@@ -521,9 +521,26 @@ final class W5LinkController {
           handle: handle, role: .outbound, myCandidate: myCand,
           peerCandidate: peerCand, peerAlias: alias, linkId: linkId))
       leaseByHandle[handle] = ownership.leaseForAlias(alias)
+      // COMMIT the lease exactly as a real handshake does: propose our current
+      // view and ACK it, so the test tears down a genuinely COMMITTED lease
+      // (not merely an established one).
+      if let lease = ownership.leaseForAlias(alias),
+        let mine = ownership.currentProposal(lease) {
+        _ = ownership.onProposeRecv(
+          peerAlias: alias,
+          proposal: W5Proposal(
+            encounterId: lease, viewGen: mine.viewGen, contenders: mine.contenders))
+        _ = ownership.onAckRecv(
+          peerAlias: alias,
+          ack: W5Ack(
+            encounterId: lease, ackViewGen: mine.viewGen, viewHash: mine.viewHash))
+      }
     }
 
     var testActiveLeaseCount: Int { ownership.activeLeases }
+    func testIsCommitted(alias: String) -> Bool {
+      ownership.leaseForAlias(alias).map { ownership.isCommitted($0) } ?? false
+    }
   #endif
 
   func inboundGone(_ central: CBCentral) {

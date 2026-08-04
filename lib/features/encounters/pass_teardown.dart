@@ -96,6 +96,25 @@ class TeardownOutcome {
   }
 }
 
+/// The exact teardown-and-report step `_doPass` performs, extracted so it is
+/// directly unit-testable (rather than only reachable through a full SwipeFeed
+/// widget pump): resolve the teardown, and when we ATTEMPTED one that found no
+/// live lease (stale/rotated alias or native unavailable — not a server card,
+/// not a real tear), surface it via [onMiss] for diagnostics. Returns the
+/// outcome for the caller to store.
+Future<TeardownOutcome> reportPassTeardown(
+  SwipeCard card,
+  PeerDrop drop, {
+  void Function(String summary)? onMiss,
+  DateTime? now,
+}) async {
+  final outcome = await resolvePassTeardown(card, drop, now: now);
+  if (!outcome.isUnavailable && !outcome.tore) {
+    onMiss?.call(outcome.summary);
+  }
+  return outcome;
+}
+
 /// Resolve the radio-lease teardown for a pass over [card]. Never hands a
 /// non-radio id (server `encounter_id`) to native, awaits the native result,
 /// and returns an honest [TeardownOutcome]. Pure w.r.t. the injected [drop] and

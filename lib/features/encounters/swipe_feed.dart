@@ -128,16 +128,17 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
       // alias that misses is surfaced, only a real hit tears a lease down. This
       // is "current mapped lease torn down on pass", not a durable no-redial
       // guarantee (a later onDiscovered can re-establish).
+      // Teardown-and-report logic lives in reportPassTeardown (unit-tested); a
+      // miss (stale/rotated alias or native unavailable) is dismissed quietly
+      // but logged for diagnostics — never reported as a lease actually torn
+      // down. This is "current mapped lease torn down on pass", not durable
+      // no-redial (a later onDiscovered can re-establish).
       final beacon = ref.read(beaconServiceProvider);
-      final outcome = await resolvePassTeardown(c, beacon.dropPeer);
-      _lastTeardown = outcome;
-      if (!outcome.isUnavailable && !outcome.tore) {
-        // Attempted a teardown that found no live lease (stale/rotated alias
-        // or native unavailable). The card is still dismissed; we just don't
-        // claim a lease was torn down. Kept quiet in the UI (a miss is common
-        // and benign) but observable for diagnostics.
-        debugPrint('W5 pass teardown: ${outcome.summary}');
-      }
+      _lastTeardown = await reportPassTeardown(
+        c,
+        beacon.dropPeer,
+        onMiss: (summary) => debugPrint('W5 pass teardown: $summary'),
+      );
       await _showUndo();
       return true;
     } catch (e) {

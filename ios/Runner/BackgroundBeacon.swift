@@ -885,6 +885,10 @@ extension BackgroundBeacon: CBPeripheralManagerDelegate {
       keepaliveNotifyChar = nil
       controlNotifyChar = nil
       serviceAdded = false
+    } else if serviceAdded {
+      // Clean recovery: both notify refs re-bound from the restored service.
+      // Case 3 must be able to tell this from the forced rebuild above.
+      W5Diag.emit(.restoreRebind, role: .app, result: "recovered")
     }
     // W5 lease restoration: load persisted ownership so inbound subscriptions
     // that re-attach via didSubscribeTo are recognized instead of re-minted.
