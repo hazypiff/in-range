@@ -126,6 +126,21 @@ final class W5DiagTests: XCTestCase {
       }
     }
 
+    // B3: provisioning updates the IN-PROCESS key immediately (no resolve-once
+    // staleness), and reset re-resolves to a fresh key (post-reset writes are
+    // uncorrelatable with pre-reset ones, in the generated regime).
+    func testProvisionUpdatesInProcessKeyAndResetReResolves() {
+      let sec = String(repeating: "cd", count: 32)  // 64 hex
+      W5Diag.provisionRunSecret(sec)
+      let want = Self.expectedHandle(domain: "peer", raw: "z", secretHex: sec)
+      XCTAssertEqual(W5Diag.handle("peer", "z"), want,
+        "provision updates the in-process key immediately")
+      W5Diag.resetDiagSession()
+      XCTAssertNotEqual(W5Diag.handle("peer", "z"), want,
+        "reset clears the cache → next handle re-resolves to a fresh key")
+      W5Diag.resetDiagSession()
+    }
+
     // B3 lifecycle: resetDiagSession clears the persisted run/provisioned
     // secret + dropped counters, so the next launch starts a fresh session.
     func testResetDiagSessionClearsPersistedSecretsAndCounters() {
@@ -168,6 +183,7 @@ final class W5DiagTests: XCTestCase {
     private func url(_ n: String) -> URL { docs.appendingPathComponent(n) }
     private let names = [
       "ewtest_a.jsonl", "ewtest_b.jsonl", "ewtest_b.1.jsonl", "ewtest_c.txt",
+      "ewtest_conc.jsonl",
     ]
 
     override func tearDown() {
@@ -249,6 +265,30 @@ final class W5DiagTests: XCTestCase {
       XCTAssertEqual(lines.count, 200, "every appended line present")
       XCTAssertEqual(lines.first, "line0")
       XCTAssertEqual(lines.last, "line199", "chronological order preserved")
+    }
+
+    // B4: truly concurrent appends from many threads are serialized by the
+    // writer lock — every line lands exactly once, none torn or lost.
+    func testConcurrentAppendsAreSerializedAndComplete() {
+      let name = "ewtest_conc.jsonl"
+      try? FileManager.default.removeItem(at: url(name))
+      let w = W5EvidenceWriter(fileName: name, cap: 10_000_000, rotation: .dotOne)
+      let group = DispatchGroup()
+      let q = DispatchQueue(label: "ewtest.conc", attributes: .concurrent)
+      let threads = 16, per = 40
+      for t in 0..<threads {
+        q.async(group: group) {
+          for i in 0..<per { _ = w.append("t\(t)-\(i)\n") }
+        }
+      }
+      group.wait()
+      let lines = (try? String(contentsOf: url(name), encoding: .utf8))?
+        .split(separator: "\n", omittingEmptySubsequences: true) ?? []
+      XCTAssertEqual(lines.count, threads * per,
+        "every concurrent append present; none lost")
+      for l in lines {
+        XCTAssertTrue(l.hasPrefix("t") && l.contains("-"), "no torn line: \(l)")
+      }
     }
 
     func testDrainPriorDroppedSumsAndResetsEveryFamily() {

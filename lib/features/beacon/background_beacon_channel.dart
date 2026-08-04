@@ -389,6 +389,27 @@ class BackgroundBeaconChannel {
     }
   }
 
+  /// Diagnostic-only: arm a ONE-SHOT HELLO delay (seconds) for the next dial —
+  /// widens the connect↔HELLO_ACK window for Case 1. No-op in a release binary.
+  Future<void> armW5HelloDelay(double seconds) async {
+    try {
+      await _channel.invokeMethod<void>('armW5HelloDelay', seconds);
+    } catch (e) {
+      debugPrint('BackgroundBeacon armW5HelloDelay failed: $e');
+    }
+  }
+
+  /// Diagnostic-only: record a pass teardown OUTCOME summary (already sanitized:
+  /// role names + counts, no raw ids) in the native evidence layer. No-op in a
+  /// release binary.
+  Future<void> recordW5Teardown(String outcome) async {
+    try {
+      await _channel.invokeMethod<void>('recordW5Teardown', outcome);
+    } catch (e) {
+      debugPrint('BackgroundBeacon recordW5Teardown failed: $e');
+    }
+  }
+
   /// Diagnostic-only: end the current diagnostic session — clears the persisted
   /// run secret + dropped counters and wipes evidence files, so the NEXT launch
   /// starts a fresh, isolated session (run-secret lifecycle contract). Call

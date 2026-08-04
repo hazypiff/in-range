@@ -68,11 +68,17 @@ import Foundation
       }
       let fm = FileManager.default
 
-      // Rotate BEFORE writing when over cap (dotOne only).
+      // Rotate BEFORE writing when over cap (dotOne only). If the rotation
+      // MOVE fails, the op-failure is already accounted; we still append (the
+      // file stays slightly over cap for one more line) rather than drop
+      // evidence — preservation over a strict cap bound. The Bool is consumed so
+      // the outcome is explicit, not silently ignored.
       if rotation == .dotOne, fm.fileExists(atPath: url.path),
         let size = (try? fm.attributesOfItem(atPath: url.path)[.size]) as? Int,
         size > cap {
-        rotateDotOne()
+        if !rotateDotOne() {
+          // accounted in rotateDotOne(); fall through and append anyway.
+        }
       }
 
       if !fm.fileExists(atPath: url.path) {
@@ -119,27 +125,53 @@ import Foundation
       return true
     }
 
-    private func rotateDotOne() {
+    /// Rotate; returns false (and accounts an op-failure) if the move failed —
+    /// so a failed rotation is never silently followed by an append to the
+    /// over-cap file with no record.
+    @discardableResult
+    private func rotateDotOne() -> Bool {
       let name = url.lastPathComponent
       let ext = url.pathExtension
       let base = ext.isEmpty ? name : String(name.dropLast(ext.count + 1))
       let rotatedName = ext.isEmpty ? "\(base).1" : "\(base).1.\(ext)"
       let prev = url.deletingLastPathComponent().appendingPathComponent(rotatedName)
       try? FileManager.default.removeItem(at: prev)
-      try? FileManager.default.moveItem(at: url, to: prev)
+      do {
+        try FileManager.default.moveItem(at: url, to: prev)
+      } catch {
+        noteOpFailure("rotate")
+        return false
+      }
       applyProtection(prev)
+      return true
     }
 
     /// Data protection + backup exclusion, reapplied after every op that can
-    /// create or replace the file.
+    /// create or replace the file. Accounts a failure and VERIFIES the
+    /// backup-exclusion read-back (the one attribute the platform reports), so a
+    /// silent attribute loss on replacement is not invisible.
     private func applyProtection(_ u: URL) {
-      try? FileManager.default.setAttributes(
-        [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
-        ofItemAtPath: u.path)
+      do {
+        try FileManager.default.setAttributes(
+          [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+          ofItemAtPath: u.path)
+      } catch { noteOpFailure("protect") }
       var m = u
       var res = URLResourceValues()
       res.isExcludedFromBackup = true
-      try? m.setResourceValues(res)
+      do { try m.setResourceValues(res) } catch { noteOpFailure("backup") }
+      // Verify the backup-exclusion took (device reports it; simulator returns
+      // nil, in which case we cannot verify and do not falsely fail).
+      if let excluded = try? u.resourceValues(forKeys: [.isExcludedFromBackupKey])
+        .isExcludedFromBackup, excluded == false {
+        noteOpFailure("backup-verify")
+      }
+    }
+
+    private func noteOpFailure(_ kind: String) {
+      let k = "bb.evwrite.opfail.\(url.lastPathComponent)"
+      let n = (Self.diagDefaults?.integer(forKey: k) ?? 0) + 1
+      Self.diagDefaults?.set(n, forKey: k)
     }
 
     /// Run `body` holding this writer's lock — for related file work (RSSI
@@ -173,10 +205,21 @@ import Foundation
       "bb.evwrite.dropped.w5_rssi_log.jsonl",
     ]
 
-    /// Sum the prior run's drops across ALL families, then reset them.
+    /// Per-file op-failure keys (rotate/protect/backup) — bounded accounting for
+    /// the file operations that can fail silently.
+    static let opFailKeys = [
+      "bb.evwrite.opfail.w5_events.jsonl",
+      "bb.evwrite.opfail.bb_wake_log.txt",
+      "bb.evwrite.opfail.w5_rssi_log.jsonl",
+      "bb.evwrite.opfail.w5_events.1.jsonl",
+      "bb.evwrite.opfail.bb_wake_log.1.txt",
+    ]
+
+    /// Sum the prior run's dropped writes + op-failures across ALL families,
+    /// then reset them — no integrity loss (write OR file-op) is silent.
     static func drainPriorDropped() -> Int {
       var total = 0
-      for k in droppedKeys {
+      for k in droppedKeys + opFailKeys {
         total += diagDefaults?.integer(forKey: k) ?? 0
         diagDefaults?.removeObject(forKey: k)
       }

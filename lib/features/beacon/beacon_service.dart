@@ -1017,8 +1017,13 @@ class BeaconService {
       );
       final ok = await _bgBeacon.start(payload);
       // Diag run secret first (before any W5 event can emit) so fleet HMAC
-      // handles align and survive restoration. Empty/production → no-op.
-      unawaited(_bgBeacon.setDiagRunSecret(AppConfig.diagRunSecret));
+      // handles align and survive restoration. Gated on the compile-time diag
+      // flag so the whole call — and the run-secret key literal — tree-shakes
+      // out of production (B5). Awaited so provisioning lands before setW5Links
+      // enables emits (B3 boot-before-provision ordering).
+      if (AppConfig.kDiagBuild) {
+        await _bgBeacon.setDiagRunSecret(AppConfig.diagRunSecret);
+      }
       // W5 test gate: only establish persistent links when the build opts in.
       unawaited(_bgBeacon.setW5Links(AppConfig.w5LinksEnabled));
       // Crack #1: refresh the native wake-ping endpoint + JWT on every
@@ -2197,6 +2202,14 @@ class BeaconService {
   Future<void> disarmW5Fault() async {
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
       await _bgBeacon.disarmW5Fault();
+    }
+  }
+
+  /// Record a pass teardown outcome (sanitized summary) in the native evidence
+  /// layer. No-op off-iOS.
+  Future<void> recordW5Teardown(String outcome) async {
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      await _bgBeacon.recordW5Teardown(outcome);
     }
   }
 

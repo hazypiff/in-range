@@ -153,6 +153,33 @@ final class W5TeardownTests: XCTestCase {
     }
   }
 
+  // REAL CHANNEL COMMITTED HIT (B1): a genuinely committed lease torn down
+  // through BackgroundBeacon.dropPeerByToken — the exact boundary Dart invokes —
+  // not just the controller. Diag-only: the w5Link gate is compile-false
+  // otherwise.
+  #if INRANGE_DIAG
+    func testChannelDropPeerByTokenCommittedHit() {
+      let bb = BackgroundBeacon()
+      withExtendedLifetime(bb) {
+        bb.testEnableW5Links()
+        bb.w5Link.testSeedOutboundLink(
+          peripheralID: UUID(), myCand: "cand-a", peerCand: "cand-b",
+          alias: "aliasZ", linkId: "L9")
+        XCTAssertTrue(bb.w5Link.testIsCommitted(alias: "aliasZ"))
+        let d = bb.dropPeerByToken("aliasZ")
+        XCTAssertEqual(d["lookupHit"] as? Bool, true, "committed lease → hit")
+        XCTAssertEqual(d["leaseEnded"] as? Bool, true)
+        XCTAssertEqual(d["rolesClosed"] as? [String], ["outbound"])
+        // No raw CA5E session was seeded (needs a CBPeripheral), so 0 reaped;
+        // the reap loop itself is exercised by the field soak.
+        XCTAssertEqual(d["rawSessionsReaped"] as? Int, 0)
+        // A server-id-shaped token remains inert through the same real boundary.
+        let miss = bb.dropPeerByToken("0badc0de5758583300000000deadbeef")
+        XCTAssertEqual(miss["lookupHit"] as? Bool, false)
+      }
+    }
+  #endif
+
   // REAL CHANNEL ENTRY (B1): the platform-channel handler itself. A server
   // encounter_id fed through dropPeerByToken tears down nothing and reaps no
   // raw sessions — the H-W5-6 guarantee at the real boundary Dart calls.

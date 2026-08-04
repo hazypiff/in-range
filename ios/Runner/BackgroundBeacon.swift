@@ -132,14 +132,9 @@ final class BackgroundBeacon: NSObject {
   // next beat is scheduled ~4 s out. Herald-shaped — not an instant loop.
   private static let w5Cadence: TimeInterval = 4
   private static let keyW5Links = "bb.w5links"
-  /// (b) H-W5-3 determinism: diag-only delay between didConnect and the
-  /// outbound HELLO so a third peer can be brought into the connect↔HELLO_ACK
-  /// window on real hardware. 0 = no delay. Compiles out of release.
-  #if INRANGE_DIAG
-    static let diagHelloDelaySeconds: TimeInterval = 4
-  #else
-    static let diagHelloDelaySeconds: TimeInterval = 0
-  #endif
+  // The diag HELLO delay is no longer an always-on constant — it is a ONE-SHOT,
+  // explicitly-armed diagnostic control (W5Diag.armHelloDelay / consumeHelloDelay),
+  // so it never slows an ordinary diag handshake.
   private static let keySchema = "bb.stateSchema"
   // Flavor+schema stamp: production and diag builds must not consume each
   // other's persisted operational state (issue #8). Bump on schema changes.
@@ -394,6 +389,18 @@ final class BackgroundBeacon: NSObject {
       case "disarmW5Fault":
         // Diag-only: clear any pending fault. No-op in a release binary.
         W5Diag.disarmFault()
+        result(nil)
+      case "armW5HelloDelay":
+        // Diag-only: arm a one-shot HELLO delay (seconds) for the next dial.
+        W5Diag.armHelloDelay((call.arguments as? Double) ?? 0)
+        result(nil)
+      case "recordW5Teardown":
+        // Diag-only: record a pass's teardown OUTCOME (already sanitized — role
+        // names + counts, no raw ids) in the structured evidence layer, so all
+        // four outcomes (tore / unavailable / stale-miss / native-unavailable)
+        // are operationally attributable, not just debugPrint'd.
+        W5Diag.emit(.dropPeer, role: .app, result: call.arguments as? String,
+          reason: "passOutcome")
         result(nil)
       case "resetW5Diag":
         // Diag-only: end the current diagnostic session — clear the persisted
@@ -1184,6 +1191,11 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
     inflight[id] = peripheral
     inflightRSSI[id] = rssi
     peripheral.delegate = self
+    // B2: attribute the NO-TOKEN dial (locked peer, connect-to-read) — the
+    // advertised-token path already emits dialStart; this one did not, leaving
+    // a dial with no structured record.
+    W5Diag.emit(.dialStart, role: .outbound,
+      peripheral: id.uuidString, reason: "tokenRead")
     central.connect(peripheral, options: nil)
     // Watchdog: never hold a connect slot longer than 10 s.
     DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
@@ -1452,4 +1464,11 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
     result["rawSessionsReaped"] = reaped
     return result
   }
+
+  #if DEBUG
+    /// TEST-ONLY (compiled out of Release/diag app builds): flip the persisted
+    /// W5-links gate so a test can drive dropPeerByToken through the real
+    /// w5Link.dropPeer path (w5LinksEnabled reads this under INRANGE_DIAG).
+    func testEnableW5Links() { defaults.set(true, forKey: Self.keyW5Links) }
+  #endif
 }

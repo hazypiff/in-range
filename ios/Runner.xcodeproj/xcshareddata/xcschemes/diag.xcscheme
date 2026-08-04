@@ -67,13 +67,6 @@
             </BuildableReference>
          </TestableReference>
       </Testables>
-      <EnvironmentVariables>
-         <EnvironmentVariable
-            key = "INRANGE_DIAG_RUN_SECRET"
-            value = "4452554e5f5345435245545f4449414700000000000000000000000000000042"
-            isEnabled = "YES">
-         </EnvironmentVariable>
-      </EnvironmentVariables>
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug-diag"
@@ -95,13 +88,6 @@
             ReferencedContainer = "container:Runner.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
-      <EnvironmentVariables>
-         <EnvironmentVariable
-            key = "INRANGE_DIAG_RUN_SECRET"
-            value = "4452554e5f5345435245545f4449414700000000000000000000000000000042"
-            isEnabled = "YES">
-         </EnvironmentVariable>
-      </EnvironmentVariables>
    </LaunchAction>
    <ProfileAction
       buildConfiguration = "Profile-diag"

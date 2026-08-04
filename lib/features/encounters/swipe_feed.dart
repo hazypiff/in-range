@@ -139,6 +139,11 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
         beacon.dropPeer,
         onMiss: (summary) => debugPrint('W5 pass teardown: $summary'),
       );
+      // Record EVERY outcome (tore / unavailable / stale-miss / native-
+      // unavailable) in the native sanitized evidence layer — diag builds only.
+      if (AppConfig.kDiagBuild) {
+        unawaited(beacon.recordW5Teardown(_lastTeardown!.summary));
+      }
       await _showUndo();
       return true;
     } catch (e) {

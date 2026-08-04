@@ -260,11 +260,14 @@ final class W5LinkController {
         lease: leaseByHandle[outHandle(id)], link: linkRaw)
     }
     // (b) H-W5-3 determinism: a diag-only delay between didConnect and the
-    // outbound HELLO widens the connect↔HELLO_ACK window. Compiles out of
-    // release entirely.
+    // outbound HELLO widens the connect↔HELLO_ACK window. Now ONE-SHOT and
+    // ARMED-CONDITIONAL — it fires only for the next dial after armHelloDelay,
+    // not on every diag handshake. Compiles out of release entirely.
     #if INRANGE_DIAG
-      let delaySec = BackgroundBeacon.diagHelloDelaySeconds
+      let delaySec = W5Diag.consumeHelloDelay()
       if delaySec > 0 {
+        W5Diag.emit(.dialStart, role: .outbound, peer: peerRaw,
+          reason: "helloDelay", count: Int(delaySec))
         DispatchQueue.main.asyncAfter(deadline: .now() + delaySec) { [weak self] in
           guard let self, self.outLinks[id]?.helloSent == true,
             peripheral.state == .connected else { return }

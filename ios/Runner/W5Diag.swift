@@ -12,9 +12,11 @@ import Foundation
 ///   under a domain separator (`peer\0<token>` vs `lease\0<leaseId>`), so the
 ///   same raw id yields the same handle within a run (cross-device alignment
 ///   when the run secret is shared) but is not reversible.
-/// - The run secret lives only in memory, is never persisted or printed, and
-///   is per-process random unless a shared secret is injected via the
-///   `INRANGE_DIAG_RUN_SECRET` launch environment (Phase 5 sets it fleet-wide).
+/// - The run secret is resolved once per process and PERSISTED in the diag-only
+///   UserDefaults suite so it survives OS restoration (see the full lifecycle
+///   contract on `resetDiagSession`). It is never printed and never emitted;
+///   only truncated, non-reversible handles derived from it appear in the log.
+///   Precedence: fleet dart-define/env → persisted (per-install) → generated.
 enum W5Diag {
 
   /// Stable event names (enum-like) — the only `event` values that appear.
@@ -88,8 +90,13 @@ enum W5Diag {
   /// emit (beacon start does). Release-safe no-op.
   static func provisionRunSecret(_ hex: String) {
     #if INRANGE_DIAG
-      guard hex.count >= 32, hexToData(hex) != nil else { return }
+      guard hex.count >= 32, let d = hexToData(hex) else { return }
       diagDefaults?.set(hex, forKey: provisionedSecretKey)
+      // Update the in-process key too, so a fleet secret arriving after an early
+      // boot emit governs every subsequent handle (no resolve-once staleness).
+      runSecretLock.lock()
+      _cachedRunSecret = d
+      runSecretLock.unlock()
     #endif
   }
 
@@ -101,9 +108,12 @@ enum W5Diag {
   ///   restoration relaunch reuses it (HMAC handles stay joinable — Case 3).
   ///   Never auto-rotated (that would break restoration continuity).
   /// - **Bounded lifetime**: the secret belongs to ONE diagnostic session, not
-  ///   forever. `resetDiagSession()` clears it (and the dropped counters); a
-  ///   foreign-flavor boot wipes it too. The NEXT launch then mints a fresh
-  ///   secret, so separate matrix cases are not cross-correlatable.
+  ///   forever. `resetDiagSession()` clears the persisted secret + counters AND
+  ///   the in-process cache, so the NEXT handle re-resolves. A foreign-flavor
+  ///   boot wipes it too. CAVEAT: if a FLEET secret is baked (env/dart-define),
+  ///   reset re-resolves to that same baked value by design — fleet alignment
+  ///   and per-reset decorrelation are mutually exclusive. Reset decorrelates
+  ///   cases only in the per-install/generated regime (no baked fleet secret).
   /// - **runLabel vs secret**: `runLabel` (bootEpoch-derived) is a PUBLIC,
   ///   per-process label that distinguishes relaunches in the log; the secret
   ///   is private and keys the handles. They are independent by design.
@@ -120,7 +130,14 @@ enum W5Diag {
     #if INRANGE_DIAG
       diagDefaults?.removeObject(forKey: runSecretKey)
       diagDefaults?.removeObject(forKey: provisionedSecretKey)
-      for k in W5EvidenceWriter.droppedKeys { diagDefaults?.removeObject(forKey: k) }
+      for k in W5EvidenceWriter.droppedKeys + W5EvidenceWriter.opFailKeys {
+        diagDefaults?.removeObject(forKey: k)
+      }
+      // Clear the in-process key so the next handle re-resolves (fresh, unless a
+      // fleet secret is baked — see the caveat on the lifecycle contract).
+      runSecretLock.lock()
+      _cachedRunSecret = nil
+      runSecretLock.unlock()
     #endif
   }
 
@@ -157,6 +174,25 @@ enum W5Diag {
     #endif
   }
 
+  /// Arm a ONE-SHOT diagnostic HELLO delay (seconds) for the next outbound
+  /// HELLO — widens the connect↔HELLO_ACK window for Case 1 deterministically,
+  /// but ONLY when explicitly armed (not on every diag dial) and only once.
+  static func armHelloDelay(_ seconds: Double) {
+    #if INRANGE_DIAG
+      helloDelayPending = seconds > 0 ? seconds : nil
+    #endif
+  }
+
+  /// The one-shot HELLO delay to apply now, then cleared (0 = none/not armed).
+  static func consumeHelloDelay() -> Double {
+    #if INRANGE_DIAG
+      defer { helloDelayPending = nil }
+      return helloDelayPending ?? 0
+    #else
+      return 0
+    #endif
+  }
+
   /// True (and clears) if a pre-ACK fault should fire for this outbound peer.
   static func consumePreAckFault(peerRaw: String?) -> Bool {
     #if INRANGE_DIAG
@@ -177,6 +213,7 @@ enum W5Diag {
     private static let bootEpoch = UInt64.random(in: 0...UInt64.max)
     private static var seqCounter: UInt64 = 0
     private static var faultPeerHandle: String?
+    private static var helloDelayPending: Double?
     // B4: the events JSONL now shares the one serialized evidence writer with
     // the wake + RSSI logs (absent-vs-inaccessible, protection/backup after
     // every op, per-family bounded drop counter).
@@ -188,44 +225,46 @@ enum W5Diag {
     private static let runSecretKey = "bb.w5diag.runsecret"
     private static let provisionedSecretKey = "bb.w5diag.provisionedsecret"
 
-    /// Run secret, resolved with precedence and PERSISTED so restoration works:
-    ///   1. `INRANGE_DIAG_RUN_SECRET` env — explicit fleet-wide override for
-    ///      simulator/Xcode/CI + cross-device alignment (set by the diag scheme
-    ///      and artifact builder). Wins when present.
-    ///   2. else a per-INSTALL secret persisted in the diag suite. An
-    ///      OS-spawned CoreBluetooth restoration relaunch does NOT inherit the
-    ///      Xcode launch environment, so an env-only secret would rotate at the
-    ///      exact boundary Case 3 must join across. Persisting it (diag suite
-    ///      only, never `standard`) keeps every HMAC handle continuous across
-    ///      restoration.
-    ///   3. else generate once and persist.
-    /// Diag-only (the whole type compiles out of Release). Truncated HMAC
-    /// handles stay non-reversible; the secret is never logged or emitted.
-    private static let runSecret: Data = {
-      // 1. env override (simulator/Xcode/CI + tests) — highest precedence.
+    private static let runSecretLock = NSLock()
+    private static var _cachedRunSecret: Data?
+
+    /// Run secret (see the lifecycle contract on `resetDiagSession`). Resolved
+    /// lazily, cached in-process, and — unlike a resolve-once `let` —
+    /// RE-RESOLVABLE: `provisionRunSecret` updates the cache so a fleet key that
+    /// arrives after an early boot emit still governs later handles (boot events
+    /// carry no handles, so nothing keyed leaks before provisioning); and
+    /// `resetDiagSession` clears the cache so the next handle re-resolves.
+    /// Precedence: env → provisioned → per-install persisted → generate+persist.
+    /// Diag-only. Truncated HMAC handles stay non-reversible; the secret is
+    /// never logged or emitted.
+    static var runSecret: Data {
+      runSecretLock.lock()
+      defer { runSecretLock.unlock() }
+      if let c = _cachedRunSecret { return c }
+      let d = resolveRunSecret()
+      _cachedRunSecret = d
+      return d
+    }
+
+    private static func resolveRunSecret() -> Data {
       if let hex = ProcessInfo.processInfo.environment["INRANGE_DIAG_RUN_SECRET"],
         hex.count >= 32, let d = hexToData(hex) {
         return d
       }
-      // 2. fleet secret provisioned from the build-time dart-define (persisted
-      //    by provisionRunSecret at start) — aligns a whole fleet + survives
-      //    restoration.
       if let hex = diagDefaults?.string(forKey: provisionedSecretKey),
         hex.count >= 32, let d = hexToData(hex) {
         return d
       }
-      // 3. per-INSTALL persisted secret — restoration-continuous on one device.
       if let b64 = diagDefaults?.string(forKey: runSecretKey),
         let d = Data(base64Encoded: b64), d.count == 32 {
         return d
       }
-      // 4. generate once and persist.
       var b = [UInt8](repeating: 0, count: 32)
       _ = SecRandomCopyBytes(kSecRandomDefault, 32, &b)
       let d = Data(b)
       diagDefaults?.set(d.base64EncodedString(), forKey: runSecretKey)
       return d
-    }()
+    }
 
     /// Public run label — NOT the secret. Distinguishes relaunches.
     private static let runLabel = String(

@@ -12,7 +12,7 @@ BUNDLE="io.inrange.inRange.diag"
 set -euo pipefail
 
 UDID="${1:?UDID required}"; LABEL="${2:?label required}"; CASE="${3:?case required}"
-RAW="/private/tmp/claude-501/-Users-artigupta/hw_matrix_raw/${CASE}_${LABEL}"
+RAW="${HW_MATRIX_RAW_DIR:-${TMPDIR:-/tmp}/hw_matrix_raw}/${CASE}_${LABEL}"
 OUT="$(cd "$(dirname "$0")" && pwd)/hardware_evidence/${CASE}"
 mkdir -p "$RAW" "$OUT"
 
@@ -41,27 +41,48 @@ pull in_range_local.db
 # live w5_events.jsonl (and across fleet devices sharing the secret). Without a
 # secret it falls back to an unkeyed sha256[:6] tag (still stable, but NOT
 # aligned with the live handles) and warns. Matches UUID-format ids AND 32-hex.
+# FAIL-CLOSED: a valid run secret is REQUIRED (no unkeyed fallback — that was
+# fail-open and produced tags that don't align with live handles). The sanitizer
+# is DOMAIN-AWARE: JSON id fields are hashed under their live domain
+# (peer/lease/link/peripheral), and bare hex in text logs is hashed as `peer`
+# (the only raw id class those logs carry — RSSI/wake peer tokens).
+if [ -z "${INRANGE_DIAG_RUN_SECRET:-}" ] || [ "${#INRANGE_DIAG_RUN_SECRET}" -lt 32 ]; then
+  echo "ERROR: set INRANGE_DIAG_RUN_SECRET (the diag build's run secret, >=32 hex)." >&2
+  echo "       The puller refuses to write commit-safe evidence without it." >&2
+  exit 1
+fi
 sanitize() {
   local f="$1"
   [ -f "$RAW/$f" ] || return 0
-  INRANGE_DIAG_RUN_SECRET="${INRANGE_DIAG_RUN_SECRET:-}" python3 - "$RAW/$f" "$OUT/${LABEL}_$f" <<'PY'
-import sys, os, re, hmac, hashlib
+  python3 - "$RAW/$f" "$OUT/${LABEL}_$f" <<'PY'
+import sys, os, re, json, hmac, hashlib
 src, dst = sys.argv[1], sys.argv[2]
-sec = os.environ.get("INRANGE_DIAG_RUN_SECRET", "")
-key = bytes.fromhex(sec) if len(sec) >= 32 else None
-if key is None:
-    sys.stderr.write("  WARN: no INRANGE_DIAG_RUN_SECRET; unkeyed tags won't align with live handles\n")
-def tag(m):
-    raw = m.group(0)
-    if key is not None:  # keyed, run-scoped: matches W5Diag.handle("peer", raw)
-        mac = hmac.new(key, b"peer\x00" + raw.encode(), hashlib.sha256).digest()
-        return "id:" + mac[:7].hex()  # 14 hex
-    return "id:" + hashlib.sha256(raw.lower().encode()).hexdigest()[:6]
-data = open(src, 'r', errors='replace').read()
-# UUID-format first (longer, more specific), then bare 32-hex.
-data = re.sub(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', tag, data)
-data = re.sub(r'\b[0-9a-fA-F]{32}\b', tag, data)
-open(dst, 'w').write(data)
+key = bytes.fromhex(os.environ["INRANGE_DIAG_RUN_SECRET"])
+def h(domain, raw):  # == W5Diag.handle(domain, raw): trunc HMAC-SHA256, 14 hex
+    return "id:" + hmac.new(key, domain.encode() + b"\x00" + raw.encode(),
+                            hashlib.sha256).digest()[:7].hex()
+HEX = re.compile(r'^(?:[0-9a-fA-F]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$')
+FIELD_DOMAIN = {"token": "peer", "peer": "peer", "lease": "lease",
+                "link": "link", "peripheral": "peripheral"}
+def sanitize_json_obj(o):
+    if isinstance(o, dict):
+        return {k: (h(FIELD_DOMAIN[k], v) if k in FIELD_DOMAIN and isinstance(v, str)
+                    and HEX.match(v) else sanitize_json_obj(v)) for k, v in o.items()}
+    if isinstance(o, list):
+        return [sanitize_json_obj(x) for x in o]
+    return o
+def bare(m):  # bare hex in text logs → peer domain (only raw class those carry)
+    return h("peer", m.group(0))
+out = []
+for line in open(src, 'r', errors='replace'):
+    s = line.rstrip('\n')
+    try:  # JSONL → domain-aware by field
+        out.append(json.dumps(sanitize_json_obj(json.loads(s))))
+    except Exception:  # plain text → bare-hex as peer
+        s = re.sub(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', bare, s)
+        s = re.sub(r'\b[0-9a-fA-F]{32}\b', bare, s)
+        out.append(s)
+open(dst, 'w').write('\n'.join(out) + ('\n' if out else ''))
 print(f"  sanitized -> {dst}")
 PY
 }

@@ -37,8 +37,11 @@ class AppConfig {
           const String.fromEnvironment('INRANGE_LOCATION_RESIDENCY'),
         'INRANGE_W5_LINKS' =>
           const String.fromEnvironment('INRANGE_W5_LINKS'),
-        'INRANGE_DIAG_RUN_SECRET' =>
-          const String.fromEnvironment('INRANGE_DIAG_RUN_SECRET'),
+        // NOTE: INRANGE_DIAG_RUN_SECRET is deliberately NOT in this switch. Its
+        // literal must not ship in the production AOT (panel B5 — the key was
+        // found in App.framework via this common switch). It is read only via
+        // `diagRunSecret`, gated behind the compile-time `kDiagBuild` const so
+        // it tree-shakes out of production.
         'AUTH_REDIRECT_URL' =>
           const String.fromEnvironment('AUTH_REDIRECT_URL'),
         'GOOGLE_WEB_CLIENT_ID' =>
@@ -70,13 +73,21 @@ class AppConfig {
   static bool get w5LinksEnabled =>
       _env('INRANGE_W5_LINKS').toLowerCase() == 'true';
 
+  /// Compile-time diag-build flag (`--dart-define=INRANGE_DIAG=true`, set only
+  /// by the diag artifact/isolation builds). Being a `const bool.fromEnvironment`
+  /// it is const-folded, so `kDiagBuild ? … : ''` dead-code-eliminates the diag
+  /// branch — and the `INRANGE_DIAG_RUN_SECRET` literal — out of production AOT.
+  static const kDiagBuild = bool.fromEnvironment('INRANGE_DIAG');
+
   /// Diagnostic-only shared run secret (hex) for the W5 event HMAC handles.
   /// When a diag artifact is built for a FLEET with this set, every device's
   /// handles align (same raw id → same handle) AND survive OS restoration
   /// (native persists it to the diag suite). Empty → native falls back to a
   /// per-install persisted secret (restoration-continuous, not cross-device).
-  /// Never set in production; the native side only uses it in the diag flavor.
-  static String get diagRunSecret => _env('INRANGE_DIAG_RUN_SECRET');
+  /// B5: the key literal is confined to the `kDiagBuild` branch so it NEVER
+  /// ships in the production AOT; in production this folds to ''.
+  static String get diagRunSecret =>
+      kDiagBuild ? const String.fromEnvironment('INRANGE_DIAG_RUN_SECRET').trim() : '';
 
   static String get supabaseAnonKey {
     final k = _env('SUPABASE_PUBLISHABLE_KEY');
