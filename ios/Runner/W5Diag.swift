@@ -82,10 +82,56 @@ enum W5Diag {
     #endif
   }
 
+  /// Run-secret LIFECYCLE CONTRACT (diag-only):
+  /// - **Creation**: lazily on first use, resolved env → provisioned(build
+  ///   dart-define) → per-install persisted → generate. Persisted only in the
+  ///   `io.inrange.diag` suite, never `standard`.
+  /// - **Stability**: fixed for the life of the process, and persisted so an OS
+  ///   restoration relaunch reuses it (HMAC handles stay joinable — Case 3).
+  ///   Never auto-rotated (that would break restoration continuity).
+  /// - **Bounded lifetime**: the secret belongs to ONE diagnostic session, not
+  ///   forever. `resetDiagSession()` clears it (and the dropped counters); a
+  ///   foreign-flavor boot wipes it too. The NEXT launch then mints a fresh
+  ///   secret, so separate matrix cases are not cross-correlatable.
+  /// - **runLabel vs secret**: `runLabel` (bootEpoch-derived) is a PUBLIC,
+  ///   per-process label that distinguishes relaunches in the log; the secret
+  ///   is private and keys the handles. They are independent by design.
+  ///
+  /// Clears the persisted run/provisioned secret + per-family dropped counters.
+  /// In-process `runSecret` is already resolved (a `let`), so this takes effect
+  /// on the NEXT launch — call it between matrix cases (before relaunch) to
+  /// start a fresh, isolated diagnostic session. Release-safe no-op.
+  static func resetDiagSession() {
+    #if INRANGE_DIAG
+      diagDefaults?.removeObject(forKey: runSecretKey)
+      diagDefaults?.removeObject(forKey: provisionedSecretKey)
+      for k in W5EvidenceWriter.droppedKeys { diagDefaults?.removeObject(forKey: k) }
+    #endif
+  }
+
   /// Arm the one-shot pre-HELLO_ACK fault for a peer (Case 1 reclamation).
+  /// A specific peer token scopes the fault to that peer; nil arms the next
+  /// dial to anyone (use only when the target alias is not yet known).
   static func armFault(peerRaw: String?) {
     #if INRANGE_DIAG
       faultPeerHandle = handle("peer", peerRaw) ?? "*"  // "*" = any next dial
+    #endif
+  }
+
+  /// Disarm any pending fault (peer-scoped control cleanup between cases, so an
+  /// armed-but-never-consumed fault can't fire on a later unrelated dial).
+  static func disarmFault() {
+    #if INRANGE_DIAG
+      faultPeerHandle = nil
+    #endif
+  }
+
+  /// Whether a fault is currently armed (diagnostics/tests). False in Release.
+  static var isFaultArmed: Bool {
+    #if INRANGE_DIAG
+      return faultPeerHandle != nil
+    #else
+      return false
     #endif
   }
 

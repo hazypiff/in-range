@@ -378,4 +378,26 @@ class BackgroundBeaconChannel {
       debugPrint('BackgroundBeacon armW5Fault failed: $e');
     }
   }
+
+  /// Diagnostic-only: clear any pending pre-HELLO_ACK fault (peer-scoped control
+  /// cleanup). No-op in a release binary.
+  Future<void> disarmW5Fault() async {
+    try {
+      await _channel.invokeMethod<void>('disarmW5Fault');
+    } catch (e) {
+      debugPrint('BackgroundBeacon disarmW5Fault failed: $e');
+    }
+  }
+
+  /// Diagnostic-only: end the current diagnostic session — clears the persisted
+  /// run secret + dropped counters and wipes evidence files, so the NEXT launch
+  /// starts a fresh, isolated session (run-secret lifecycle contract). Call
+  /// between matrix cases. No-op in a release binary.
+  Future<void> resetW5Diag() async {
+    try {
+      await _channel.invokeMethod<void>('resetW5Diag');
+    } catch (e) {
+      debugPrint('BackgroundBeacon resetW5Diag failed: $e');
+    }
+  }
 }

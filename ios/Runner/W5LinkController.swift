@@ -501,6 +501,31 @@ final class W5LinkController {
     return res
   }
 
+  #if DEBUG
+    /// TEST-ONLY (compiled out of Release/diag app builds): seed a live,
+    /// established outbound lease straight into the controller — no
+    /// CoreBluetooth — so a test can exercise the REAL `dropPeer` teardown path
+    /// end to end (leaseForAlias hit → onTeardown → apply → endedCleanup,
+    /// leaseByHandle/outLinks cleanup), not a reconstruction of the ownership
+    /// helper.
+    func testSeedOutboundLink(
+      peripheralID: UUID, myCand: String, peerCand: String, alias: String,
+      linkId: String
+    ) {
+      outLinks[peripheralID] = OutLink(
+        linkIdHex: linkId, myCandidateHex: myCand, peerAliasHex: alias,
+        controlChar: nil, helloSent: true, established: true)
+      let handle = outHandle(peripheralID)
+      apply(
+        ownership.onControl(
+          handle: handle, role: .outbound, myCandidate: myCand,
+          peerCandidate: peerCand, peerAlias: alias, linkId: linkId))
+      leaseByHandle[handle] = ownership.leaseForAlias(alias)
+    }
+
+    var testActiveLeaseCount: Int { ownership.activeLeases }
+  #endif
+
   func inboundGone(_ central: CBCentral) {
     let key = central.identifier.uuidString
     guard let link = inLinks.removeValue(forKey: key), link.established else {
@@ -935,7 +960,19 @@ final class W5LinkController {
     #if INRANGE_DIAG
       let line = "{\"token\":\"\(tokenHex)\",\"rssi\":\(rssi),\"ts\":\(ts)}\n"
       W5Diag.rssiWriter.append(line)
-      trimRssiFileIfNeeded()
+      // Trim under the writer lock so it can't race a concurrent drain/ack from
+      // the channel thread (BLE queue vs main).
+      rssiSerialized { self.trimRssiFileIfNeeded() }
+    #endif
+  }
+
+  /// Serialize RSSI file work (trim/drain/ack) with `append` in diag; a plain
+  /// call in release (no RSSI file is written there). Never calls `append`.
+  private func rssiSerialized<T>(_ body: () -> T) -> T {
+    #if INRANGE_DIAG
+      return W5Diag.rssiWriter.withLock(body)
+    #else
+      return body()
     #endif
   }
 
@@ -955,37 +992,43 @@ final class W5LinkController {
     }
   }
 
-  /// Un-acked file samples, oldest first, for drainBufferedSightings.
+  /// Un-acked file samples, oldest first, for drainBufferedSightings. Serialized
+  /// with append/trim so a concurrent trim can't move the file under the read.
   func drainFileSamples(max maxCount: Int = 8000) -> [[String: Any]] {
-    guard let all = try? Data(contentsOf: rssiFileURL) else { return [] }
-    let start = UInt64(bb.defaults.integer(forKey: Self.keyRssiOffset))
-    guard start < all.count else { return [] }
-    var out: [[String: Any]] = []
-    lastDrainLineEnds = []
-    var idx = Int(start)
-    while idx < all.count, out.count < maxCount {
-      guard let nl = all[idx...].firstIndex(of: 0x0A) else { break }
-      if let obj = try? JSONSerialization.jsonObject(with: all[idx..<nl]) as? [String: Any] {
-        out.append(obj)
-        lastDrainLineEnds.append(UInt64(nl + 1))
+    rssiSerialized {
+      guard let all = try? Data(contentsOf: rssiFileURL) else { return [] }
+      let start = UInt64(bb.defaults.integer(forKey: Self.keyRssiOffset))
+      guard start < all.count else { return [] }
+      var out: [[String: Any]] = []
+      lastDrainLineEnds = []
+      var idx = Int(start)
+      while idx < all.count, out.count < maxCount {
+        guard let nl = all[idx...].firstIndex(of: 0x0A) else { break }
+        if let obj = try? JSONSerialization.jsonObject(with: all[idx..<nl]) as? [String: Any] {
+          out.append(obj)
+          lastDrainLineEnds.append(UInt64(nl + 1))
+        }
+        idx = nl + 1
       }
-      idx = nl + 1
+      return out
     }
-    return out
   }
 
-  /// Advance the consumed offset past [count] drained samples.
+  /// Advance the consumed offset past [count] drained samples. Serialized with
+  /// append/trim/drain (shared writer lock).
   func ackFileSamples(_ count: Int) {
-    guard count > 0, !lastDrainLineEnds.isEmpty else { return }
-    let n = min(count, lastDrainLineEnds.count)
-    bb.defaults.set(Int(lastDrainLineEnds[n - 1]), forKey: Self.keyRssiOffset)
-    lastDrainLineEnds.removeFirst(n)
-    // Fully consumed → reclaim the file.
-    if let size = (try? FileManager.default.attributesOfItem(atPath: rssiFileURL.path)[.size])
-      as? Int, bb.defaults.integer(forKey: Self.keyRssiOffset) >= size {
-      try? FileManager.default.removeItem(at: rssiFileURL)
-      bb.defaults.removeObject(forKey: Self.keyRssiOffset)
-      lastDrainLineEnds = []
+    rssiSerialized {
+      guard count > 0, !lastDrainLineEnds.isEmpty else { return }
+      let n = min(count, lastDrainLineEnds.count)
+      bb.defaults.set(Int(lastDrainLineEnds[n - 1]), forKey: Self.keyRssiOffset)
+      lastDrainLineEnds.removeFirst(n)
+      // Fully consumed → reclaim the file.
+      if let size = (try? FileManager.default.attributesOfItem(atPath: rssiFileURL.path)[.size])
+        as? Int, bb.defaults.integer(forKey: Self.keyRssiOffset) >= size {
+        try? FileManager.default.removeItem(at: rssiFileURL)
+        bb.defaults.removeObject(forKey: Self.keyRssiOffset)
+        lastDrainLineEnds = []
+      }
     }
   }
 }

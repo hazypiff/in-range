@@ -113,14 +113,42 @@ final class W5TeardownTests: XCTestCase {
   // a reconstruction. An unknown/rotated/stale alias on a controller with no
   // live lease must miss through the real method — nothing torn down.
   func testControllerDropPeerRealEntryMissesUnknownAlias() {
-    let ctl = W5LinkController(bb: BackgroundBeacon())
-    let r = ctl.dropPeer(alias: "12345")  // encounter_id-shaped, never an alias
-    XCTAssertFalse(r.lookupHit)
-    XCTAssertTrue(r.rolesClosed.isEmpty)
-    XCTAssertFalse(r.leaseEnded)
-    // Idempotent: a second real call is still a clean miss.
-    let r2 = ctl.dropPeer(alias: "aabbccddeeff00112233445566778899")
-    XCTAssertFalse(r2.lookupHit)
+    // Hold a STRONG ref: W5LinkController.bb is `unowned`, so a temporary
+    // BackgroundBeacon() would be freed right after init and any bb access
+    // would crash (unowned-read-after-free).
+    let bb = BackgroundBeacon()
+    let ctl = W5LinkController(bb: bb)
+    withExtendedLifetime(bb) {
+      let r = ctl.dropPeer(alias: "12345")  // encounter_id-shaped, never an alias
+      XCTAssertFalse(r.lookupHit)
+      XCTAssertTrue(r.rolesClosed.isEmpty)
+      XCTAssertFalse(r.leaseEnded)
+      // Idempotent: a second real call is still a clean miss.
+      let r2 = ctl.dropPeer(alias: "aabbccddeeff00112233445566778899")
+      XCTAssertFalse(r2.lookupHit)
+    }
+  }
+
+  // REAL CONTROLLER HIT (B1): a genuinely live, established lease seeded into
+  // the controller is torn down through the REAL dropPeer path — hit, role
+  // closed, lease ended, ownership emptied — and a repeat is then a clean miss.
+  func testControllerDropPeerRealHitTearsDownLiveLease() {
+    // Strong ref (see above): the seed's apply()/requestPersist dereferences the
+    // unowned bb, so a temporary would crash.
+    let bb = BackgroundBeacon()
+    let ctl = W5LinkController(bb: bb)
+    withExtendedLifetime(bb) {
+      ctl.testSeedOutboundLink(
+        peripheralID: UUID(), myCand: "cand-a", peerCand: "cand-b",
+        alias: "aliasB", linkId: "L1")
+      XCTAssertEqual(ctl.testActiveLeaseCount, 1, "seed established a live lease")
+      let r = ctl.dropPeer(alias: "aliasB")
+      XCTAssertTrue(r.lookupHit, "a genuinely live lease is a HIT")
+      XCTAssertTrue(r.leaseEnded)
+      XCTAssertEqual(r.rolesClosed, ["outbound"])
+      XCTAssertEqual(ctl.testActiveLeaseCount, 0, "lease erased")
+      XCTAssertFalse(ctl.dropPeer(alias: "aliasB").lookupHit, "repeat is a miss")
+    }
   }
 
   // REAL CHANNEL ENTRY (B1): the platform-channel handler itself. A server

@@ -1,4 +1,6 @@
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:in_range/features/beacon/background_beacon_channel.dart';
 import 'package:in_range/features/encounters/local_encounter_store.dart';
 import 'package:in_range/features/encounters/pass_teardown.dart';
 import 'package:in_range/features/encounters/swipe_card.dart';
@@ -8,6 +10,8 @@ import 'package:in_range/features/encounters/swipe_card.dart';
 /// stale-miss/unavailable reporting. Exercises `resolvePassTeardown`, the pure
 /// core `_doPass` delegates to, with a recording fake for the native call.
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   SwipeCard serverCard() => SwipeCard.fromServer({
         'encounter_id': 12345, // a NON-radio id; must never reach dropPeer
         'range_type': 'feet_10',
@@ -96,6 +100,54 @@ void main() {
       expect(out.tore, isFalse);
       expect(out.isStaleMiss, isFalse, reason: 'no native verdict → not a miss');
       expect(out.summary, contains('unavailable(native)'));
+    });
+  });
+
+  // UI-channel coverage: the REAL platform-channel wrapper the pass path uses
+  // (BackgroundBeaconChannel.dropPeer), not an injected fake. Proves the card's
+  // radioAlias — never its id — crosses the boundary, and the native structured
+  // dict is parsed into the outcome.
+  group('resolvePassTeardown over the real platform channel', () {
+    const channel = MethodChannel('io.inrange/background_beacon');
+    final calls = <MethodCall>[];
+    final bb = BackgroundBeaconChannel();
+    Map<String, dynamic> reply = const {};
+
+    setUp(() {
+      calls.clear();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+        calls.add(call);
+        return reply;
+      });
+    });
+    tearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+    });
+
+    test('fresh card → channel dropPeer gets the ALIAS and the hit is parsed',
+        () async {
+      reply = {
+        'lookupHit': true,
+        'leaseEnded': true,
+        'rolesClosed': ['outbound'],
+        'rawSessionsReaped': 1,
+      };
+      final card = localCard(seenAgo: const Duration(minutes: 1), corr: 'c0ffee11');
+      final out = await resolvePassTeardown(card, bb.dropPeer);
+      expect(calls.single.method, 'dropPeer');
+      expect(calls.single.arguments, 'c0ffee11',
+          reason: 'radioAlias crosses the channel, never card.id');
+      expect(out.tore, isTrue);
+      expect(out.rolesClosed, ['outbound']);
+    });
+
+    test('server card → channel is NEVER called (teardown unavailable)',
+        () async {
+      final out = await resolvePassTeardown(serverCard(), bb.dropPeer);
+      expect(calls, isEmpty);
+      expect(out.isUnavailable, isTrue);
     });
   });
 }

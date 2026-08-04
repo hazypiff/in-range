@@ -391,6 +391,17 @@ final class BackgroundBeacon: NSObject {
         // (nil/absent = any next outbound dial). No-op in a release binary.
         W5Diag.armFault(peerRaw: call.arguments as? String)
         result(nil)
+      case "disarmW5Fault":
+        // Diag-only: clear any pending fault. No-op in a release binary.
+        W5Diag.disarmFault()
+        result(nil)
+      case "resetW5Diag":
+        // Diag-only: end the current diagnostic session — clear the persisted
+        // run secret + dropped counters AND wipe evidence files, so the next
+        // launch starts a fresh, isolated session (secret-lifecycle contract).
+        W5Diag.resetDiagSession()
+        Self.wipeDiagnosticFiles()
+        result(nil)
       case "setW5Links":
         // Test-only gate for W5 persistent links (INRANGE_W5_LINKS).
         self.defaults.set((call.arguments as? Bool) ?? false, forKey: Self.keyW5Links)
@@ -1212,6 +1223,11 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
       let e = error as NSError?
       let reason = e.map { "\($0.domain):\($0.code)" } ?? "clean"
       logWake("w5-parted-\(reason)-seq\(s.seq)-op:\(s.lastGattOp)")
+      // B2: the physical CA5E session disconnect is a real transition — surface
+      // it in the structured layer too (was wake-log only), with the beat count
+      // reached so a starve vs a clean drop is distinguishable.
+      W5Diag.emit(.parted, role: .outbound, peripheral: peripheral.identifier.uuidString,
+        result: reason, count: Int(s.seq))
     }
     if w5LinksEnabled { w5Link.linkDown(peripheral.identifier) }
     scheduleScanRestart()

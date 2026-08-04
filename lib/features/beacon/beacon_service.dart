@@ -2193,6 +2193,21 @@ class BeaconService {
     }
   }
 
+  /// Clear any pending diagnostic fault (peer-scoped control cleanup).
+  Future<void> disarmW5Fault() async {
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      await _bgBeacon.disarmW5Fault();
+    }
+  }
+
+  /// End the current diagnostic session (run-secret + evidence reset), so the
+  /// next launch starts fresh. Call between matrix cases.
+  Future<void> resetW5Diag() async {
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      await _bgBeacon.resetW5Diag();
+    }
+  }
+
   /// Single ingest point for a foreign token sample — scan results and the
   /// iOS native carrier's sightings (W4) both land here, so the self-sight
   /// guard, estimator, calibration log and sighting bookkeeping stay one

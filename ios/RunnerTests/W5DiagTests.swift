@@ -12,11 +12,24 @@ final class W5DiagTests: XCTestCase {
 
   func testFaultArmConsumeIsFlavorCorrect() {
     #if INRANGE_DIAG
+      W5Diag.disarmFault()
       // Armed for a specific peer → the next matching consume fires once.
       W5Diag.armFault(peerRaw: "peer-token-1")
+      XCTAssertTrue(W5Diag.isFaultArmed)
       XCTAssertTrue(W5Diag.consumePreAckFault(peerRaw: "peer-token-1"))
       XCTAssertFalse(W5Diag.consumePreAckFault(peerRaw: "peer-token-1"),
         "one-shot: must not fire twice")
+      XCTAssertFalse(W5Diag.isFaultArmed, "consumed → disarmed")
+      // Peer-scoped: armed for peer-1 must NOT fire for a different peer.
+      W5Diag.armFault(peerRaw: "peer-token-1")
+      XCTAssertFalse(W5Diag.consumePreAckFault(peerRaw: "peer-token-2"),
+        "peer-scoped: must not fire for another peer")
+      XCTAssertTrue(W5Diag.isFaultArmed, "still armed for its target")
+      // Disarm clears a pending fault so it can't fire later.
+      W5Diag.disarmFault()
+      XCTAssertFalse(W5Diag.isFaultArmed)
+      XCTAssertFalse(W5Diag.consumePreAckFault(peerRaw: "peer-token-1"),
+        "disarmed → never fires")
       // Wildcard arm fires for any next dial, once.
       W5Diag.armFault(peerRaw: nil)
       XCTAssertTrue(W5Diag.consumePreAckFault(peerRaw: "anyone"))
@@ -24,8 +37,10 @@ final class W5DiagTests: XCTestCase {
     #else
       // Production: arming and consuming are no-ops; never fires.
       W5Diag.armFault(peerRaw: "peer-token-1")
+      XCTAssertFalse(W5Diag.isFaultArmed)
       XCTAssertFalse(W5Diag.consumePreAckFault(peerRaw: "peer-token-1"),
         "release build must never inject a fault")
+      W5Diag.disarmFault()  // no-op, must compile + not crash
     #endif
   }
 
@@ -86,6 +101,19 @@ final class W5DiagTests: XCTestCase {
       suite?.removeObject(forKey: key)
     }
 
+    // B3 lifecycle: resetDiagSession clears the persisted run/provisioned
+    // secret + dropped counters, so the next launch starts a fresh session.
+    func testResetDiagSessionClearsPersistedSecretsAndCounters() {
+      let d = UserDefaults(suiteName: "io.inrange.diag")
+      d?.set(String(repeating: "a1", count: 32), forKey: "bb.w5diag.runsecret")
+      d?.set(String(repeating: "b2", count: 32), forKey: "bb.w5diag.provisionedsecret")
+      d?.set(5, forKey: "bb.evwrite.dropped.w5_events.jsonl")
+      W5Diag.resetDiagSession()
+      XCTAssertNil(d?.string(forKey: "bb.w5diag.runsecret"))
+      XCTAssertNil(d?.string(forKey: "bb.w5diag.provisionedsecret"))
+      XCTAssertEqual(d?.integer(forKey: "bb.evwrite.dropped.w5_events.jsonl"), 0)
+    }
+
     func testHandleDeterminismAndDomainSeparation() {
       let a = W5Diag.handle("peer", "tok-A")
       let b = W5Diag.handle("peer", "tok-A")
@@ -138,7 +166,10 @@ final class W5DiagTests: XCTestCase {
       // preflight is where full enforcement is validated empirically.
       let attrs = try FileManager.default.attributesOfItem(atPath: url(name).path)
       if let prot = attrs[.protectionKey] as? FileProtectionType {
-        XCTAssertEqual(prot, .completeUnlessOpen, "protection must be completeUnlessOpen")
+        // completeUntilFirstUserAuthentication: writable while the phone is
+        // locked (after first unlock) — required for background soak evidence.
+        XCTAssertEqual(prot, .completeUntilFirstUserAuthentication,
+          "protection must allow locked-state writes")
       }
       let vals = try url(name).resourceValues(forKeys: [.isExcludedFromBackupKey])
       if let excluded = vals.isExcludedFromBackup {
@@ -181,6 +212,18 @@ final class W5DiagTests: XCTestCase {
       XCTAssertEqual(
         try String(contentsOf: url(name), encoding: .utf8), "B\n",
         "new file holds only the newest line")
+    }
+
+    func testManyAppendsPreserveOrderAndEveryLine() throws {
+      let name = "ewtest_a.jsonl"
+      try? FileManager.default.removeItem(at: url(name))
+      let w = W5EvidenceWriter(fileName: name, cap: 1_000_000, rotation: .dotOne)
+      for i in 0..<200 { XCTAssertTrue(w.append("line\(i)\n")) }
+      let lines = try String(contentsOf: url(name), encoding: .utf8)
+        .split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+      XCTAssertEqual(lines.count, 200, "every appended line present")
+      XCTAssertEqual(lines.first, "line0")
+      XCTAssertEqual(lines.last, "line199", "chronological order preserved")
     }
 
     func testDrainPriorDroppedSumsAndResetsEveryFamily() {

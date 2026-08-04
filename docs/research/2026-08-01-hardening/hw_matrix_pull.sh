@@ -22,12 +22,22 @@ pull() {
     --source "Documents/$1" --destination "$RAW/$1" >/dev/null 2>&1 \
     && echo "  pulled $1" || echo "  (no $1)"
 }
+# B4 evidence extraction: pull the STRUCTURED events JSONL (the Case 1-3 proof)
+# and EVERY rotated file too — the previous puller silently dropped w5_events.*
+# and the .1 rotations, so a real run's primary evidence never left the device.
 pull bb_wake_log.txt
+pull bb_wake_log.1.txt
+pull w5_events.jsonl
+pull w5_events.1.jsonl
 pull w5_rssi_log.jsonl
+pull w5_rssi_log.1.jsonl
 pull in_range_local.db
 
-# Sanitize: replace any 32-hex token / 16-byte id with a stable short hash tag,
-# so co-presence/timeline structure survives but no raw identifier is exposed.
+# Sanitize: replace any raw identifier with a STABLE short hash tag, so
+# co-presence/timeline structure survives but no raw id is exposed. Matches both
+# 32-hex tokens/16-byte ids AND UUID-format CoreBluetooth peripheral handles
+# (the previous regex missed UUIDs, which is how raw h=out:<uuid> reached the
+# committed logs). Same raw → same tag, so cross-file correlation is preserved.
 sanitize() {
   local f="$1"
   [ -f "$RAW/$f" ] || return 0
@@ -35,16 +45,22 @@ sanitize() {
 import sys, re, hashlib
 src, dst = sys.argv[1], sys.argv[2]
 def tag(m):
-    h = hashlib.sha256(m.group(0).encode()).hexdigest()[:6]
+    h = hashlib.sha256(m.group(0).lower().encode()).hexdigest()[:6]
     return f"id:{h}"
 data = open(src, 'r', errors='replace').read()
-data = re.sub(r'\b[0-9a-fA-F]{32}\b', tag, data)   # 16-byte hex ids/tokens
+# UUID-format first (longer, more specific), then bare 32-hex.
+data = re.sub(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', tag, data)
+data = re.sub(r'\b[0-9a-fA-F]{32}\b', tag, data)
 open(dst, 'w').write(data)
 print(f"  sanitized -> {dst}")
 PY
 }
 sanitize bb_wake_log.txt
+sanitize bb_wake_log.1.txt
+sanitize w5_events.jsonl
+sanitize w5_events.1.jsonl
 sanitize w5_rssi_log.jsonl
+sanitize w5_rssi_log.1.jsonl
 
 echo "Raw (uncommitted): $RAW"
 echo "Sanitized (commit-safe): $OUT"

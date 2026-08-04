@@ -5,13 +5,21 @@ import Foundation
 /// type compiles out of Release, so no evidence machinery ships.
 ///
 /// Guarantees the panel required for locked-phone integrity:
+/// - **locked-state writes SUCCEED**: files use
+///   `completeUntilFirstUserAuthentication` — accessible after the first unlock
+///   post-boot and stay accessible when the phone re-locks (the standard class
+///   for background daemons). The whole point of this evidence is to be written
+///   while the phone is locked in a pocket during a soak; `completeUnlessOpen`
+///   (an earlier mistake) made per-append open/close fail under lock and drop
+///   every locked write.
 /// - **absent vs inaccessible**: a missing file is CREATED; an existing file
-///   that cannot be opened for writing (e.g. protected-while-locked) is treated
-///   as inaccessible and the line is DROPPED — it is never replaced by a
-///   single-line file (the Phase-3.3 defect).
+///   that cannot be opened for writing is treated as inaccessible and the line
+///   is DROPPED — it is never replaced by a single-line file (Phase-3.3 defect).
 /// - **protection + backup exclusion after EVERY op** (create, append, rotate).
-/// - **serialized**: one lock per file, so concurrent BLE-queue + main-thread
-///   emits cannot interleave a partial line or race the rotate.
+/// - **serialized**: one lock per file. `append` takes it internally; callers
+///   with related file work (RSSI trim/drain/ack) run under `withLock` so
+///   cross-thread (BLE queue vs channel/main) access cannot race the rotate or
+///   the drain offset.
 /// - **bounded failure accounting**: every drop increments a per-file counter
 ///   persisted to the diag suite, surfaced at the next boot.
 #if INRANGE_DIAG
@@ -59,8 +67,8 @@ import Foundation
       }
 
       if !fm.fileExists(atPath: url.path) {
-        // ABSENT → create fresh, protected, backup-excluded.
-        do { try bytes.write(to: url, options: .completeFileProtectionUnlessOpen) }
+        // ABSENT → create fresh, protected (locked-state-writable), excluded.
+        do { try bytes.write(to: url, options: .completeFileProtectionUntilFirstUserAuthentication) }
         catch {
           noteDropped()
           return false
@@ -117,12 +125,21 @@ import Foundation
     /// create or replace the file.
     private func applyProtection(_ u: URL) {
       try? FileManager.default.setAttributes(
-        [.protectionKey: FileProtectionType.completeUnlessOpen],
+        [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
         ofItemAtPath: u.path)
       var m = u
       var res = URLResourceValues()
       res.isExcludedFromBackup = true
       try? m.setResourceValues(res)
+    }
+
+    /// Run `body` holding this writer's lock — for related file work (RSSI
+    /// trim/drain/ack) that must serialize with `append` across threads. Must
+    /// NOT call `append` from inside (the lock is non-reentrant).
+    func withLock<T>(_ body: () -> T) -> T {
+      lock.lock()
+      defer { lock.unlock() }
+      return body()
     }
 
     private func noteDropped() {

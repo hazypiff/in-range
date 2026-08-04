@@ -40,6 +40,16 @@ void main() {
     expect(calls.single.arguments, isNull);
   });
 
+  test('disarmW5Fault invokes the native disarm control', () async {
+    await bb.disarmW5Fault();
+    expect(calls.single.method, 'disarmW5Fault');
+  });
+
+  test('resetW5Diag invokes the native session-reset control', () async {
+    await bb.resetW5Diag();
+    expect(calls.single.method, 'resetW5Diag');
+  });
+
   test('setDiagRunSecret forwards a non-empty secret', () async {
     await bb.setDiagRunSecret('deadbeef' * 8); // 64 hex
     expect(calls.single.method, 'setDiagRunSecret');
