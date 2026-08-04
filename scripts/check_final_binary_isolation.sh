@@ -14,6 +14,11 @@
 #   NEGATIVE (production): diag symbols == 0 AND the run-secret env string absent.
 #   POSITIVE (diag):       diag symbols  > 0 AND the run-secret env string present.
 #
+# CONTRACT RATIFIED BY THE OWNER (2026-08-04): production excludes diagnostic
+# SYMBOLS + the run-secret env read; the compiled-in channel-case names and
+# diagnostic filenames (foreign-wipe machinery) are explicitly ALLOWED. (Panel
+# B5 ruling — "Symbols + run-secret env".)
+#
 # The positive control proves the discriminators actually fire; the informational
 # filename/channel strings are reported but NOT failed (they are contract-allowed).
 # Fail-closed on any missing build. CI-friendly: .env is optional.

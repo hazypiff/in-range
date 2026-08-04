@@ -14,8 +14,11 @@
 #     --window smoke:0:60 --trim 0
 set -euo pipefail
 
-IPHONE14="27A0976C-78DD-5D1D-926E-0CE635E5C23A"
-IPHONE15P="67B16DBC-964F-592E-986C-281FED5AE8B8"
+# Device UDIDs are NOT hardcoded (work-order policy: no device identifiers in
+# committed files). Supply them via the environment for your own fleet, e.g.
+#   IPHONE14_UDID=<udid> IPHONE15P_UDID=<udid> bash scripts/ios_station_check.sh 14 ...
+IPHONE14="${IPHONE14_UDID:-}"
+IPHONE15P="${IPHONE15P_UDID:-}"
 
 case "${1:-}" in
   14)  IOS_DEVICE=$IPHONE14 ;;
@@ -25,6 +28,10 @@ case "${1:-}" in
     exit 1
     ;;
 esac
+if [ -z "${IOS_DEVICE:-}" ]; then
+  echo "error: set IPHONE14_UDID / IPHONE15P_UDID in the environment first." >&2
+  exit 1
+fi
 IOS_LABEL=$1
 shift
 

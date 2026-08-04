@@ -22,6 +22,16 @@ Fleet is now recorded owner-confirmed and identifier-free: **A iPhone 14 /
 B iPhone 13 / C iPhone 15 Plus**, with slot C's earlier install noted only as a
 substitute iPhone 15-family unit.
 
+**Whole-tip sweep (round 3, 2026-08-04):** the reconciled panel asked for the
+ENTIRE tip cleaned, not just the hardening evidence. Removed the remaining real
+device UDIDs outside `docs/research/`:
+- `scripts/ios_station_check.sh` — the hardcoded `IPHONE14`/`IPHONE15P` UDIDs are
+  now read from `IPHONE14_UDID`/`IPHONE15P_UDID` env vars (errors if unset).
+- `docs/PROXIMITY_TIERS.md` — the `devicectl --device <udid>` example is now a
+  placeholder.
+Service/characteristic UUIDs and DB/test-fixture UUIDs are functional constants,
+not device identifiers, and were deliberately left intact.
+
 ## What remains in history (needs a rewrite to remove)
 
 Removing content at the tip does **not** remove it from prior commits. The device
@@ -32,8 +42,12 @@ identifiers still exist in the object history, introduced at:
   `hardware_evidence/**` tree). Present in every descendant through the current
   tip `357053c`.
 
-Scope of sensitive strings in history: three devicectl UDIDs
-(`99B56AAB-…`, `C7BA9967-…`, `0301D88D-…`) and their 8-hex prefixes.
+Scope of sensitive strings in history: the three hardening-evidence devicectl
+UDIDs (`99B56AAB-…`, `C7BA9967-…`, `0301D88D-…`) and their 8-hex prefixes, PLUS
+the two station-check UDIDs (`27A0976C-…`, `67B16DBC-…`) introduced in older
+commits (`scripts/ios_station_check.sh`, `docs/PROXIMITY_TIERS.md`) and the CB
+peripheral UUIDs in the wake logs. All are removed at the tip; the same rewrite
+would scrub them from history.
 
 ### Now also sanitized at the tip (reconciled panel, 2026-08-04)
 

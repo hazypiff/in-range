@@ -206,7 +206,7 @@ Devices: iPhone 14 (release build, signed 2026-07-15 — valid through
 iPhone (from the Mac; app must be installed, phone plugged in/trusted):
 ```sh
 xcrun devicectl device copy from \
-  --device 27A0976C-78DD-5D1D-926E-0CE635E5C23A \
+  --device <device-udid> \
   --domain-type appDataContainer --domain-identifier io.inrange.inRange \
   --source Documents/in_range_local.db \
   --destination run_logs/sessions/<date>_iphone.db
