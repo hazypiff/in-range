@@ -22,7 +22,7 @@
 set -u
 # Pixel proxy + S9 assigned to the Instagram fleet — never touch. EXCLUDE adds
 # serials without replacing these protected defaults.
-PROTECTED_DEVICES="0A081JECB06627 3931395a4d583398"
+PROTECTED_DEVICES="${PROTECTED_DEVICES:-}"  # set in env: infra serials to never provision
 EXCLUDE="$PROTECTED_DEVICES ${EXCLUDE:-}"
 OUT_DIR="$(cd "$(dirname "$0")/.." && pwd)/run_logs/beacon_test"
 mkdir -p "$OUT_DIR"

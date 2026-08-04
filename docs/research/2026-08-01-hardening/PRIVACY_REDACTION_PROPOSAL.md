@@ -42,12 +42,15 @@ identifiers still exist in the object history, introduced at:
   `hardware_evidence/**` tree). Present in every descendant through the current
   tip `357053c`.
 
-Scope of sensitive strings in history: the three hardening-evidence devicectl
-UDIDs (`99B56AAB-…`, `C7BA9967-…`, `0301D88D-…`) and their 8-hex prefixes, PLUS
-the two station-check UDIDs (`27A0976C-…`, `67B16DBC-…`) introduced in older
-commits (`scripts/ios_station_check.sh`, `docs/PROXIMITY_TIERS.md`) and the CB
-peripheral UUIDs in the wake logs. All are removed at the tip; the same rewrite
-would scrub them from history.
+Scope of sensitive strings in history (values omitted here so THIS proposal is
+itself identifier-free): five iOS device UDIDs — three from the hardening
+evidence and two from the older station-check script/doc
+(`scripts/ios_station_check.sh`, `docs/PROXIMITY_TIERS.md`) — plus the CB
+peripheral UUIDs in the wake logs, the two Android serials and one iOS UDID in
+`docs/sessions/2026-07-12-full-bug-run.md`, and the raw 32-hex ephemeral tokens
+in the two tracked field-test SQLite DBs. All are removed/sanitized at the tip;
+the same rewrite would scrub them from history. This proposal names files and
+counts only, never a value.
 
 ### Now also sanitized at the tip (reconciled panel, 2026-08-04)
 

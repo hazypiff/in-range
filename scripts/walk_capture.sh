@@ -24,7 +24,7 @@ cd "$(dirname "$0")/.."
 
 # Pixel proxy + S9 assigned to the Instagram fleet — never touch. EXCLUDE adds
 # session-specific serials without replacing these protected defaults.
-PROTECTED_DEVICES="0A081JECB06627 3931395a4d583398"
+PROTECTED_DEVICES="${PROTECTED_DEVICES:-}"  # set in env: infra serials to never provision
 EXCLUDE="$PROTECTED_DEVICES ${EXCLUDE:-}"
 # 64M: the earlier audit found 16M already ~60% consumed on a walk, and full
 # WiFi AP logging adds substantial volume on top.

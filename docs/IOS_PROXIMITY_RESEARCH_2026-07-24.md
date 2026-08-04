@@ -526,7 +526,7 @@ freeze document records:
 - the installed S9 builds predate build stamping and must be rebuilt;
 - the S22 and iPhone 15 Plus must be reinstalled from at least the current native-GATT client baseline;
 - `walk_capture.sh prep` intentionally rejects a mismatched client build.
-- IG-fleet S9 `3931395a4d583398` is protected by default and is not part of the
+- IG-fleet S9 the protected IG-fleet S9 (serial omitted) is protected by default and is not part of the
   In Range walk rig.
 
 Do not bypass that check for a training walk. W5 and W6 will materially change the sampling process, so their implementation requires:

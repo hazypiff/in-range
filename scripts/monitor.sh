@@ -3,7 +3,7 @@
 # Run this anytime: bash scripts/monitor.sh
 # It survives agent drops because it just reads files.
 
-PROJECT="/home/hazypiff/in-range"
+PROJECT="$HOME/in-range"
 LOG_DIR="/tmp"
 
 while true; do

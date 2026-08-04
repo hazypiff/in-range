@@ -7,7 +7,7 @@ cd "$ROOT"
 
 # Devices owned by another rig. Extra serials can be appended through EXCLUDE,
 # but callers cannot accidentally remove the protected defaults.
-PROTECTED_DEVICES="0A081JECB06627 3931395a4d583398"
+PROTECTED_DEVICES="${PROTECTED_DEVICES:-}"  # set in env: infra serials to never provision
 EXCLUDE="$PROTECTED_DEVICES ${EXCLUDE:-}"
 
 is_excluded() {

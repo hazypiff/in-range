@@ -4,7 +4,7 @@
 
 set -e
 
-PROJECT="/home/hazypiff/in-range"
+PROJECT="$HOME/in-range"
 TAR="$HOME/snap/flutter/common/latest_stable.tar.xz"
 
 echo "=== Waiting for clean Flutter SDK ==="
@@ -37,7 +37,7 @@ flutter devices
 
 echo ""
 echo "=== Ready to launch on the first S9 ==="
-echo "flutter run -d 324c305855433498"
+echo "flutter run -d <device-serial>"
 echo ""
 echo "Or run it now:"
-flutter run -d 324c305855433498
+flutter run -d <device-serial>

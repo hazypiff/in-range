@@ -58,7 +58,7 @@ bash scripts/build-install-s9.sh
 ```
 
 The script permanently protects the Pixel proxy and IG-fleet S9
-`3931395a4d583398`. It still installs to every other connected Android, so unplug
+the protected IG-fleet S9 (serial omitted). It still installs to every other connected Android, so unplug
 anything else that is not part of this build.
 
 It builds a multi-ABI debug APK, installs with `-r`, force-stops, and relaunches

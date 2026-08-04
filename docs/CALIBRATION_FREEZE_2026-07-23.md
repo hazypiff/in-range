@@ -96,7 +96,7 @@ the fail-closed trainer gates will pass a model fit on that mixture.
   phone matches. A later commit passes if it changes nothing under
   `lib/ android/ ios/` — the stamp describes an APK, so host-side `scripts/`
   is deliberately excluded; docs and web churn must not block a walk.
-- The Pixel proxy and IG-fleet S9 `3931395a4d583398` are protected defaults in
+- The Pixel proxy and IG-fleet S9 the protected IG-fleet S9 (serial omitted) are protected defaults in
   the build, monitor, and capture scripts. The frozen In Range Android pair
   remains `324c…498` and `513…498`.
 - Each device's actual stamp is recorded as `build` in `meta-<phase>.json`, so

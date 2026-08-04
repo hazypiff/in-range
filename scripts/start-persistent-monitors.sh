@@ -3,7 +3,7 @@
 # Run this once: bash scripts/start-persistent-monitors.sh
 
 LOG_DIR="/tmp"
-PROJECT="/home/hazypiff/in-range"
+PROJECT="$HOME/in-range"
 
 echo "Starting persistent In Range monitors..."
 

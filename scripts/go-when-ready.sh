@@ -2,7 +2,7 @@
 # One-line / script to run the post-SDK sequence when Flutter is ready.
 # Safe to run in background: nohup bash scripts/go-when-ready.sh > /tmp/inrange_go.log 2>&1 &
 
-PROJECT="/home/hazypiff/in-range"
+PROJECT="$HOME/in-range"
 LOG="/tmp/inrange_go.log"
 
 echo "[$(date)] Waiting for Flutter SDK to be ready..." | tee -a "$LOG"

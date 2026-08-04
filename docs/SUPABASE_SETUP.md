@@ -47,7 +47,7 @@ Dashboard → **SQL Editor** → paste & Run each file:
 Or CLI:
 
 ```bash
-cd /home/hazypiff/in-range
+cd ~/in-range
 supabase link --project-ref YOUR_PROJECT_REF
 supabase db push
 ```

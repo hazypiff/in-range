@@ -5,7 +5,7 @@
 # Survives agent drops (run with nohup or start-persistent-monitors.sh).
 #
 # Usage (background, survives drops):
-#   nohup bash /home/hazypiff/in-range/scripts/inrange-watcher.sh > /tmp/inrange_watcher.log 2>&1 &
+#   nohup bash ~/in-range/scripts/inrange-watcher.sh > /tmp/inrange_watcher.log 2>&1 &
 #
 # To view live:
 #   watch -n 5 cat /tmp/inrange_progress.txt
@@ -16,7 +16,7 @@ PROGRESS_FILE="/tmp/inrange_progress.txt"
 ARIA_LOG="/tmp/aria_flutter_download.log"
 TAR_PATH="$HOME/snap/flutter/common/latest_stable.tar.xz"
 FLUTTER_DIR="$HOME/snap/flutter/common/flutter"
-PROJECT_DIR="/home/hazypiff/in-range"
+PROJECT_DIR="$HOME/in-range"
 
 echo "InRange watcher started at $(date)" >> /tmp/inrange_watcher.log
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 # One-shot status check - completely safe, no long-running commands.
 
-PROJECT="/home/hazypiff/in-range"
+PROJECT="$HOME/in-range"
 
 echo "=== In Range Status - $(date '+%Y-%m-%d %H:%M:%S') ==="
 echo ""

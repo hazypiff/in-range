@@ -119,7 +119,7 @@ The honest definition of "active" for iOS:
 
 ### 2.1 Linux-side verification
 
-Run from `/home/hazypiff/in-range`:
+Run from `~/in-range`:
 
 ```bash
 flutter test                    # +125, all passed

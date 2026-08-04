@@ -1,8 +1,8 @@
 # Session record — 2026-07-12: Full bug run + device verification + multi-phone test prep
 
 Continue-from-here doc. Everything below was done and **verified live on the Galaxy S9
-(SM-G960U, serial 5137455958483498)** unless noted. Laptop = Ubuntu, repo at
-`/home/hazypiff/in-range`. The Pixel 4a (0A081JECB06627) is infra — **never provision it**.
+(SM-G960U, serial omitted)** unless noted. Laptop = Ubuntu, repo at
+`~/in-range`. The Pixel 4a (serial omitted) is infra — **never provision it**.
 
 ## Bugs found & fixed (all committed to `main`, pushed)
 
@@ -75,7 +75,7 @@ Everything code-side is DONE and pushed (`96663ca`):
 - `.github/workflows/ios-build.yml` — unsigned IPA artifact on `macos-latest`;
   repo Actions secrets already set (SUPABASE_URL/KEY, HMAC, USER_ID secrets)
 - iPhones on the bench: iPhone 15 (`iPhone16,1`) iOS 26.5, UDID
-  `00008130-0001641E34E1001C` (+ a second iPhone seen on USB). Pairing/inspection
+  omitted (+ a second iPhone seen on USB). Pairing/inspection
   from Linux works via `pymobiledevice3` (venv in session scratchpad).
 
 **Blocker:** GitHub Actions on the private repo fails at `startup_failure` with no

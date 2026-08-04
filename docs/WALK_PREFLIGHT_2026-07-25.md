@@ -157,7 +157,7 @@ for both directions.
 - Do not set `ALLOW_BUILD_MISMATCH=1`.
 - Do not enable `INRANGE_LOCATION_RESIDENCY`.
 - Do not use `--allow-seq-gaps`; this is a USB capture.
-- Do not include the Pixel proxy or IG-fleet S9 `3931395a4d583398`.
+- Do not include the Pixel proxy or IG-fleet S9 the protected IG-fleet S9 (serial omitted).
 - Do not use cloud extraction for this walk.
 - Do not force-quit the iPhone app after the walk and before its buffer flush.
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Start all persistent monitors in background (survives agent drops)
 
-PROJECT_DIR="/home/hazypiff/in-range"
+PROJECT_DIR="$HOME/in-range"
 LOG_DIR="/tmp"
 
 echo "Starting persistent monitors for In Range..."

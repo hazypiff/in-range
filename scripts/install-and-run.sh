@@ -2,7 +2,7 @@
 # Post-build: install release APK to the primary S9 and launch.
 # Run after APK is ready.
 set -e
-DEVICE="324c305855433498"
+DEVICE="${ANDROID_DEVICE:-}"  # set in env: adb device serial
 APK="build/app/outputs/flutter-apk/app-release.apk"
 
 export PATH="/snap/bin:$PATH"
