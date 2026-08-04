@@ -1016,6 +1016,9 @@ class BeaconService {
         currentUntil: _currentToken!.expiresAt,
       );
       final ok = await _bgBeacon.start(payload);
+      // Diag run secret first (before any W5 event can emit) so fleet HMAC
+      // handles align and survive restoration. Empty/production → no-op.
+      unawaited(_bgBeacon.setDiagRunSecret(AppConfig.diagRunSecret));
       // W5 test gate: only establish persistent links when the build opts in.
       unawaited(_bgBeacon.setW5Links(AppConfig.w5LinksEnabled));
       // Crack #1: refresh the native wake-ping endpoint + JWT on every
@@ -2178,6 +2181,16 @@ class BeaconService {
       return _bgBeacon.dropPeer(tokenHex);
     }
     return null;
+  }
+
+  /// Diagnostic control path for Case-1 pending-dial reclamation: arm a
+  /// one-shot pre-HELLO_ACK fault for the next outbound dial to [peerAlias]
+  /// (null = any next dial). No-op off-iOS and in any release binary (the
+  /// native fault is compiled out outside the diag flavor).
+  Future<void> armW5Fault({String? peerAlias}) async {
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      await _bgBeacon.armW5Fault(peerAlias: peerAlias);
+    }
   }
 
   /// Single ingest point for a foreign token sample — scan results and the

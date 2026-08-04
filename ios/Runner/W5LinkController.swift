@@ -155,15 +155,20 @@ final class W5LinkController {
   func willDial(peerTokenHex: String, peripheralID: UUID) -> Bool {
     let cand = candidate(for: peerTokenHex)
     let linkId = mintHex()
+    W5Diag.emit(.discover, role: .outbound, peer: peerTokenHex)
     let fx = ownership.onDiscovered(
       alias: peerTokenHex, wouldDial: true, candidateId: cand, linkId: linkId)
     guard fx.contains(.dial(linkId: linkId)) else {
+      // Tiebreak/ownership declined the dial (live+healthy or capped).
+      W5Diag.emit(.tiebreak, role: .outbound, peer: peerTokenHex, result: "hold")
       apply(fx)
       return false
     }
     outLinks[peripheralID] = OutLink(
       linkIdHex: linkId, myCandidateHex: cand, peerAliasHex: peerTokenHex,
       controlChar: nil)
+    W5Diag.emit(.tiebreak, role: .outbound, peer: peerTokenHex, link: linkId,
+      result: "dial")
     W5Diag.emit(.dialPending, role: .outbound, peer: peerTokenHex, link: linkId)
     apply(fx.filter { $0 != .dial(linkId: linkId) })
     return true
@@ -211,6 +216,8 @@ final class W5LinkController {
   func legacyPeer(_ peripheralID: UUID) {
     guard let link = outLinks.removeValue(forKey: peripheralID) else { return }
     bb.logWake("w5c-legacy")
+    W5Diag.emit(.connectResult, role: .outbound, peer: link.peerAliasHex,
+      link: link.linkIdHex, result: "legacy")
     apply(ownership.onDialFailed(linkId: link.linkIdHex))
   }
 
@@ -326,6 +333,8 @@ final class W5LinkController {
 
   func dialFailed(_ peripheralID: UUID) {
     guard let link = outLinks.removeValue(forKey: peripheralID) else { return }
+    W5Diag.emit(.dialFail, role: .outbound, peer: link.peerAliasHex,
+      link: link.linkIdHex, reason: "connectFailed")
     apply(ownership.onDialFailed(linkId: link.linkIdHex))
     sweepTimers()
   }
@@ -340,6 +349,11 @@ final class W5LinkController {
     // re-dials (onDiscovered returns [] while !inGrace). Route the
     // unestablished case through onDialFailed, which clears the pending dial.
     if !link.established {
+      // Connected then died before HELLO_ACK — the pending-dial reclamation
+      // path Case 1 must prove. Emitted so zero-sweeps is no longer the only
+      // (absence-of-)evidence.
+      W5Diag.emit(.dialFail, role: .outbound, peer: link.peerAliasHex,
+        link: link.linkIdHex, reason: "downPreAck")
       apply(ownership.onDialFailed(linkId: link.linkIdHex))
       sweepTimers()
       return
@@ -481,7 +495,9 @@ final class W5LinkController {
     outLinks = outLinks.filter { leaseByHandle[outHandle($0.key)] != nil }
     inLinks = inLinks.filter { leaseByHandle[inHandle($0.key)] != nil }
     W5Diag.emit(.dropPeer, peer: alias, lease: lease,
-      result: res.leaseEnded ? "ended" : "hit", count: res.rolesClosed.count)
+      result: res.leaseEnded ? "ended" : "hit",
+      reason: res.rolesClosed.isEmpty ? "none" : res.rolesClosed.joined(separator: "+"),
+      count: res.rolesClosed.count)
     return res
   }
 
@@ -522,6 +538,8 @@ final class W5LinkController {
     let proposal = W5Proposal(
       encounterId: hex(encounterId), viewGen: Int(gen),
       contenders: wire.map { W5Contender(central: hex($0.central), linkId: hex($0.linkId)) })
+    W5Diag.emit(.propose, role: sourceRole == .outbound ? .outbound : .inbound,
+      peer: peerAlias, lease: hex(encounterId), reason: "recv", count: Int(gen))
     let fx = ownership.onProposeRecv(
       peerAlias: peerAlias, proposal: proposal,
       sourceHandle: sourceHandle, sourceRole: sourceRole)
@@ -545,6 +563,9 @@ final class W5LinkController {
         encounterId: encData, viewGen: UInt32(clamping: cur.viewGen), contenders: wc)
       if expect == setHash { viewHash = cur.viewHash }
     }
+    W5Diag.emit(.ack, peer: peerAlias, lease: lease,
+      result: viewHash == "wire-mismatch" ? "mismatch" : "match",
+      reason: "recv", count: Int(gen))
     let fx = ownership.onAckRecv(
       peerAlias: peerAlias,
       ack: W5Ack(encounterId: encHex, ackViewGen: Int(gen), viewHash: viewHash))
@@ -563,6 +584,7 @@ final class W5LinkController {
       guard let self else { return }
       self.prevAliasTimers.removeValue(forKey: lease)
       self.ownership.onPrevAliasExpiry(leaseId: lease)
+      W5Diag.emit(.prevAliasExpiry, lease: lease, reason: "peer")
     }
   }
 
@@ -575,18 +597,25 @@ final class W5LinkController {
     myPrevTokenTimer?.invalidate()
     myPrevTokenTimer = Timer.scheduledTimer(
       withTimeInterval: Self.reconnectGrace, repeats: false
-    ) { [weak self] _ in self?.myPrevTokenHex = nil }
+    ) { [weak self] _ in
+      self?.myPrevTokenHex = nil
+      W5Diag.emit(.prevAliasExpiry, role: .app, reason: "self")
+    }
     guard let new = BackgroundBeacon.hexToData(newHex),
       let frame = try? w5Encode(.aliasRoll(newAlias: new))
     else { return }
+    var sent = 0
     for (id, link) in outLinks where link.established {
       if let char = link.controlChar, let p = bb.w5Peripheral(id) {
         p.writeValue(frame, for: char, type: .withResponse)
+        sent += 1
       }
     }
     for (_, link) in inLinks where link.established {
       notifyControl(frame, to: link.central)
+      sent += 1
     }
+    W5Diag.emit(.aliasRollSend, role: .app, peer: newHex, count: sent)
   }
 
   // MARK: - effects
@@ -600,7 +629,8 @@ final class W5LinkController {
         break  // the dial call site initiates the connect itself
       case .owns(let handle):
         W5Diag.emit(
-          .commit, lease: leaseByHandle[handle], link: handle,
+          .commit, role: handle.hasPrefix("in:") ? .inbound : .outbound,
+          lease: leaseByHandle[handle], link: handle,
           count: ownership.currentProposal(leaseByHandle[handle] ?? "")?.viewGen)
         // keepalive already runs on the surviving link (CA5E)
       case .closeOutbound(let handle):
@@ -643,6 +673,8 @@ final class W5LinkController {
         encounterId: enc, viewGen: UInt32(clamping: p.viewGen), contenders: wc))
     else { return }
     for r in routes { sendControl(frame, handle: r.handle) }
+    W5Diag.emit(.propose, lease: p.encounterId,
+      result: "routes=\(routes.count)", reason: "send", count: p.viewGen)
   }
 
   private func sendAck(
@@ -659,6 +691,8 @@ final class W5LinkController {
         encounterId: aw.enc, viewGen: aw.gen, setHash: setHash))
     else { return }
     sendControl(frame, handle: route.handle)
+    W5Diag.emit(.ack, lease: ack.encounterId, reason: "send",
+      count: ack.ackViewGen)
   }
 
   private func sendControl(_ frame: Data, handle: String) {
@@ -735,7 +769,13 @@ final class W5LinkController {
     guard let payload = bb.defaults.dictionary(forKey: Self.keyW5Snapshot) as? [String: Any],
       let snapB64 = payload["snapshot"] as? String,
       let snapData = Data(base64Encoded: snapB64)
-    else { return }
+    else {
+      // No persisted lease to restore — Case 3 must be able to tell "cold, no
+      // snapshot" from "restored".
+      W5Diag.emit(.snapshotLoad, role: .app, result: "empty",
+        count: restoredPeripherals.count)
+      return
+    }
     let linkMeta = payload["linkMeta"] as? [String: [String: Any]] ?? [:]
     candidateByAlias = payload["candidateByAlias"] as? [String: String] ?? [:]
 
@@ -744,6 +784,8 @@ final class W5LinkController {
       reconnectGrace: Self.reconnectGrace,
       aliasTTL: Self.aliasTTL)
     guard restored else {
+      W5Diag.emit(.snapshotLoad, role: .app, result: "reject",
+        count: restoredPeripherals.count)
       clearPersistedState()
       return
     }
@@ -753,6 +795,10 @@ final class W5LinkController {
     for (handle, leaseId) in ownership.handleToLease {
       leaseByHandle[handle] = leaseId
     }
+    // Snapshot accepted: lease count + how many peripherals iOS handed back for
+    // rebind — the continuity Case 3 must prove.
+    W5Diag.emit(.snapshotLoad, role: .app, result: "loaded",
+      reason: "rebind=\(restoredPeripherals.count)", count: leaseByHandle.count)
 
     // Re-bind restored outbound peripherals using the persisted linkIds and
     // candidates — no fresh mint for a live/grace encounter.
@@ -792,6 +838,7 @@ final class W5LinkController {
     ) { [weak self] _ in
       guard let self else { return }
       self.graceTimers.removeValue(forKey: lease)
+      W5Diag.emit(.graceExpiry, lease: lease)
       self.apply(self.ownership.onGraceExpiry(leaseId: lease))
     }
   }

@@ -37,6 +37,8 @@ class AppConfig {
           const String.fromEnvironment('INRANGE_LOCATION_RESIDENCY'),
         'INRANGE_W5_LINKS' =>
           const String.fromEnvironment('INRANGE_W5_LINKS'),
+        'INRANGE_DIAG_RUN_SECRET' =>
+          const String.fromEnvironment('INRANGE_DIAG_RUN_SECRET'),
         'AUTH_REDIRECT_URL' =>
           const String.fromEnvironment('AUTH_REDIRECT_URL'),
         'GOOGLE_WEB_CLIENT_ID' =>
@@ -67,6 +69,14 @@ class AppConfig {
   /// behavior until it passes. Enable per build: --dart-define=INRANGE_W5_LINKS=true
   static bool get w5LinksEnabled =>
       _env('INRANGE_W5_LINKS').toLowerCase() == 'true';
+
+  /// Diagnostic-only shared run secret (hex) for the W5 event HMAC handles.
+  /// When a diag artifact is built for a FLEET with this set, every device's
+  /// handles align (same raw id → same handle) AND survive OS restoration
+  /// (native persists it to the diag suite). Empty → native falls back to a
+  /// per-install persisted secret (restoration-continuous, not cross-device).
+  /// Never set in production; the native side only uses it in the diag flavor.
+  static String get diagRunSecret => _env('INRANGE_DIAG_RUN_SECRET');
 
   static String get supabaseAnonKey {
     final k = _env('SUPABASE_PUBLISHABLE_KEY');

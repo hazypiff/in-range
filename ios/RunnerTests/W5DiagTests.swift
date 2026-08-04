@@ -1,3 +1,4 @@
+import CommonCrypto
 import XCTest
 
 @testable import Runner
@@ -29,6 +30,62 @@ final class W5DiagTests: XCTestCase {
   }
 
   #if INRANGE_DIAG
+    /// Independent re-implementation of W5Diag.handle's truncated HMAC-SHA256
+    /// (domain\0raw, 14 hex) to prove the injected secret is the one in use.
+    static func expectedHandle(domain: String, raw: String, secretHex: String)
+      -> String
+    {
+      var key = [UInt8]()
+      var i = secretHex.startIndex
+      while i < secretHex.endIndex {
+        let n = secretHex.index(i, offsetBy: 2, limitedBy: secretHex.endIndex)
+          ?? secretHex.endIndex
+        key.append(UInt8(secretHex[i..<n], radix: 16) ?? 0)
+        i = n
+      }
+      var msg = Data(domain.utf8)
+      msg.append(0)
+      msg.append(Data(raw.utf8))
+      var mac = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
+      key.withUnsafeBytes { k in
+        msg.withUnsafeBytes { m in
+          CCHmac(
+            CCHmacAlgorithm(kCCHmacAlgSHA256), k.baseAddress, k.count,
+            m.baseAddress, m.count, &mac)
+        }
+      }
+      return mac.prefix(7).map { String(format: "%02x", $0) }.joined()
+    }
+
+    // B3: the run secret in use under the diag scheme is the INJECTED env
+    // secret (fleet alignment), not a per-process random. The diag scheme sets
+    // INRANGE_DIAG_RUN_SECRET; handles must equal the truncated HMAC-SHA256
+    // computed with THAT secret — proving the injection path is wired.
+    func testHandleUsesInjectedRunSecret() throws {
+      guard let hex = ProcessInfo.processInfo.environment["INRANGE_DIAG_RUN_SECRET"],
+        hex.count >= 32
+      else {
+        throw XCTSkip("diag scheme did not inject INRANGE_DIAG_RUN_SECRET")
+      }
+      let got = W5Diag.handle("peer", "tok-A")
+      let want = Self.expectedHandle(domain: "peer", raw: "tok-A", secretHex: hex)
+      XCTAssertEqual(got, want, "handle must use the injected fleet secret")
+    }
+
+    // B3: provisioning API persists a valid fleet secret to the diag suite and
+    // rejects malformed input (so a bad dart-define can't wipe alignment).
+    func testProvisionRunSecretPersistsAndValidates() {
+      let suite = UserDefaults(suiteName: "io.inrange.diag")
+      let key = "bb.w5diag.provisionedsecret"
+      suite?.removeObject(forKey: key)
+      W5Diag.provisionRunSecret("zz")  // too short / non-hex → ignored
+      XCTAssertNil(suite?.string(forKey: key))
+      let valid = String(repeating: "a1", count: 32)  // 64 hex
+      W5Diag.provisionRunSecret(valid)
+      XCTAssertEqual(suite?.string(forKey: key), valid)
+      suite?.removeObject(forKey: key)
+    }
+
     func testHandleDeterminismAndDomainSeparation() {
       let a = W5Diag.handle("peer", "tok-A")
       let b = W5Diag.handle("peer", "tok-A")

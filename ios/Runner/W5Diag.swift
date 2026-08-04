@@ -25,7 +25,7 @@ enum W5Diag {
     case commit, linkDown, graceEnter, graceBypass, graceExpiry
     case aliasRollSend, aliasRollRecv, prevAliasExpiry
     case dropPeer
-    case restoreCentral, restorePeriph, restoreRebind, coldLaunch
+    case restoreCentral, restorePeriph, restoreRebind, coldLaunch, snapshotLoad
     case boot, beat, parted
     case faultInject
   }
@@ -34,12 +34,20 @@ enum W5Diag {
 
   // MARK: - public API (release-safe; bodies compile out)
 
-  /// Emit a structured event. Raw ids are HMAC-handled internally; in Release
-  /// the whole body is compiled out and args are unused.
+  /// Emit a structured event. Two-layer construction: the whole body is
+  /// `#if INRANGE_DIAG`, AND every sensitive argument is an `@autoclosure`, so
+  /// in a Release/Profile build the raw-id expressions are NEVER evaluated —
+  /// no id string is materialized, no HMAC runs, nothing is passed. Callers
+  /// write `peer: rawHex` exactly as before; the compiler wraps it.
   static func emit(
-    _ event: Event, role: Role? = nil, peer: String? = nil, lease: String? = nil,
-    link: String? = nil, peripheral: String? = nil, result: String? = nil,
-    reason: String? = nil, count: Int? = nil
+    _ event: Event, role: Role? = nil,
+    peer: @autoclosure () -> String? = nil,
+    lease: @autoclosure () -> String? = nil,
+    link: @autoclosure () -> String? = nil,
+    peripheral: @autoclosure () -> String? = nil,
+    result: @autoclosure () -> String? = nil,
+    reason: @autoclosure () -> String? = nil,
+    count: @autoclosure () -> Int? = nil
   ) {
     #if INRANGE_DIAG
       var obj: [String: Any] = [
@@ -52,14 +60,25 @@ enum W5Diag {
         "event": event.rawValue,
       ]
       if let role { obj["role"] = role.rawValue }
-      if let h = handle("peer", peer) { obj["peer"] = h }
-      if let h = handle("lease", lease) { obj["lease"] = h }
-      if let h = handle("link", link) { obj["link"] = h }
-      if let h = handle("peripheral", peripheral) { obj["peripheral"] = h }
-      if let result { obj["result"] = result }
-      if let reason { obj["reason"] = reason }
-      if let count { obj["count"] = count }
+      if let h = handle("peer", peer()) { obj["peer"] = h }
+      if let h = handle("lease", lease()) { obj["lease"] = h }
+      if let h = handle("link", link()) { obj["link"] = h }
+      if let h = handle("peripheral", peripheral()) { obj["peripheral"] = h }
+      if let result = result() { obj["result"] = result }
+      if let reason = reason() { obj["reason"] = reason }
+      if let count = count() { obj["count"] = count }
       write(obj)
+    #endif
+  }
+
+  /// Provision the shared fleet run secret (hex) from a build-time dart-define,
+  /// persisted to the diag suite so it survives OS restoration and aligns HMAC
+  /// handles across a fleet built from one artifact. Must be called before any
+  /// emit (beacon start does). Release-safe no-op.
+  static func provisionRunSecret(_ hex: String) {
+    #if INRANGE_DIAG
+      guard hex.count >= 32, hexToData(hex) != nil else { return }
+      diagDefaults?.set(hex, forKey: provisionedSecretKey)
     #endif
   }
 
@@ -101,16 +120,46 @@ enum W5Diag {
       diagDefaults?.set(n, forKey: "bb.w5events.dropped")
     }
 
-    /// In-memory only. Injected shared secret if present, else per-process
-    /// random. Never persisted, never logged.
+    private static let runSecretKey = "bb.w5diag.runsecret"
+    private static let provisionedSecretKey = "bb.w5diag.provisionedsecret"
+
+    /// Run secret, resolved with precedence and PERSISTED so restoration works:
+    ///   1. `INRANGE_DIAG_RUN_SECRET` env — explicit fleet-wide override for
+    ///      simulator/Xcode/CI + cross-device alignment (set by the diag scheme
+    ///      and artifact builder). Wins when present.
+    ///   2. else a per-INSTALL secret persisted in the diag suite. An
+    ///      OS-spawned CoreBluetooth restoration relaunch does NOT inherit the
+    ///      Xcode launch environment, so an env-only secret would rotate at the
+    ///      exact boundary Case 3 must join across. Persisting it (diag suite
+    ///      only, never `standard`) keeps every HMAC handle continuous across
+    ///      restoration.
+    ///   3. else generate once and persist.
+    /// Diag-only (the whole type compiles out of Release). Truncated HMAC
+    /// handles stay non-reversible; the secret is never logged or emitted.
     private static let runSecret: Data = {
+      // 1. env override (simulator/Xcode/CI + tests) — highest precedence.
       if let hex = ProcessInfo.processInfo.environment["INRANGE_DIAG_RUN_SECRET"],
         hex.count >= 32, let d = hexToData(hex) {
         return d
       }
+      // 2. fleet secret provisioned from the build-time dart-define (persisted
+      //    by provisionRunSecret at start) — aligns a whole fleet + survives
+      //    restoration.
+      if let hex = diagDefaults?.string(forKey: provisionedSecretKey),
+        hex.count >= 32, let d = hexToData(hex) {
+        return d
+      }
+      // 3. per-INSTALL persisted secret — restoration-continuous on one device.
+      if let b64 = diagDefaults?.string(forKey: runSecretKey),
+        let d = Data(base64Encoded: b64), d.count == 32 {
+        return d
+      }
+      // 4. generate once and persist.
       var b = [UInt8](repeating: 0, count: 32)
       _ = SecRandomCopyBytes(kSecRandomDefault, 32, &b)
-      return Data(b)
+      let d = Data(b)
+      diagDefaults?.set(d.base64EncodedString(), forKey: runSecretKey)
+      return d
     }()
 
     /// Public run label — NOT the secret. Distinguishes relaunches.

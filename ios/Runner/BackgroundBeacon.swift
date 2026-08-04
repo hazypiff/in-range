@@ -256,6 +256,12 @@ final class BackgroundBeacon: NSObject {
     W5Diag.emit(.boot, role: .app,
       result: defaults.bool(forKey: Self.keyEnabled) ? "enabled" : "disabled",
       count: priorDropped)
+    // Cold-launch marker: whether a W5 snapshot is present to restore. Combined
+    // with the presence/absence of preceding restore* events in the JSONL this
+    // lets Case 3 tell a fresh cold launch from an OS restoration relaunch.
+    W5Diag.emit(.coldLaunch, role: .app,
+      result: defaults.object(forKey: "bb.w5.snapshot") != nil
+        ? "snapshotPresent" : "fresh")
     defaults.set(0, forKey: "bb.w5events.dropped")
     if defaults.bool(forKey: Self.keyEnabled) {
       ensureManagers()
@@ -368,6 +374,12 @@ final class BackgroundBeacon: NSObject {
           self.defaults.set(args["url"] as? String, forKey: Self.keyPingURL)
           self.defaults.set(args["auth"] as? String, forKey: Self.keyPingAuth)
         }
+        result(nil)
+      case "setDiagRunSecret":
+        // Diag-only: provision the shared fleet run secret (hex) so HMAC
+        // handles align across a fleet and survive OS restoration. No-op in a
+        // release binary (W5Diag compiles the body out).
+        W5Diag.provisionRunSecret((call.arguments as? String) ?? "")
         result(nil)
       case "armW5Fault":
         // Diag-only: arm a one-shot pre-HELLO_ACK drop for a peer token
@@ -1114,6 +1126,7 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
           inflightRSSI[id] = rssi
           inflight[id] = peripheral
           peripheral.delegate = self
+          W5Diag.emit(.dialStart, role: .outbound, peer: peerToken)
           centralMgr?.connect(peripheral, options: nil)
           DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
             guard let self = self, self.w5[id] == nil,
@@ -1184,7 +1197,10 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
   }
 
   func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-    logWake("w5-connect p=\(String((tokenCache[peripheral.identifier]?.hex ?? "-").prefix(6)))")
+    logWake("w5-connect")
+    W5Diag.emit(.connectResult, role: .outbound,
+      peer: tokenCache[peripheral.identifier]?.hex,
+      peripheral: peripheral.identifier.uuidString, result: "connected")
     peripheral.discoverServices([Self.serviceUUID])
   }
 
@@ -1193,6 +1209,9 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
   ) {
     inflight.removeValue(forKey: peripheral.identifier)
     inflightRSSI.removeValue(forKey: peripheral.identifier)
+    W5Diag.emit(.connectResult, role: .outbound,
+      peer: tokenCache[peripheral.identifier]?.hex,
+      peripheral: peripheral.identifier.uuidString, result: "failed")
     if w5LinksEnabled { w5Link.dialFailed(peripheral.identifier) }
     scheduleScanRestart()
   }

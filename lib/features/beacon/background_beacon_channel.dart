@@ -350,4 +350,32 @@ class BackgroundBeaconChannel {
       debugPrint('BackgroundBeacon setW5Links failed: $e');
     }
   }
+
+  /// Diagnostic-only: provision the shared W5-event run secret (hex) from a
+  /// build-time dart-define, so a fleet built from one artifact shares HMAC
+  /// handles and they survive OS restoration (native persists it). No-op with
+  /// an empty secret and in any release binary (native compiles it out).
+  Future<void> setDiagRunSecret(String hex) async {
+    if (hex.isEmpty) return;
+    try {
+      await _channel.invokeMethod<void>('setDiagRunSecret', hex);
+    } catch (e) {
+      debugPrint('BackgroundBeacon setDiagRunSecret failed: $e');
+    }
+  }
+
+  /// Diagnostic-only: arm a ONE-SHOT pre-HELLO_ACK drop for the next outbound
+  /// dial to [peerAlias] (null = the next dial to anyone). This is the Dart
+  /// control path for the Case-1 pending-dial reclamation fault. In a release
+  /// binary the native side compiles the fault out, so this is a guaranteed
+  /// no-op there — safe to leave wired.
+  Future<void> armW5Fault({String? peerAlias}) async {
+    try {
+      // Pass the raw token as the bare argument (native reads `arguments as
+      // String?`); null/absent arms the wildcard "any next dial".
+      await _channel.invokeMethod<void>('armW5Fault', peerAlias);
+    } catch (e) {
+      debugPrint('BackgroundBeacon armW5Fault failed: $e');
+    }
+  }
 }
