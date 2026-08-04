@@ -22,9 +22,11 @@ jobs:
   # Audit F2 (2026-07-31): RunnerTests never executed in CI — every native
   # "N/N green" claim rested on one Mac simulator run. This job is the
   # third-party corroboration: the full native bundle on a clean runner.
+  # Panel B5: BOTH schemes now run here (Runner + diag flavor assertions),
+  # serially, to also cover the diag-side #if INRANGE_DIAG branches.
   test-ios:
     runs-on: macos-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -44,28 +46,77 @@ jobs:
       - name: H-DIAG-2 release isolation (build-settings check)
         run: bash scripts/check_release_isolation.sh
 
-      - name: Run RunnerTests on simulator
+      - name: Pick a simulator
+        id: sim
         run: |
           DEVICE=$(xcrun simctl list devices available | grep -Eo 'iPhone [0-9][^(]*' | head -1 | sed 's/ *$//')
+          echo "device=$DEVICE" >> "$GITHUB_OUTPUT"
           echo "Simulator: $DEVICE"
+
+      - name: RunnerTests — Runner scheme (production side)
+        run: |
           cd ios
           xcodebuild test \
             -workspace Runner.xcworkspace \
             -scheme Runner \
             -configuration Debug \
-            -destination "platform=iOS Simulator,name=$DEVICE" \
+            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.device }}" \
             -only-testing:RunnerTests \
-            CODE_SIGNING_ALLOWED=NO | tee xcodebuild-test.log | grep -E "Test [Cc]ase|Executed|TEST" || true
-          grep -q "\*\* TEST SUCCEEDED \*\*" xcodebuild-test.log
+            -parallel-testing-enabled NO \
+            -maximum-concurrent-test-simulator-destinations 1 \
+            CODE_SIGNING_ALLOWED=NO | tee xcodebuild-runner.log | grep -E "Test [Cc]ase|Executed|TEST" || true
+          grep -q "\*\* TEST SUCCEEDED \*\*" xcodebuild-runner.log
+
+      - name: RunnerTests — diag scheme (diagnostic side, #if INRANGE_DIAG)
+        run: |
+          cd ios
+          xcodebuild test \
+            -workspace Runner.xcworkspace \
+            -scheme diag \
+            -configuration Debug-diag \
+            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.device }}" \
+            -only-testing:RunnerTests \
+            -parallel-testing-enabled NO \
+            -maximum-concurrent-test-simulator-destinations 1 \
+            CODE_SIGNING_ALLOWED=NO | tee xcodebuild-diag.log | grep -E "Test [Cc]ase|Executed|TEST" || true
+          grep -q "\*\* TEST SUCCEEDED \*\*" xcodebuild-diag.log
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: runner-tests-log
-          path: ios/xcodebuild-test.log
+          name: runner-tests-logs
+          path: |
+            ios/xcodebuild-runner.log
+            ios/xcodebuild-diag.log
           retention-days: 14
 
+  # Panel B5: the final-binary negative/positive controls are now an EXECUTABLE
+  # CI gate, not local scaffolding. Production must carry no diagnostic code /
+  # run-secret env read; the diag build must, so the control is proven to fire.
+  isolation-ios:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Final-binary isolation (negative + positive controls)
+        # Real production + diag release builds, discriminated on diagnostic
+        # symbols AND the run-secret env string. .env is optional in CI.
+        run: bash scripts/check_final_binary_isolation.sh
+
   build-ios:
+    # Panel B5: the release artifact is produced ONLY when both the native test
+    # bundle (both schemes) and the isolation controls pass — no more uploading
+    # an IPA that never proved isolation or green tests.
+    needs: [test-ios, isolation-ios]
     runs-on: macos-latest
     timeout-minutes: 45
     steps:

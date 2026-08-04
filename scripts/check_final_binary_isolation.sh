@@ -1,43 +1,59 @@
 #!/usr/bin/env bash
-# Phase 4: final-binary negative/positive controls. Builds production and diag
-# IN ISOLATION (flutter clean between builds so incremental Swift artifacts
-# can't cross-contaminate), then discriminates on the DIAGNOSTIC CODE via
-# `nm` W5Diag symbol count — NOT on strings.
+# Phase 4 / panel B5: final-binary negative + positive controls, ENFORCED (not
+# just printed). Builds production and diag IN ISOLATION (flutter clean between
+# builds so incremental Swift artifacts can't cross-contaminate), then applies
+# the agreed production contract:
 #
-# Why not strings: the foreign-flavor WIPE machinery (diagnosticFileNames +
-# wipeDiagnosticFiles) legitimately references the diag file-name literals in
-# PRODUCTION (so a production build can erase foreign diag files), so those
-# strings appear in both binaries. The true discriminator is whether the
-# diagnostic code itself (W5Diag.*) was compiled in.
-#   NEGATIVE: production binary has ZERO W5Diag symbols.
-#   POSITIVE: diag binary has W5Diag symbols (proves the check discriminates).
-# strings counts are reported for information only. Fail-closed on missing build.
+#   The ONLY diagnostic-related strings allowed in a production binary are the
+#   compiled-in-all-builds channel + foreign-wipe machinery (channel case names
+#   like "armW5Fault"/"setDiagRunSecret", and the diagnostic FILE NAMES the
+#   wipe path erases). Everything else diagnostic must be absent:
+#     - the diagnostic CODE itself: W5Diag + W5EvidenceWriter symbols, and
+#     - the diagnostic-only run-secret ENV read "INRANGE_DIAG_RUN_SECRET".
+#
+#   NEGATIVE (production): diag symbols == 0 AND the run-secret env string absent.
+#   POSITIVE (diag):       diag symbols  > 0 AND the run-secret env string present.
+#
+# The positive control proves the discriminators actually fire; the informational
+# filename/channel strings are reported but NOT failed (they are contract-allowed).
+# Fail-closed on any missing build. CI-friendly: .env is optional.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
 BIN="build/ios/iphoneos/Runner.app/Runner"
 FAIL=0
 
-symcount() { nm "$1" 2>/dev/null | grep -c 'W5Diag'; }
-strcount() { strings "$1" 2>/dev/null | grep -cE 'bb_wake_log|w5_events|armW5Fault'; }
+# Diagnostic CODE symbols (types that are ENTIRELY #if INRANGE_DIAG).
+symcount() { nm "$1" 2>/dev/null | grep -cE 'W5Diag|W5EvidenceWriter'; }
+# Diagnostic-only run-secret env read (never compiled into production).
+secretcount() { strings "$1" 2>/dev/null | grep -c 'INRANGE_DIAG_RUN_SECRET'; }
+# Contract-allowed machinery strings (reported for information only).
+machinecount() { strings "$1" 2>/dev/null | grep -cE 'bb_wake_log|w5_events|w5_rssi_log|armW5Fault|setDiagRunSecret'; }
+
+ENVFLAG=""
+[ -f .env ] && ENVFLAG="--dart-define-from-file=.env"
 
 echo "== production release (clean) =="
 flutter clean >/dev/null 2>&1
 if ! flutter build ios --release >/dev/null 2>&1; then echo "FAIL: prod build"; exit 1; fi
 [ -f "$BIN" ] || { echo "FAIL: prod binary missing"; exit 1; }
-PSYM=$(symcount "$BIN"); PSTR=$(strcount "$BIN")
-echo "production: W5Diag-syms=$PSYM (strings=$PSTR, informational)"
-if [ "$PSYM" -eq 0 ]; then echo "OK(negative): no diagnostic code in production"
-else echo "FAIL(negative): production contains $PSYM W5Diag symbols"; FAIL=1; fi
+PSYM=$(symcount "$BIN"); PSEC=$(secretcount "$BIN"); PMAC=$(machinecount "$BIN")
+echo "production: diag-syms=$PSYM run-secret-env=$PSEC (machinery-strings=$PMAC, allowed/informational)"
+if [ "$PSYM" -eq 0 ]; then echo "OK(negative/sym): no diagnostic code in production"
+else echo "FAIL(negative/sym): production contains $PSYM diagnostic symbols"; FAIL=1; fi
+if [ "$PSEC" -eq 0 ]; then echo "OK(negative/str): no run-secret env read in production"
+else echo "FAIL(negative/str): production references INRANGE_DIAG_RUN_SECRET"; FAIL=1; fi
 
 echo "== diag release (clean) =="
 flutter clean >/dev/null 2>&1
-if ! flutter build ios --flavor diag --release --dart-define-from-file=.env \
+if ! flutter build ios --flavor diag --release $ENVFLAG \
   --dart-define=INRANGE_W5_LINKS=true >/dev/null 2>&1; then echo "FAIL: diag build"; exit 1; fi
 [ -f "$BIN" ] || { echo "FAIL: diag binary missing"; exit 1; }
-DSYM=$(symcount "$BIN"); DSTR=$(strcount "$BIN")
-echo "diag: W5Diag-syms=$DSYM (strings=$DSTR, informational)"
-if [ "$DSYM" -gt 0 ]; then echo "OK(positive): diagnostic code present in diag (control discriminates)"
-else echo "FAIL(positive): diag binary has no W5Diag symbols — check cannot discriminate"; FAIL=1; fi
+DSYM=$(symcount "$BIN"); DSEC=$(secretcount "$BIN")
+echo "diag: diag-syms=$DSYM run-secret-env=$DSEC"
+if [ "$DSYM" -gt 0 ]; then echo "OK(positive/sym): diagnostic code present in diag (sym control discriminates)"
+else echo "FAIL(positive/sym): diag binary has no diagnostic symbols — check cannot discriminate"; FAIL=1; fi
+if [ "$DSEC" -gt 0 ]; then echo "OK(positive/str): run-secret env read present in diag (str control discriminates)"
+else echo "FAIL(positive/str): diag binary lacks INRANGE_DIAG_RUN_SECRET — str check cannot discriminate"; FAIL=1; fi
 
 exit $FAIL
