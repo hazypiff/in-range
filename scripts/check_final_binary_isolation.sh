@@ -35,7 +35,10 @@ ENVFLAG=""
 
 echo "== production release (clean) =="
 flutter clean >/dev/null 2>&1
-if ! flutter build ios --release >/dev/null 2>&1; then echo "FAIL: prod build"; exit 1; fi
+# --no-codesign: the isolation check inspects the unsigned Mach-O with nm/strings;
+# signing is irrelevant and would fail on a CI runner with no signing identity
+# (the exact isolation-ios failure at 9775960). Local runs also work unsigned.
+if ! flutter build ios --release --no-codesign >/dev/null 2>&1; then echo "FAIL: prod build"; exit 1; fi
 [ -f "$BIN" ] || { echo "FAIL: prod binary missing"; exit 1; }
 PSYM=$(symcount "$BIN"); PSEC=$(secretcount "$BIN"); PMAC=$(machinecount "$BIN")
 echo "production: diag-syms=$PSYM run-secret-env=$PSEC (machinery-strings=$PMAC, allowed/informational)"
@@ -46,7 +49,7 @@ else echo "FAIL(negative/str): production references INRANGE_DIAG_RUN_SECRET"; F
 
 echo "== diag release (clean) =="
 flutter clean >/dev/null 2>&1
-if ! flutter build ios --flavor diag --release $ENVFLAG \
+if ! flutter build ios --flavor diag --release --no-codesign $ENVFLAG \
   --dart-define=INRANGE_W5_LINKS=true >/dev/null 2>&1; then echo "FAIL: diag build"; exit 1; fi
 [ -f "$BIN" ] || { echo "FAIL: diag binary missing"; exit 1; }
 DSYM=$(symcount "$BIN"); DSEC=$(secretcount "$BIN")
