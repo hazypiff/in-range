@@ -110,15 +110,13 @@ enum W5Diag {
     private static var seqCounter: UInt64 = 0
     private static let seqLock = NSLock()
     private static var faultPeerHandle: String?
-    private(set) static var droppedWrites: Int = 0
-    private static let cap = 4 * 1024 * 1024
-    // Persist to the diag operational suite so the NEXT boot can surface it.
+    // B4: the events JSONL now shares the one serialized evidence writer with
+    // the wake + RSSI logs (absent-vs-inaccessible, protection/backup after
+    // every op, per-family bounded drop counter).
+    static let eventWriter = W5EvidenceWriter(
+      fileName: "w5_events.jsonl", cap: 4 * 1024 * 1024, rotation: .dotOne)
+    static var droppedWrites: Int { eventWriter.dropped }
     private static let diagDefaults = UserDefaults(suiteName: "io.inrange.diag")
-    private static func noteDropped() {
-      droppedWrites += 1
-      let n = (diagDefaults?.integer(forKey: "bb.w5events.dropped") ?? 0) + 1
-      diagDefaults?.set(n, forKey: "bb.w5events.dropped")
-    }
 
     private static let runSecretKey = "bb.w5diag.runsecret"
     private static let provisionedSecretKey = "bb.w5diag.provisionedsecret"
@@ -195,11 +193,6 @@ enum W5Diag {
       return mac.prefix(7).map { String(format: "%02x", $0) }.joined()  // 14 hex
     }
 
-    private static var fileURL: URL {
-      FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("w5_events.jsonl")
-    }
-
     private static func nextSeq() -> UInt64 {
       seqLock.lock(); defer { seqLock.unlock() }
       seqCounter += 1
@@ -208,47 +201,42 @@ enum W5Diag {
 
     private static func write(_ obj: [String: Any]) {
       guard let data = try? JSONSerialization.data(withJSONObject: obj),
-        let bytes = (String(data: data, encoding: .utf8).map { $0 + "\n" })?
-          .data(using: .utf8)
-      else { noteDropped(); return }
-      let url = fileURL
-      // Cap + rotate.
-      if let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size])
-        as? Int, size > cap {
-        let prev = url.deletingLastPathComponent()
-          .appendingPathComponent("w5_events.1.jsonl")
-        try? FileManager.default.removeItem(at: prev)
-        try? FileManager.default.moveItem(at: url, to: prev)
-        applyProtection(prev)
+        let s = String(data: data, encoding: .utf8)
+      else {
+        eventWriter.noteExternalDrop()
+        return
       }
-      if let h = try? FileHandle(forWritingTo: url) {
-        var ok = true
-        if #available(iOS 13.4, *) {
-          do { try h.seekToEnd(); try h.write(contentsOf: bytes) } catch { ok = false }
-          try? h.close()
-        } else {
-          try? h.close()
-          let existing = (try? Data(contentsOf: url)) ?? Data()
-          do { try (existing + bytes).write(to: url, options: .atomic) } catch { ok = false }
-        }
-        if !ok { noteDropped(); return }
-      } else {
-        do { try bytes.write(to: url, options: .completeFileProtectionUnlessOpen) }
-        catch { noteDropped(); return }
-      }
-      applyProtection(url)
-    }
-
-    /// Data protection + backup exclusion, reapplied after every op that can
-    /// replace the file (create, append, rotate).
-    private static func applyProtection(_ url: URL) {
-      try? FileManager.default.setAttributes(
-        [.protectionKey: FileProtectionType.completeUnlessOpen],
-        ofItemAtPath: url.path)
-      var u = url
-      var res = URLResourceValues()
-      res.isExcludedFromBackup = true
-      try? u.setResourceValues(res)
+      eventWriter.append(s + "\n")  // absent/inaccessible/protection handled here
     }
   #endif
+
+  /// Sum + reset the PRIOR run's dropped-write count across every evidence
+  /// family (events, wake, RSSI). Release-safe (0 when no diag machinery ships).
+  static func drainPriorDroppedWrites() -> Int {
+    #if INRANGE_DIAG
+      return W5EvidenceWriter.drainPriorDropped()
+    #else
+      return 0
+    #endif
+  }
+
+  /// Shared writers for the non-W5Diag families, so all three go through the
+  /// one primitive. Diag-only.
+  #if INRANGE_DIAG
+    static let wakeWriter = W5EvidenceWriter(
+      fileName: "bb_wake_log.txt", cap: 2 * 1024 * 1024, rotation: .dotOne)
+    static let rssiWriter = W5EvidenceWriter(
+      fileName: "w5_rssi_log.jsonl", cap: 4 * 1024 * 1024, rotation: .external)
+  #endif
+
+  /// Release-safe truncated handle for a raw id — for text logs (wake log) that
+  /// must NOT carry raw token fragments. Returns "-" in a Release build and for
+  /// nil/empty ids, so call sites need no `#if`.
+  static func shortHandle(_ raw: String?) -> String {
+    #if INRANGE_DIAG
+      return handle("peer", raw) ?? "-"
+    #else
+      return "-"
+    #endif
+  }
 }

@@ -105,3 +105,91 @@ final class W5DiagTests: XCTestCase {
     }
   #endif
 }
+
+#if INRANGE_DIAG
+  /// B4: the ONE serialized evidence writer — absent-vs-inaccessible, protection
+  /// + backup exclusion after every op, rotation, and bounded drop accounting.
+  final class W5EvidenceWriterTests: XCTestCase {
+    private let docs = FileManager.default.urls(
+      for: .documentDirectory, in: .userDomainMask)[0]
+    private func url(_ n: String) -> URL { docs.appendingPathComponent(n) }
+    private let names = [
+      "ewtest_a.jsonl", "ewtest_b.jsonl", "ewtest_b.1.jsonl", "ewtest_c.txt",
+    ]
+
+    override func tearDown() {
+      for n in names {
+        try? FileManager.default.setAttributes(
+          [.posixPermissions: 0o644], ofItemAtPath: url(n).path)
+        try? FileManager.default.removeItem(at: url(n))
+      }
+      super.tearDown()
+    }
+
+    func testAbsentFileIsCreatedAndProtectionAppliedWhenReported() throws {
+      let name = "ewtest_a.jsonl"
+      try? FileManager.default.removeItem(at: url(name))
+      let w = W5EvidenceWriter(fileName: name, cap: 1_000_000, rotation: .dotOne)
+      XCTAssertTrue(w.append("line1\n"))
+      XCTAssertTrue(FileManager.default.fileExists(atPath: url(name).path))
+      // Data protection + backup exclusion ARE applied on create, but the iOS
+      // Simulator does not report either back (device-only features → nil).
+      // Assert them WHEN the platform reports them; the device one-phone
+      // preflight is where full enforcement is validated empirically.
+      let attrs = try FileManager.default.attributesOfItem(atPath: url(name).path)
+      if let prot = attrs[.protectionKey] as? FileProtectionType {
+        XCTAssertEqual(prot, .completeUnlessOpen, "protection must be completeUnlessOpen")
+      }
+      let vals = try url(name).resourceValues(forKeys: [.isExcludedFromBackupKey])
+      if let excluded = vals.isExcludedFromBackup {
+        XCTAssertTrue(excluded, "must exclude from backup")
+      }
+      // Append grows the SAME file (never a fresh single-line replacement).
+      XCTAssertTrue(w.append("line2\n"))
+      XCTAssertEqual(
+        try String(contentsOf: url(name), encoding: .utf8), "line1\nline2\n")
+    }
+
+    func testInaccessibleExistingFileIsDroppedNotOverwritten() throws {
+      let name = "ewtest_c.txt"
+      let path = url(name).path
+      try "PRESERVE".data(using: .utf8)!.write(to: url(name))
+      // Unwritable existing file → FileHandle(forWritingTo:) fails → the writer
+      // must treat it as inaccessible (drop), NOT absent (overwrite).
+      try FileManager.default.setAttributes(
+        [.posixPermissions: 0o444], ofItemAtPath: path)
+      let w = W5EvidenceWriter(fileName: name, cap: 1_000_000, rotation: .dotOne)
+      XCTAssertFalse(w.append("SHOULD-NOT-APPEAR\n"))
+      XCTAssertGreaterThan(w.dropped, 0, "an inaccessible write must be counted")
+      try FileManager.default.setAttributes(
+        [.posixPermissions: 0o644], ofItemAtPath: path)
+      XCTAssertEqual(
+        try String(contentsOf: url(name), encoding: .utf8), "PRESERVE",
+        "existing content must NOT be replaced by a single line")
+    }
+
+    func testRotationMovesFullFileToDotOne() throws {
+      let name = "ewtest_b.jsonl"
+      try? FileManager.default.removeItem(at: url(name))
+      try? FileManager.default.removeItem(at: url("ewtest_b.1.jsonl"))
+      let w = W5EvidenceWriter(fileName: name, cap: 10, rotation: .dotOne)
+      XCTAssertTrue(w.append("AAAAAAAAAAAA\n"))  // 13 bytes > cap
+      XCTAssertTrue(w.append("B\n"))  // over cap → rotate first, then write fresh
+      XCTAssertEqual(
+        try String(contentsOf: url("ewtest_b.1.jsonl"), encoding: .utf8),
+        "AAAAAAAAAAAA\n", "old file rotated to .1")
+      XCTAssertEqual(
+        try String(contentsOf: url(name), encoding: .utf8), "B\n",
+        "new file holds only the newest line")
+    }
+
+    func testDrainPriorDroppedSumsAndResetsEveryFamily() {
+      let d = UserDefaults(suiteName: "io.inrange.diag")
+      d?.set(3, forKey: "bb.evwrite.dropped.w5_events.jsonl")
+      d?.set(2, forKey: "bb.evwrite.dropped.bb_wake_log.txt")
+      d?.set(1, forKey: "bb.evwrite.dropped.w5_rssi_log.jsonl")
+      XCTAssertEqual(W5EvidenceWriter.drainPriorDropped(), 6)
+      XCTAssertEqual(W5EvidenceWriter.drainPriorDropped(), 0, "reset after drain")
+    }
+  }
+#endif

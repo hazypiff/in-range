@@ -183,7 +183,12 @@ final class BackgroundBeacon: NSObject {
     // survives into this launch (Phase 3 complete foreign-flavor wipe).
     for key in ["bb.enabled", "bb.slots", "bb.buffer", "bb.pingUrl",
                 "bb.pingAuth", Self.keyW5Links, "bb.w5rssi.off",
-                "bb.w5.snapshot", "bb.w5events.dropped"] {
+                "bb.w5.snapshot", "bb.w5events.dropped",
+                // B4: per-family dropped counters + the persisted run secrets.
+                "bb.evwrite.dropped.w5_events.jsonl",
+                "bb.evwrite.dropped.bb_wake_log.txt",
+                "bb.evwrite.dropped.w5_rssi_log.jsonl",
+                "bb.w5diag.runsecret", "bb.w5diag.provisionedsecret"] {
       defaults.removeObject(forKey: key)
     }
     Self.wipeDiagnosticFiles()
@@ -251,8 +256,9 @@ final class BackgroundBeacon: NSObject {
     }
     reconcileStateStamp()  // H-DIAG-3: before any restoration
     logWake("boot enabled=\(defaults.bool(forKey: Self.keyEnabled))")
-    // Surface the PRIOR run's dropped-write count (integrity) then reset it.
-    let priorDropped = defaults.integer(forKey: "bb.w5events.dropped")
+    // Surface the PRIOR run's dropped-write count across EVERY evidence family
+    // (events + wake + RSSI), then reset — integrity loss is never silent.
+    let priorDropped = W5Diag.drainPriorDroppedWrites()
     W5Diag.emit(.boot, role: .app,
       result: defaults.bool(forKey: Self.keyEnabled) ? "enabled" : "disabled",
       count: priorDropped)
@@ -262,7 +268,6 @@ final class BackgroundBeacon: NSObject {
     W5Diag.emit(.coldLaunch, role: .app,
       result: defaults.object(forKey: "bb.w5.snapshot") != nil
         ? "snapshotPresent" : "fresh")
-    defaults.set(0, forKey: "bb.w5events.dropped")
     if defaults.bool(forKey: Self.keyEnabled) {
       ensureManagers()
       scheduleWake()
@@ -791,33 +796,11 @@ final class BackgroundBeacon: NSObject {
   /// #8: diagnostic-only — compiled out of production entirely.
   func logWake(_ kind: String) {
     #if INRANGE_DIAG
-      let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-      let url = docs.appendingPathComponent("bb_wake_log.txt")
-      // Cap + rotate: keep the file bounded so a long soak can't fill the disk.
-      if let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size])
-        as? Int, size > 2 * 1024 * 1024 {
-        let prev = docs.appendingPathComponent("bb_wake_log.1.txt")
-        try? FileManager.default.removeItem(at: prev)
-        try? FileManager.default.moveItem(at: url, to: prev)
-      }
-      let line = "\(Int(Date().timeIntervalSince1970 * 1000)) \(kind)\n"
-      if let data = line.data(using: .utf8) {
-        if let h = try? FileHandle(forWritingTo: url) {
-          defer { try? h.close() }
-          if #available(iOS 13.4, *) {
-            try? h.seekToEnd()
-            try? h.write(contentsOf: data)  // non-trapping (was h.write)
-          } else {
-            // iOS 13.0–13.3: no non-trapping FileHandle API — read-append-write
-            // via Data.write so ENOSPC drops the line, never crashes (Codex).
-            try? h.close()
-            let existing = (try? Data(contentsOf: url)) ?? Data()
-            try? (existing + data).write(to: url, options: .atomic)
-          }
-        } else {
-          try? data.write(to: url)
-        }
-      }
+      // B4: one serialized writer with absent-vs-inaccessible handling,
+      // protection + backup exclusion after every op, and a bounded drop
+      // counter — the wake log no longer risks replacing a locked file with a
+      // single line.
+      W5Diag.wakeWriter.append("\(Int(Date().timeIntervalSince1970 * 1000)) \(kind)\n")
     #endif
   }
 }
@@ -1306,7 +1289,7 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
         peripheral: peripheral, tokenHex: hex, lastEvent: Date(),
         keepaliveChar: ka, lastRssiAt: .distantPast, lastBeatAt: .distantPast,
         writeInFlight: false, notifyReady: false, seq: 0, lastGattOp: "start")
-      logWake("w5-start p=\(String(hex.prefix(6)))")
+      logWake("w5-start p=\(W5Diag.shortHandle(hex))")
       inflight.removeValue(forKey: id)  // session owns the peripheral now
       if let ka = ka {
         // Subscribe first; the first beat fires from didUpdateNotificationState.
@@ -1412,7 +1395,7 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
   func w5End(_ id: UUID) {
     let _endTok = w5[id]?.tokenHex
     if let s = w5.removeValue(forKey: id) {
-      logWake("w5-end p=\(String((_endTok ?? "-").prefix(6)))")
+      logWake("w5-end p=\(W5Diag.shortHandle(_endTok))")
       centralMgr?.cancelPeripheralConnection(s.peripheral)
     }
   }

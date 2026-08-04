@@ -926,34 +926,17 @@ final class W5LinkController {
       ch.invokeMethod("onSighting", arguments: ["token": tokenHex, "rssi": rssi, "ts": ts])
       return
     }
-    let line = "{\"token\":\"\(tokenHex)\",\"rssi\":\(rssi),\"ts\":\(ts)}\n"
-    guard let data = line.data(using: .utf8) else { return }
-    var url = rssiFileURL
-    if let h = try? FileHandle(forWritingTo: url) {
-      defer { try? h.close() }
-      if #available(iOS 13.4, *) {
-        do {
-          try h.seekToEnd()
-          try h.write(contentsOf: data)  // non-trapping (was h.write → ENOSPC crash)
-        } catch {
-          return  // a full disk drops the sample, never crashes the BLE process
-        }
-      } else {
-        // iOS 13.0–13.3: no non-trapping FileHandle API. Read-append-write
-        // via Data.write (throwing) so ENOSPC drops the line, never crashes
-        // the BLE process (Codex log-write finding).
-        try? h.close()
-        let existing = (try? Data(contentsOf: url)) ?? Data()
-        try? (existing + data).write(to: url, options: .atomic)
-      }
-    } else {
-      // First write: create with data protection + exclude from backup.
-      try? data.write(to: url, options: .completeFileProtectionUnlessOpen)
-      var res = URLResourceValues()
-      res.isExcludedFromBackup = true
-      try? url.setResourceValues(res)
-    }
-    trimRssiFileIfNeeded()
+    // B4: append via the ONE serialized evidence writer — absent-vs-inaccessible
+    // handling, protection + backup exclusion after every op (previously only on
+    // first create), and a bounded drop counter. The raw token stays: it is
+    // FUNCTIONAL (Dart drains it for proximity), not a diagnostic leak, and the
+    // committed copy is sanitized by hw_matrix_pull.sh. Rotation is `.external`
+    // so trimRssiFileIfNeeded keeps the drain offsets consistent.
+    #if INRANGE_DIAG
+      let line = "{\"token\":\"\(tokenHex)\",\"rssi\":\(rssi),\"ts\":\(ts)}\n"
+      W5Diag.rssiWriter.append(line)
+      trimRssiFileIfNeeded()
+    #endif
   }
 
   private func trimRssiFileIfNeeded() {
