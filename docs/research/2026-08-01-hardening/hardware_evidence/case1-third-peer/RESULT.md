@@ -1,7 +1,8 @@
 # Case 1 — third peer arrives mid-dial (H-W5-3) — 2026-08-03
 
 Build: 53ed423 (docs tip over signed code 98279de), diag flavor, INRANGE_W5_LINKS=true.
-Fleet: A=iPhone14 (99B56AAB), B=iPhone13 (C7BA9967), C=iPhone15ProMax (0301D88D).
+Fleet (owner-confirmed, identifiers omitted): A=iPhone 14, B=iPhone 13,
+C=iPhone 15 Plus (slot C run on a substitute iPhone 15-family unit).
 Window: ~16:15–16:21 UTC. Sanitized logs alongside this file (32-hex ids → id:<6hex>).
 
 ## Verdict: PASS (with scope note)

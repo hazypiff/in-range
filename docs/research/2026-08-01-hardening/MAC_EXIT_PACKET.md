@@ -116,8 +116,9 @@ comment / merge / deploy performed. Everything is local on
 
 ## 6. Hardware matrix — RUN 2026-08-03, all four cases PASS
 
-Diag flavor (instrumented, `f989231`), 3 iPhones (14, 13, 15 Pro Max substituted
-for the 15 Plus — registered a device slot). Sanitized attributed logs in
+Diag flavor (instrumented, `f989231`), 3 iPhones — owner-confirmed fleet
+iPhone 14, iPhone 13, iPhone 15 Plus (slot C run on a substitute iPhone
+15-family unit; device identifiers omitted per policy). Sanitized attributed logs in
 `hardware_evidence/`. Final Kimi review `fb9b38ff`: gate MET; instrumentation
 release-safe (confirmed from code + CI); delay hook cannot mask a leak.
 

@@ -1,7 +1,7 @@
 # Case 2 — grace reconnect + rotation-during-grace (H-W5-5, DL-3) — 2026-08-03
 
 Build: f989231 (diag + attribution). Keeper = iPhone 13 (central); iPhone 14
-peripheral. Drop = ~44s Airplane Mode on the 13. Pro Max beacon OFF.
+peripheral. Drop = ~44s Airplane Mode on the 13. Slot C (iPhone 15 Plus) beacon OFF.
 
 ## Verdict: PASS (full) — inferred piece RESOLVED by Kimi + committed vector
 

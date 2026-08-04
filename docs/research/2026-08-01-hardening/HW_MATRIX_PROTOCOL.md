@@ -4,13 +4,20 @@ Executes the four acceptance cases the panel requires before PR #11 merges.
 Turns the native-only fixes (H-W5-2 notify rebind, H-W5-5 grace-bypass,
 H-W5-3 pendingDial sweep) from logic-verified to behavior-verified.
 
-## Fleet (2026-08-03)
+## Fleet (owner-confirmed)
 
-| Role | Model | UDID | Cabled? |
-|---|---|---|---|
-| A | iPhone 14 | `99B56AAB-5758-5833-A0C1-B0372BA6EC49` | **yes** |
-| B | iPhone 13 | `C7BA9967-D9D2-522E-A679-28FBCAEF0C99` | **yes** |
-| C |  ~~iPhone 15 Plus~~ iPhone 15 Pro Max |  `0301D88D-02E1-5098-8AD6-69ADD4FA604D` | **yes** (registered + installed 2026-08-03; substituted for the 15 Plus) |
+Device UDIDs/serials are omitted per work-order policy (no device identifiers in
+commits or LLM packets). Roles are named by model only.
+
+| Role | Model | Cabled? |
+|---|---|---|
+| A | iPhone 14 | **yes** |
+| B | iPhone 13 | **yes** |
+| C | iPhone 15 Plus | **yes** |
+
+Slot C is the owner-confirmed **iPhone 15 Plus**. If a different iPhone 15-family
+unit stands in for a given run, record only the fact of substitution in that
+run's notes — never a device identifier.
 
 Case 1 (third-peer-mid-dial) is inherently a 3-device test → **needs C cabled.**
 Cases 2–4 are 2-device and can run on A+B now.

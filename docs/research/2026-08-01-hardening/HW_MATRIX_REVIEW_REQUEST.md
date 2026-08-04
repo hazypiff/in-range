@@ -18,7 +18,8 @@ turn native-only fixes into behavior-verified:
   re-bound (else every notify silently drops).
 - **H-W5-6**: a user rejection (`dropPeer`) must erase the lease and NOT re-dial.
 
-Fleet: A=iPhone14, B=iPhone13, C=iPhone15ProMax. Diag flavor,
+Fleet (owner-confirmed): A=iPhone 14, B=iPhone 13, C=iPhone 15 Plus (slot C on a
+substitute iPhone 15-family unit; identifiers omitted). Diag flavor,
 `INRANGE_W5_LINKS=true`. Evidence = native `bb_wake_log.txt` (event tags) +
 `w5_rssi_log.jsonl`, pulled per device and sanitized (32-hex ids → `id:<6hex>`).
 

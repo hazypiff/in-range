@@ -19,8 +19,8 @@ swipe_card_alias_test.dart (server-id-never-an-alias, local-alias-carried).
 
 ## Original local-card evidence (still valid for the NARROW contract)
 
-Build: 53ed423 (diag, INRANGE_W5_LINKS=true). Fleet: A=iPhone14, B=iPhone13
-(C=Pro Max beacon OFF → A has exactly one peer, so any post-reject w5-start = a
+Build: 53ed423 (diag, INRANGE_W5_LINKS=true). Fleet: A=iPhone 14, B=iPhone 13
+(C=iPhone 15 Plus slot, beacon OFF → A has exactly one peer, so any post-reject w5-start = a
 redial to B). Clean run: logs cleared, 2-phone isolation.
 
 ## Verdict: PASS

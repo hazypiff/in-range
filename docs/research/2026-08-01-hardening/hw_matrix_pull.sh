@@ -5,7 +5,7 @@
 # PR #11. Raw pulls stay in the scratchpad and are NEVER committed.
 #
 #   ./hw_matrix_pull.sh <UDID> <label> <case-name>
-# e.g. ./hw_matrix_pull.sh 99B56AAB-... iphone14 case1-third-peer
+# e.g. ./hw_matrix_pull.sh <device-udid> iphone14 case1-third-peer
 #
 # Diag flavor bundle id (issue #8 isolation):
 BUNDLE="io.inrange.inRange.diag"
