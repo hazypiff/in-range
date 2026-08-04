@@ -35,15 +35,17 @@ identifiers still exist in the object history, introduced at:
 Scope of sensitive strings in history: three devicectl UDIDs
 (`99B56AAB-…`, `C7BA9967-…`, `0301D88D-…`) and their 8-hex prefixes.
 
-### Reviewed-and-kept (NOT proposed for redaction)
+### Now also sanitized at the tip (reconciled panel, 2026-08-04)
 
-The `hardware_evidence/**/*_bb_wake_log.txt` files contain per-encounter
-CoreBluetooth peripheral handles (`h=out:<uuid>` / `h=in:<uuid>`). These are
-per-app-installation, per-peripheral CB identifiers that rotate on reinstall —
-**not** hardware serials — and are the sanitized evidence payload itself
-(the `L=<lease>` / `gen=` traces prove ownership). The panel reviewed the exact
-evidence and scoped B6 to the hardware serials + fleet model only. These handles
-are therefore left intact; flag for a second opinion if policy says otherwise.
+The `hardware_evidence/**/*_bb_wake_log.txt` files contained per-encounter
+CoreBluetooth peripheral handles (`h=out:<uuid>` / `h=in:<uuid>`) — per-app,
+per-peripheral CB identifiers (not hardware serials). An earlier pass left them
+as the evidence payload; the reconciled Claude/Kimi panel asked for them
+sanitized at the tip too. They are now replaced in place with the repo's
+`id:<6hex>` convention (same UUID → same short id, so the `L=<lease>` / `gen=`
+correlation is preserved), and the `C-promax_*` evidence files were renamed
+`C-slotC_*` to drop the model from the filename. History still holds the raw
+values → covered by the rewrite proposal below.
 
 ## Proposed redaction mechanism (for approval — do NOT run without sign-off)
 
