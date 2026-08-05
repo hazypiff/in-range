@@ -22,11 +22,19 @@ The Wave A model-ownership table assigns the **primary implementer/coordinator**
 role to **Opus 5**. This coordinator runs as `claude-opus-4-8`; there is no
 Claude Opus 5 in the available model set to invoke. Per the panel A6 rule, a
 requested backend that is unavailable must be reported as `EXTERNAL_BLOCKER`, not
-silently substituted. The two non-author REVIEW backends (Kimi 3 via
-`kimi -m kimi-code/k3`; GPT Sol via `codex` = `gpt-5.6-sol`) ARE available, so
-review can proceed the moment the implementer/coordinator backend question is
-resolved by the owner (grant Opus 5 access, or authorize `claude-opus-4-8` as
-the implementer/coordinator substitute).
+silently substituted — which is what was reported.
+
+**Owner ruling (2026-08-05, model substitution AUTHORIZED — value-free record):**
+the owner accepted that Claude Opus 5 is unavailable and explicitly authorized
+`claude-opus-4-8` as its substitute throughout this convergence work order,
+including the Wave A implementation/coordinator duties and the later Opus-review
+role. Primary implementer/coordinator: `claude-opus-4-8`. Independent non-author
+reviewers: `kimi-code/k3` (via `kimi -m kimi-code/k3`) and `gpt-5.6-sol` (via
+`codex`), both AVAILABLE. The ruling changes model assignment only; it does not
+weaken any A1–A6 predicate, red-before/green-after test, zero-skip requirement,
+exact-SHA discipline, or the two-reviewer approval requirement. This is the
+single authoritative statement of the substitution; the evidence packet records
+it identically.
 
 ## Owner provenance — fleet-key persistence (value-free)
 

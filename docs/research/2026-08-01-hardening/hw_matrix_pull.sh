@@ -91,10 +91,16 @@ OUT="$OUT_ROOT/${CASE}"
 pull() {
   rm -f "$RAW/$1"
   local err rc
-  err="$("$XCRUN" devicectl device copy from --device "$UDID" --user mobile \
-    --domain-type appDataContainer --domain-identifier "$BUNDLE" \
-    --source "Documents/$1" --destination "$RAW/$1" 2>&1)"
-  rc=$?
+  # Capture via an explicit if/else so `set -e` never exits at the command
+  # substitution itself (that would abort before classification, regardless of
+  # the caller's AND-OR context). rc holds the real devicectl status.
+  if err="$("$XCRUN" devicectl device copy from --device "$UDID" --user mobile \
+      --domain-type appDataContainer --domain-identifier "$BUNDLE" \
+      --source "Documents/$1" --destination "$RAW/$1" 2>&1)"; then
+    rc=0
+  else
+    rc=$?
+  fi
   if [ "$rc" -eq 0 ]; then echo "  pulled $1"; return 0; fi
   rm -f "$RAW/$1"   # discard any partial bytes a failed copy left behind
   if printf '%s' "$err" | grep -Eqi \

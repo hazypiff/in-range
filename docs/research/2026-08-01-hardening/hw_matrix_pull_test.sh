@@ -141,7 +141,11 @@ for l in open(sys.argv[1]):
     if o.get("event")=="dial": print(o["peer"]); break' "$OUTDIR/iphone14_w5_events.jsonl")"
 rssi_tok="$(python3 -c 'import json,sys
 print(json.loads(open(sys.argv[1]).readline())["token"])' "$OUTDIR/iphone14_w5_rssi_log.jsonl")"
-if [ "$ev_peer" = "$want_h" ] && [ "$rssi_tok" = "$want_h" ]; then
+# The join REQUIRES want_h to be a full canonical handle (`id:` + 14 hex) AND
+# all three values to be equal — so three empty strings can never pass as a join.
+if printf '%s' "$want_h" | grep -Eq '^id:[0-9a-f]{14}$' \
+   && [ -n "$ev_peer" ] && [ "$ev_peer" = "$want_h" ] \
+   && [ "$rssi_tok" = "$want_h" ]; then
   ok "R1 join: event peer handle == sanitized RSSI token == $want_h (id:<14hex>)"
 else
   bad "R1 join FAIL (event peer=$ev_peer rssi token=$rssi_tok want=$want_h)"
