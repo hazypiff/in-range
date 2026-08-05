@@ -56,30 +56,49 @@ jobs:
       - name: RunnerTests — Runner scheme (production side)
         run: |
           cd ios
+          set -o pipefail
           xcodebuild test \
             -workspace Runner.xcworkspace \
             -scheme Runner \
             -configuration Debug \
+            -resultBundlePath RunnerResult.xcresult \
             -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.device }}" \
             -only-testing:RunnerTests \
             -parallel-testing-enabled NO \
             -maximum-concurrent-test-simulator-destinations 1 \
             CODE_SIGNING_ALLOWED=NO | tee xcodebuild-runner.log | grep -E "Test [Cc]ase|Executed|TEST" || true
-          grep -q "\*\* TEST SUCCEEDED \*\*" xcodebuild-runner.log
+          bash ../scripts/assert_native_tests.sh xcodebuild-runner.log 40
 
       - name: RunnerTests — diag scheme (diagnostic side, #if INRANGE_DIAG)
         run: |
           cd ios
+          set -o pipefail
           xcodebuild test \
             -workspace Runner.xcworkspace \
             -scheme diag \
             -configuration Debug-diag \
+            -resultBundlePath DiagResult.xcresult \
             -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.device }}" \
             -only-testing:RunnerTests \
             -parallel-testing-enabled NO \
             -maximum-concurrent-test-simulator-destinations 1 \
             CODE_SIGNING_ALLOWED=NO | tee xcodebuild-diag.log | grep -E "Test [Cc]ase|Executed|TEST" || true
-          grep -q "\*\* TEST SUCCEEDED \*\*" xcodebuild-diag.log
+          # The diag scheme must run the named A5 test (no environment skip).
+          bash ../scripts/assert_native_tests.sh xcodebuild-diag.log 70 \
+            testHandleUsesProvisionedRunSecret
+
+      - name: Record authoritative native test counts + log hashes
+        if: always()
+        run: |
+          cd ios
+          {
+            echo "### Native test evidence (exact SHA ${GITHUB_SHA})"
+            for f in xcodebuild-runner.log xcodebuild-diag.log; do
+              [ -f "$f" ] || continue
+              line="$(grep -Eo 'Executed [0-9]+ tests?, with [0-9]+ failures \([0-9]+ unexpected\)' "$f" | tail -1)"
+              echo "- $f: ${line:-'(no summary)'} sha256=$(shasum -a 256 "$f" | cut -d' ' -f1)"
+            done
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         if: always()
