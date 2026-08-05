@@ -410,15 +410,29 @@ class BackgroundBeaconChannel {
     }
   }
 
-  /// Diagnostic-only: end the current diagnostic session — clears the persisted
-  /// run secret + dropped counters and wipes evidence files, so the NEXT launch
-  /// starts a fresh, isolated session (run-secret lifecycle contract). Call
-  /// between matrix cases. No-op in a release binary.
-  Future<void> resetW5Diag() async {
+  /// Diagnostic-only: reset the current CASE — RETAINS the fleet secret, rotates
+  /// the public case epoch, wipes evidence, clears controls + sequence. Returns
+  /// the native structured ack (`caseEpoch`, `secretRetained`). Call between
+  /// matrix cases. No-op in a release binary.
+  Future<Map<String, dynamic>?> resetW5Case() async {
     try {
-      await _channel.invokeMethod<void>('resetW5Diag');
+      final r = await _channel.invokeMethod<dynamic>('resetW5Case');
+      return r == null ? null : Map<String, dynamic>.from(r as Map);
     } catch (e) {
-      debugPrint('BackgroundBeacon resetW5Diag failed: $e');
+      debugPrint('BackgroundBeacon resetW5Case failed: $e');
+      return null;
+    }
+  }
+
+  /// Diagnostic-only: destroy the persisted fleet secret — the ONLY secret-
+  /// clearing op, rejected natively while W5 is active. Returns the native ack.
+  Future<Map<String, dynamic>?> destroyW5Secret() async {
+    try {
+      final r = await _channel.invokeMethod<dynamic>('destroyW5Secret');
+      return r == null ? null : Map<String, dynamic>.from(r as Map);
+    } catch (e) {
+      debugPrint('BackgroundBeacon destroyW5Secret failed: $e');
+      return null;
     }
   }
 }

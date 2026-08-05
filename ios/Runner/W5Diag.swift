@@ -52,27 +52,36 @@ enum W5Diag {
     count: @autoclosure () -> Int? = nil
   ) {
     #if INRANGE_DIAG
-      var obj: [String: Any] = [
-        "v": 1,
-        "run": runLabel,
-        "epoch": bootEpoch,
-        "wallMs": Int(Date().timeIntervalSince1970 * 1000),
-        "monoNs": DispatchTime.now().uptimeNanoseconds,
-        "event": event.rawValue,
-      ]
-      if let role { obj["role"] = role.rawValue }
-      if let h = handle("peer", peer()) { obj["peer"] = h }
-      if let h = handle("lease", lease()) { obj["lease"] = h }
-      if let h = handle("link", link()) { obj["link"] = h }
-      if let h = handle("peripheral", peripheral()) { obj["peripheral"] = h }
-      if let result = result() { obj["result"] = result }
-      if let reason = reason() { obj["reason"] = reason }
-      if let count = count() { obj["count"] = count }
-      // B4: assign `seq` and append in ONE critical section on the events
-      // writer's lock, so a line's seq always matches its file order even under
-      // concurrent emits (previously seq and append used different locks).
+      // Evaluate the raw-id autoclosures OUTSIDE the lock (cheap strings), then
+      // derive EVERY handle from ONE atomic {secret, keyEpoch, caseEpoch}
+      // snapshot INSIDE the serialized boundary — so a key/epoch cannot change
+      // between fields or silently inside one file epoch (Wave A).
+      let rPeer = peer(), rLease = lease(), rLink = link(), rPeriph = peripheral()
+      let rResult = result(), rReason = reason(), rCount = count()
+      let rRole = role
       eventWriter.withLock {
-        obj["seq"] = nextSeqLocked()
+        let snap = sessionSnapshotLocked()
+        var obj: [String: Any] = [
+          "v": 1,
+          "run": runLabel,
+          "epoch": bootEpoch,
+          "keyEpoch": snap.keyEpoch,
+          "caseEpoch": snap.caseEpoch,
+          "wallMs": Int(Date().timeIntervalSince1970 * 1000),
+          "monoNs": DispatchTime.now().uptimeNanoseconds,
+          "seq": nextSeqLocked(),
+          "event": event.rawValue,
+        ]
+        if let rRole { obj["role"] = rRole.rawValue }
+        if let h = handle(with: snap.secret, "peer", rPeer) { obj["peer"] = h }
+        if let h = handle(with: snap.secret, "lease", rLease) { obj["lease"] = h }
+        if let h = handle(with: snap.secret, "link", rLink) { obj["link"] = h }
+        if let h = handle(with: snap.secret, "peripheral", rPeriph) {
+          obj["peripheral"] = h
+        }
+        if let rResult { obj["result"] = rResult }
+        if let rReason { obj["reason"] = rReason }
+        if let rCount { obj["count"] = rCount }
         guard let data = try? JSONSerialization.data(withJSONObject: obj),
           let s = String(data: data, encoding: .utf8)
         else {
@@ -84,74 +93,108 @@ enum W5Diag {
     #endif
   }
 
-  /// Provision the shared fleet run secret (hex) from a build-time dart-define,
-  /// persisted to the diag suite so it survives OS restoration and aligns HMAC
-  /// handles across a fleet built from one artifact. Must be called before any
-  /// emit (beacon start does). Release-safe no-op.
-  static func provisionRunSecret(_ hex: String) {
+  /// Provision the shared fleet run secret (hex). Validated: >= 32 chars, EVEN
+  /// length, valid hex — a short/odd/non-hex value MUST NOT mutate state.
+  /// Persisted (survives OS restoration). If a DIFFERENT key arrives while an
+  /// evidence epoch is active, this atomically rotates to a VISIBLY NEW key
+  /// epoch and wipes the current evidence (never continues the same JSONL under
+  /// two secrets). Returns a structured acknowledgment. Release-safe no-op.
+  @discardableResult
+  static func provisionRunSecret(_ hex: String) -> [String: Any] {
     #if INRANGE_DIAG
-      guard hex.count >= 32, let d = hexToData(hex) else { return }
-      diagDefaults?.set(hex, forKey: provisionedSecretKey)
-      // Update the in-process key too, so a fleet secret arriving after an early
-      // boot emit governs every subsequent handle (no resolve-once staleness).
+      guard hex.count >= 32, hex.count % 2 == 0, let d = hexToData(hex) else {
+        return ["ok": false, "rejected": "invalid-hex"]
+      }
       runSecretLock.lock()
+      let changed = _cachedRunSecret != nil && _cachedRunSecret != d
+      diagDefaults?.set(hex, forKey: provisionedSecretKey)
       _cachedRunSecret = d
       runSecretLock.unlock()
+      if changed {
+        // Key changed mid-session → new key epoch + fresh evidence epoch.
+        _ = resetCase(reason: "keyRotate")
+        diagDefaults?.set(keyEpoch + 1, forKey: keyEpochKey)
+      }
+      return ["ok": true, "keyEpoch": keyEpoch, "rotated": changed]
+    #else
+      return ["ok": false]
     #endif
   }
 
-  /// Run-secret LIFECYCLE CONTRACT (diag-only):
-  /// - **Creation**: lazily on first use, resolved env → provisioned(build
-  ///   dart-define) → per-install persisted → generate. Persisted only in the
-  ///   `io.inrange.diag` suite, never `standard`.
-  /// - **Stability**: fixed for the life of the process, and persisted so an OS
-  ///   restoration relaunch reuses it (HMAC handles stay joinable — Case 3).
-  ///   Never auto-rotated (that would break restoration continuity).
-  /// - **Bounded lifetime**: the secret belongs to ONE diagnostic session, not
-  ///   forever. `resetDiagSession()` clears the persisted secret + counters AND
-  ///   the in-process cache, so the NEXT handle re-resolves. A foreign-flavor
-  ///   boot wipes it too. CAVEAT: if a FLEET secret is baked (env/dart-define),
-  ///   reset re-resolves to that same baked value by design — fleet alignment
-  ///   and per-reset decorrelation are mutually exclusive. Reset decorrelates
-  ///   cases only in the per-install/generated regime (no baked fleet secret).
-  /// - **runLabel vs secret**: `runLabel` (bootEpoch-derived) is a PUBLIC,
-  ///   per-process label that distinguishes relaunches in the log; the secret
-  ///   is private and keys the handles. They are independent by design.
+  /// DIAGNOSTIC-SESSION LIFECYCLE CONTRACT (diag-only), owner-ratified 2026-08-05:
+  /// the shared fleet secret PERSISTS across relaunch/restoration AND case
+  /// resets. Two distinct operations:
+  /// - `resetCase()` — RETAINS the fleet secret, rotates only the PUBLIC case
+  ///   epoch, waits for in-flight writes, wipes every current + rotated
+  ///   artifact, clears fault/delay, and resets sequence/run state. Between
+  ///   matrix cases.
+  /// - `destroySessionSecret(w5Active:)` — the ONLY operation that destroys the
+  ///   secret; rejected while W5 is active (must be stopped first).
   ///
-  /// CONTRACT RATIFIED BY THE OWNER (2026-08-04): persist the secret per-install
-  /// in the diag suite (this behavior), NOT Keychain and NOT regenerate-per-
-  /// launch. (Panel B3 ruling — "Persist per-install".)
-  ///
-  /// Clears the persisted run/provisioned secret + per-family dropped counters.
-  /// In-process `runSecret` is already resolved (a `let`), so this takes effect
-  /// on the NEXT launch — call it between matrix cases (before relaunch) to
-  /// start a fresh, isolated diagnostic session. Release-safe no-op.
-  static func resetDiagSession() {
+  /// `runLabel`/`bootEpoch` are public per-process; `keyEpoch` (public) marks a
+  /// key change; `caseEpoch` (public) marks a case reset. None is the secret.
+  @discardableResult
+  static func resetCase(reason: String = "reset") -> [String: Any] {
     #if INRANGE_DIAG
+      // Serialize with any in-flight append/rotate on the events writer.
+      return eventWriter.withLock {
+        BackgroundBeacon.wipeDiagnosticFiles()  // current + rotated artifacts
+        diagDefaults?.removeObject(forKey: "bb.w5rssi.off")  // RSSI drain offset
+        faultPeerHandle = nil
+        helloDelayPending = nil
+        seqCounter = 0
+        for k in W5EvidenceWriter.droppedKeys + W5EvidenceWriter.opFailKeys {
+          diagDefaults?.removeObject(forKey: k)
+        }
+        let newCase = caseEpoch + 1
+        diagDefaults?.set(newCase, forKey: caseEpochKey)
+        // SECRET RETAINED (owner ruling).
+        return [
+          "ok": true, "caseEpoch": newCase, "keyEpoch": keyEpoch,
+          "secretRetained": true, "reason": reason,
+        ]
+      }
+    #else
+      return ["ok": false]
+    #endif
+  }
+
+  /// Destroy the persisted fleet secret. REJECTED while W5 is active — the
+  /// owner ruling makes destruction a separate stopped-W5 operation, distinct
+  /// from `resetCase`. Bumps the key epoch. Structured ack.
+  @discardableResult
+  static func destroySessionSecret(w5Active: Bool) -> [String: Any] {
+    #if INRANGE_DIAG
+      if w5Active { return ["ok": false, "rejected": "w5-active"] }
+      runSecretLock.lock()
       diagDefaults?.removeObject(forKey: runSecretKey)
       diagDefaults?.removeObject(forKey: provisionedSecretKey)
-      for k in W5EvidenceWriter.droppedKeys + W5EvidenceWriter.opFailKeys {
-        diagDefaults?.removeObject(forKey: k)
-      }
-      // Clear the in-process key so the next handle re-resolves (fresh, unless a
-      // fleet secret is baked — see the caveat on the lifecycle contract).
-      runSecretLock.lock()
       _cachedRunSecret = nil
       runSecretLock.unlock()
+      diagDefaults?.set(keyEpoch + 1, forKey: keyEpochKey)
+      return ["ok": true, "secretDestroyed": true, "keyEpoch": keyEpoch]
+    #else
+      return ["ok": false]
     #endif
   }
 
   /// Arm the one-shot pre-HELLO_ACK fault for a peer (Case 1 reclamation).
   /// A specific peer token scopes the fault to that peer; nil arms the next
   /// dial to anyone (use only when the target alias is not yet known).
-  static func armFault(peerRaw: String?) {
+  @discardableResult
+  static func armFault(peerRaw: String?) -> [String: Any] {
     #if INRANGE_DIAG
-      faultPeerHandle = handle("peer", peerRaw) ?? "*"  // "*" = any next dial
-      // Make the fault lifecycle observable in the JSONL: armed → fired
-      // (preAckDrop) → [disarmed]. Case 1's story is then complete, not just
-      // an unexplained pending-dial reclamation.
-      emit(.faultInject, role: .outbound, peer: peerRaw,
-        reason: peerRaw == nil ? "armed-any" : "armed")
+      // NO WILDCARD (work order): a nil/empty/unresolvable target fails closed.
+      guard let h = handle("peer", peerRaw) else {
+        emit(.faultInject, role: .app, reason: "arm-rejected")
+        return ["ok": false, "rejected": "no-peer"]
+      }
+      faultPeerHandle = h
+      // Observable lifecycle: armed → fired (preAckDrop) → [disarmed].
+      emit(.faultInject, role: .outbound, peer: peerRaw, reason: "armed")
+      return ["ok": true, "armed": true, "peer": h]
+    #else
+      return ["ok": false]
     #endif
   }
 
@@ -197,7 +240,9 @@ enum W5Diag {
   static func consumePreAckFault(peerRaw: String?) -> Bool {
     #if INRANGE_DIAG
       guard let armed = faultPeerHandle else { return false }
-      if armed == "*" || armed == handle("peer", peerRaw) {
+      // Peer-scoped, exactly-once: fires only for the armed peer, never a
+      // wildcard, and clears on consumption.
+      if armed == handle("peer", peerRaw) {
         faultPeerHandle = nil
         return true
       }
@@ -282,14 +327,23 @@ enum W5Diag {
       return out
     }
 
-    /// Truncated HMAC-SHA256 handle for a domain-separated raw id (14 hex).
+    /// Truncated HMAC-SHA256 handle for a domain-separated raw id (14 hex),
+    /// keyed by the CURRENT run secret.
     static func handle(_ domain: String, _ raw: String?) -> String? {
+      handle(with: runSecret, domain, raw)
+    }
+
+    /// Handle keyed by a SPECIFIC secret — so one emit derives every field from
+    /// one atomic snapshot (a key cannot change mid-event).
+    static func handle(with secret: Data, _ domain: String, _ raw: String?)
+      -> String?
+    {
       guard let raw, !raw.isEmpty else { return nil }
       var msg = Data(domain.utf8)
       msg.append(0)
       msg.append(Data(raw.utf8))
       var mac = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-      runSecret.withUnsafeBytes { k in
+      secret.withUnsafeBytes { k in
         msg.withUnsafeBytes { m in
           CCHmac(
             CCHmacAlgorithm(kCCHmacAlgSHA256), k.baseAddress, k.count,
@@ -297,6 +351,21 @@ enum W5Diag {
         }
       }
       return mac.prefix(7).map { String(format: "%02x", $0) }.joined()  // 14 hex
+    }
+
+    // Public epochs (non-secret) persisted so restoration keeps the same case.
+    static let caseEpochKey = "bb.w5diag.caseepoch"
+    static let keyEpochKey = "bb.w5diag.keyepoch"
+    static var caseEpoch: Int { diagDefaults?.integer(forKey: caseEpochKey) ?? 0 }
+    static var keyEpoch: Int { diagDefaults?.integer(forKey: keyEpochKey) ?? 0 }
+
+    /// One immutable {secret, keyEpoch, caseEpoch} snapshot — read INSIDE the
+    /// events-writer lock so a whole event derives from a single, consistent
+    /// session state.
+    static func sessionSnapshotLocked()
+      -> (secret: Data, keyEpoch: Int, caseEpoch: Int)
+    {
+      (runSecret, keyEpoch, caseEpoch)
     }
 
     /// Next monotonic sequence. The CALLER MUST hold the events writer's lock

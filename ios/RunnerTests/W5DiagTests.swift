@@ -30,10 +30,11 @@ final class W5DiagTests: XCTestCase {
       XCTAssertFalse(W5Diag.isFaultArmed)
       XCTAssertFalse(W5Diag.consumePreAckFault(peerRaw: "peer-token-1"),
         "disarmed → never fires")
-      // Wildcard arm fires for any next dial, once.
-      W5Diag.armFault(peerRaw: nil)
-      XCTAssertTrue(W5Diag.consumePreAckFault(peerRaw: "anyone"))
-      XCTAssertFalse(W5Diag.consumePreAckFault(peerRaw: "anyone"))
+      // NO WILDCARD: a nil/empty target is REJECTED (fail closed), never armed.
+      XCTAssertEqual(W5Diag.armFault(peerRaw: nil)["ok"] as? Bool, false)
+      XCTAssertFalse(W5Diag.isFaultArmed, "nil target must not arm anything")
+      XCTAssertFalse(W5Diag.consumePreAckFault(peerRaw: "anyone"),
+        "no wildcard — an unrelated dial must not fire")
     #else
       // Production: arming and consuming are no-ops; never fires.
       W5Diag.armFault(peerRaw: "peer-token-1")
@@ -126,32 +127,56 @@ final class W5DiagTests: XCTestCase {
       }
     }
 
-    // B3: provisioning updates the IN-PROCESS key immediately (no resolve-once
-    // staleness), and reset re-resolves to a fresh key (post-reset writes are
-    // uncorrelatable with pre-reset ones, in the generated regime).
-    func testProvisionUpdatesInProcessKeyAndResetReResolves() {
+    // B3 owner ruling: resetCase RETAINS the fleet secret and rotates the
+    // PUBLIC case epoch. The handle is unchanged across reset (same secret);
+    // caseEpoch increments; controls + counters clear.
+    func testResetCaseRetainsSecretRotatesEpochClearsControls() {
       let sec = String(repeating: "cd", count: 32)  // 64 hex
       W5Diag.provisionRunSecret(sec)
       let want = Self.expectedHandle(domain: "peer", raw: "z", secretHex: sec)
+      XCTAssertEqual(W5Diag.handle("peer", "z"), want, "provision sets the key")
+      W5Diag.armFault(peerRaw: "p")
+      W5Diag.armHelloDelay(3)
+      let before = W5Diag.caseEpoch
+      let ack = W5Diag.resetCase()
+      XCTAssertEqual(ack["ok"] as? Bool, true)
+      XCTAssertEqual(ack["secretRetained"] as? Bool, true)
       XCTAssertEqual(W5Diag.handle("peer", "z"), want,
-        "provision updates the in-process key immediately")
-      W5Diag.resetDiagSession()
-      XCTAssertNotEqual(W5Diag.handle("peer", "z"), want,
-        "reset clears the cache → next handle re-resolves to a fresh key")
-      W5Diag.resetDiagSession()
+        "secret RETAINED across resetCase (owner ruling)")
+      XCTAssertEqual(W5Diag.caseEpoch, before + 1, "case epoch rotated")
+      XCTAssertFalse(W5Diag.isFaultArmed, "controls cleared")
+      XCTAssertEqual(W5Diag.consumeHelloDelay(), 0, "delay cleared")
     }
 
-    // B3 lifecycle: resetDiagSession clears the persisted run/provisioned
-    // secret + dropped counters, so the next launch starts a fresh session.
-    func testResetDiagSessionClearsPersistedSecretsAndCounters() {
-      let d = UserDefaults(suiteName: "io.inrange.diag")
-      d?.set(String(repeating: "a1", count: 32), forKey: "bb.w5diag.runsecret")
-      d?.set(String(repeating: "b2", count: 32), forKey: "bb.w5diag.provisionedsecret")
-      d?.set(5, forKey: "bb.evwrite.dropped.w5_events.jsonl")
-      W5Diag.resetDiagSession()
-      XCTAssertNil(d?.string(forKey: "bb.w5diag.runsecret"))
-      XCTAssertNil(d?.string(forKey: "bb.w5diag.provisionedsecret"))
-      XCTAssertEqual(d?.integer(forKey: "bb.evwrite.dropped.w5_events.jsonl"), 0)
+    // B3 owner ruling: destroySessionSecret is REJECTED while W5 is active, and
+    // succeeds while stopped (the only secret-clearing op).
+    func testDestroySecretRejectedWhileW5ActiveAllowedWhenStopped() {
+      W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))
+      XCTAssertEqual(
+        W5Diag.destroySessionSecret(w5Active: true)["rejected"] as? String,
+        "w5-active", "must refuse while W5 is up")
+      let ok = W5Diag.destroySessionSecret(w5Active: false)
+      XCTAssertEqual(ok["ok"] as? Bool, true)
+      XCTAssertEqual(ok["secretDestroyed"] as? Bool, true)
+    }
+
+    // B3: a short/odd/non-hex secret must NOT mutate state.
+    func testInvalidSecretDoesNotMutateState() {
+      W5Diag.provisionRunSecret(String(repeating: "cd", count: 32))
+      let good = W5Diag.handle("peer", "z")
+      XCTAssertEqual(W5Diag.provisionRunSecret("zz")["ok"] as? Bool, false)
+      XCTAssertEqual(W5Diag.provisionRunSecret("abc")["ok"] as? Bool, false)  // odd
+      XCTAssertEqual(W5Diag.provisionRunSecret("ab")["ok"] as? Bool, false)  // short
+      XCTAssertEqual(W5Diag.handle("peer", "z"), good, "state unchanged")
+    }
+
+    // B3: provisioning a DIFFERENT key mid-session rotates the key epoch.
+    func testKeyChangeRotatesKeyEpoch() {
+      W5Diag.provisionRunSecret(String(repeating: "cd", count: 32))
+      let e0 = W5Diag.keyEpoch
+      let r = W5Diag.provisionRunSecret(String(repeating: "ef", count: 32))
+      XCTAssertEqual(r["rotated"] as? Bool, true)
+      XCTAssertEqual(W5Diag.keyEpoch, e0 + 1, "different key → new key epoch")
     }
 
     func testHandleDeterminismAndDomainSeparation() {

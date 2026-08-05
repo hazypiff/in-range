@@ -34,7 +34,8 @@ void main() {
     expect(calls.single.arguments, 'peer-token-xyz');
   });
 
-  test('armW5Fault() with no peer arms the wildcard (null argument)', () async {
+  test('armW5Fault() with no peer sends null (native fails it closed)',
+      () async {
     await bb.armW5Fault();
     expect(calls.single.method, 'armW5Fault');
     expect(calls.single.arguments, isNull);
@@ -45,9 +46,14 @@ void main() {
     expect(calls.single.method, 'disarmW5Fault');
   });
 
-  test('resetW5Diag invokes the native session-reset control', () async {
-    await bb.resetW5Diag();
-    expect(calls.single.method, 'resetW5Diag');
+  test('resetW5Case invokes the native case-reset control', () async {
+    await bb.resetW5Case();
+    expect(calls.single.method, 'resetW5Case');
+  });
+
+  test('destroyW5Secret invokes the native secret-destroy control', () async {
+    await bb.destroyW5Secret();
+    expect(calls.single.method, 'destroyW5Secret');
   });
 
   test('setDiagRunSecret forwards a non-empty secret', () async {

@@ -382,10 +382,9 @@ final class BackgroundBeacon: NSObject {
         W5Diag.provisionRunSecret((call.arguments as? String) ?? "")
         result(nil)
       case "armW5Fault":
-        // Diag-only: arm a one-shot pre-HELLO_ACK drop for a peer token
-        // (nil/absent = any next outbound dial). No-op in a release binary.
-        W5Diag.armFault(peerRaw: call.arguments as? String)
-        result(nil)
+        // Diag-only: arm a one-shot, PEER-SCOPED pre-HELLO_ACK drop. No wildcard
+        // — nil/empty fails closed. Returns a structured ack. Release no-op.
+        result(W5Diag.armFault(peerRaw: call.arguments as? String))
       case "disarmW5Fault":
         // Diag-only: clear any pending fault. No-op in a release binary.
         W5Diag.disarmFault()
@@ -402,13 +401,13 @@ final class BackgroundBeacon: NSObject {
         W5Diag.emit(.dropPeer, role: .app, result: call.arguments as? String,
           reason: "passOutcome")
         result(nil)
-      case "resetW5Diag":
-        // Diag-only: end the current diagnostic session — clear the persisted
-        // run secret + dropped counters AND wipe evidence files, so the next
-        // launch starts a fresh, isolated session (secret-lifecycle contract).
-        W5Diag.resetDiagSession()
-        Self.wipeDiagnosticFiles()
-        result(nil)
+      case "resetW5Case":
+        // Owner ruling: RETAIN the fleet secret, rotate the public case epoch,
+        // wipe evidence, clear controls + sequence. Returns a structured ack.
+        result(W5Diag.resetCase())
+      case "destroyW5Secret":
+        // Owner ruling: the ONLY secret-destroying op; rejected while W5 active.
+        result(W5Diag.destroySessionSecret(w5Active: self.w5LinksEnabled))
       case "setW5Links":
         // Test-only gate for W5 persistent links (INRANGE_W5_LINKS).
         self.defaults.set((call.arguments as? Bool) ?? false, forKey: Self.keyW5Links)

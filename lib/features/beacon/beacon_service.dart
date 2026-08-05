@@ -2213,12 +2213,21 @@ class BeaconService {
     }
   }
 
-  /// End the current diagnostic session (run-secret + evidence reset), so the
-  /// next launch starts fresh. Call between matrix cases.
-  Future<void> resetW5Diag() async {
+  /// Reset the current diagnostic CASE — retains the fleet secret, rotates the
+  /// public case epoch, wipes evidence, clears controls. Returns the native ack.
+  Future<Map<String, dynamic>?> resetW5Case() async {
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
-      await _bgBeacon.resetW5Diag();
+      return _bgBeacon.resetW5Case();
     }
+    return null;
+  }
+
+  /// Destroy the persisted fleet secret (rejected natively while W5 active).
+  Future<Map<String, dynamic>?> destroyW5Secret() async {
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      return _bgBeacon.destroyW5Secret();
+    }
+    return null;
   }
 
   /// Single ingest point for a foreign token sample — scan results and the
