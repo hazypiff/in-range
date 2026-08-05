@@ -103,15 +103,22 @@ pull() {
   fi
   if [ "$rc" -eq 0 ]; then echo "  pulled $1"; return 0; fi
   rm -f "$RAW/$1"   # discard any partial bytes a failed copy left behind
-  # A not-found is only an ACCEPTABLE ABSENCE when it names the SOURCE FILE. A
-  # not-found that names the app data CONTAINER, the application, the domain or
-  # the device is a FATAL lookup failure — a bare 'not found' substring wrongly
-  # passed such failures as absent optional files and published a case that had
-  # actually dropped a real artifact (codex A4). Container/app markers override
-  # to fatal FIRST; only then does a file-specific not-found count as absent.
+  # An ACCEPTABLE ABSENCE is a not-found that names the SOURCE FILE and blames
+  # NOTHING in the infrastructure lookup chain. FAIL CLOSED: if the error mentions
+  # the app-data CONTAINER, the application, a domain, the DEVICE, or a UDID —
+  # anywhere, in any phrasing — the lookup itself is uncertain and this is FATAL,
+  # never an absent optional file (a bare 'not found' or a `no such device`-only
+  # override wrongly published cases that had dropped a real artifact — codex A4).
+  # Only after that override does a source-file-specific not-found count as absent.
+  # (`device`/`udid` are matched as whole WORDS — the string is space-padded so a
+  # leading/trailing token still has a boundary, and `deviced_foo` never matches.
+  # A no-anchor bracket pair is used because BSD grep mishandles `(^|…)` before an
+  # alternation group.)
   if printf '%s' "$err" | grep -Eqi \
-      'container|appdatacontainer|application|not installed|no such (app|application|domain|device|user)|domain-identifier'; then
-    :   # container/app/domain/device lookup failure — fall through to FATAL
+        'container|appdatacontainer|application|not installed|domain[- ]?identifier|domain[- ]?type|no such (app|application|domain|user)' \
+     || printf ' %s ' "$err" | grep -Eqi \
+        '[^[:alnum:]](device|udid)[^[:alnum:]]'; then
+    :   # container/app/domain/device/udid lookup failure — fall through to FATAL
   elif printf '%s' "$err" | grep -Eqi \
         '(no such file|does not exist|file ?not ?found|filenotfound|no matching)' \
      && { printf '%s' "$err" | grep -qiF "$1" \

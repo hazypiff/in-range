@@ -74,6 +74,14 @@ case " ${CONTAINER_FAIL:-} " in
     echo "error: appDataContainer not found for io.inrange.inRange.diag" >&2
     exit 1 ;;
 esac
+# DEVICE_FAIL: a device/UDID lookup failure whose message ALSO names the source
+# file and says "not found" — so a source-file-only absence check would misread
+# it as absent. It is FATAL (the device, not the file, is what went missing).
+case " ${DEVICE_FAIL:-} " in
+  *" $base "*)
+    echo "error: $base: file not found because device test-udid was not found" >&2
+    exit 1 ;;
+esac
 if [ -f "${FIXTURES:?}/$base" ]; then cp "${FIXTURES}/$base" "$dst"; exit 0; fi
 # A MISSING fixture models a VERIFIED not-found on the device.
 echo "error: no such file: Documents/$base (FileNotFound)" >&2
@@ -584,6 +592,21 @@ cf_rc=$?
 [ "$cf_rc" -eq 8 ] && [ ! -e "$SB_CF/work/hardware_evidence/caseCF" ] \
   && ok "container-not-found aborts as fatal (exit 8), not classified absent" \
   || bad "container-not-found wrongly treated as absence (rc=$cf_rc)"
+
+# 34c. DEVICE-NOT-FOUND that ALSO names the source file is FATAL, not absence
+# (codex A4 re-review): the message contains the file name and "not found", but
+# the DEVICE lookup is what failed — an uncertain pull that must abort (exit 8),
+# never publish. Guards the source-file-only absence check against this overlap.
+setup_device() { valid_fixtures "$1"; }
+SB_DF="$(make_sandbox)"; setup_device "$SB_DF"
+( cd "$SB_DF/work" && HW_MATRIX_XCRUN="$SB_DF/bin/xcrun" FIXTURES="$SB_DF/fixtures" \
+  XCRUN_MARKER="$SB_DF/m" DEVICE_FAIL="w5_rssi_log.jsonl" \
+  INRANGE_DIAG_RUN_SECRET="$SECRET" \
+  bash ./hw_matrix_pull.sh test-udid iphone14 caseDF ) >/dev/null 2>&1
+df_rc=$?
+[ "$df_rc" -eq 8 ] && [ ! -e "$SB_DF/work/hardware_evidence/caseDF" ] \
+  && ok "device-not-found naming the source file still aborts (exit 8)" \
+  || bad "device-not-found misclassified as absence (rc=$df_rc)"
 
 # 35. VERIFIED-ABSENT optional artifact publishes normally (exit 0): missing on
 # device is fine, only the primary is mandatory.
