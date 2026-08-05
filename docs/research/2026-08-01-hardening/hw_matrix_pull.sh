@@ -41,6 +41,20 @@ set -euo pipefail
 
 UDID="${1:?UDID required}"; LABEL="${2:?label required}"; CASE="${3:?case required}"
 
+# LABEL and CASE are interpolated into filesystem paths (OUT dir, rev dirs,
+# published filenames). Restrict them to a safe token — letters, digits, dot,
+# dash, underscore — with no slash and no `..`, so a caller cannot make the
+# staging/publish/migration operations escape hardware_evidence/ (e.g.
+# CASE=../../victim). Validated BEFORE any path is built or device is touched.
+for tok in "LABEL:$LABEL" "CASE:$CASE"; do
+  name="${tok%%:*}"; val="${tok#*:}"
+  if ! printf '%s' "$val" | grep -Eq '^[A-Za-z0-9._-]+$' \
+     || printf '%s' "$val" | grep -q '\.\.'; then
+    echo "ERROR: $name must match [A-Za-z0-9._-]+ with no '..' (got: '$val')." >&2
+    exit 6
+  fi
+done
+
 # --- 1. VALIDATE SECRET FIRST (before any device contact) -------------------
 SEC="${INRANGE_DIAG_RUN_SECRET:-}"
 if ! printf '%s' "$SEC" | grep -Eq '^[0-9a-fA-F]+$' \
@@ -143,11 +157,17 @@ for i, line in enumerate(open(src, 'r', errors='replace'), start=1):
         ev = obj.get("event")
         if not isinstance(ev, str) or not ev:
             fatal(23, "missing/empty string 'event' at line %d" % i)
-        if not isinstance(obj.get("v"), int) or isinstance(obj.get("v"), bool):
-            fatal(23, "missing/invalid integer 'v' at line %d" % i)
+        # Schema version must be the SUPPORTED value (1) — an unknown version has
+        # unknown semantics and must not be published as understood evidence.
+        if obj.get("v") != 1:
+            fatal(23, "unsupported schema version 'v'=%r at line %d"
+                  % (obj.get("v"), i))
         if not isinstance(obj.get("run"), str) or not obj.get("run"):
             fatal(23, "missing/empty string 'run' at line %d" % i)
-        for tk in ("wallMs", "monoNs"):
+        # `epoch` (bootEpoch) is written unconditionally by both emit() and
+        # recordPriorLoss(). `role` is NOT required: emit writes it only when a
+        # role applies (`if let rRole`), so many legitimate events omit it.
+        for tk in ("wallMs", "monoNs", "epoch"):
             if not isinstance(obj.get(tk), int) or isinstance(obj.get(tk), bool):
                 fatal(23, "missing/invalid integer '%s' at line %d" % (tk, i))
         seq = obj.get("seq")

@@ -71,9 +71,9 @@ valid_fixtures() {
   local peer="aabbccddeeff00112233445566778899"   # 32 hex
   local lease="11223344556677889900aabbccddeeff"
   cat > "$fx/w5_events.jsonl" <<EOF
-{"v":1,"run":"tr","wallMs":1,"monoNs":1,"seq":1,"event":"boot","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"ts":100}
-{"v":1,"run":"tr","wallMs":1,"monoNs":1,"seq":2,"event":"dial","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"peer":"$peer","ts":101}
-{"v":1,"run":"tr","wallMs":1,"monoNs":1,"seq":3,"event":"drop","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"lease":"$lease","ts":102}
+{"v":1,"run":"tr","wallMs":1,"monoNs":1,"epoch":1,"seq":1,"event":"boot","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"ts":100}
+{"v":1,"run":"tr","wallMs":1,"monoNs":1,"epoch":1,"seq":2,"event":"dial","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"peer":"$peer","ts":101}
+{"v":1,"run":"tr","wallMs":1,"monoNs":1,"epoch":1,"seq":3,"event":"drop","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"lease":"$lease","ts":102}
 EOF
   cat > "$fx/w5_rssi_log.jsonl" <<EOF
 {"token":"$peer","rssi":-60,"ts":100}
@@ -147,8 +147,8 @@ run_case malformed 11 setup_malformed
 setup_badseq() {
   local fx="$1/fixtures"
   cat > "$fx/w5_events.jsonl" <<'EOF'
-{"v":1,"run":"tr","wallMs":1,"monoNs":1,"seq":5,"event":"a","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"ts":1}
-{"v":1,"run":"tr","wallMs":1,"monoNs":1,"seq":5,"event":"b","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"ts":2}
+{"v":1,"run":"tr","wallMs":1,"monoNs":1,"epoch":1,"seq":5,"event":"a","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"ts":1}
+{"v":1,"run":"tr","wallMs":1,"monoNs":1,"epoch":1,"seq":5,"event":"b","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"ts":2}
 EOF
   cat > "$fx/w5_rssi_log.jsonl" <<'EOF'
 {"token":"aabbccddeeff00112233445566778899","rssi":-60,"ts":1}
@@ -160,8 +160,8 @@ run_case badseq 14 setup_badseq
 setup_badepoch() {
   local fx="$1/fixtures"
   cat > "$fx/w5_events.jsonl" <<'EOF'
-{"v":1,"run":"tr","wallMs":1,"monoNs":1,"seq":1,"event":"a","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"ts":1}
-{"v":1,"run":"tr","wallMs":1,"monoNs":1,"seq":2,"event":"b","caseEpoch":3,"keyEpoch":1,"runEpoch":5,"ts":2}
+{"v":1,"run":"tr","wallMs":1,"monoNs":1,"epoch":1,"seq":1,"event":"a","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"ts":1}
+{"v":1,"run":"tr","wallMs":1,"monoNs":1,"epoch":1,"seq":2,"event":"b","caseEpoch":3,"keyEpoch":1,"runEpoch":5,"ts":2}
 EOF
 }
 run_case badepoch 16 setup_badepoch
@@ -179,7 +179,7 @@ run_case badrssi 18 setup_badrssi
 setup_residual() {
   local fx="$1/fixtures"
   cat > "$fx/w5_events.jsonl" <<'EOF'
-{"v":1,"run":"tr","wallMs":1,"monoNs":1,"seq":1,"event":"a","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"note":"11223344-5566-7788-9900-aabbccddeeff","ts":1}
+{"v":1,"run":"tr","wallMs":1,"monoNs":1,"epoch":1,"seq":1,"event":"a","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"note":"11223344-5566-7788-9900-aabbccddeeff","ts":1}
 EOF
   cat > "$fx/w5_rssi_log.jsonl" <<'EOF'
 {"token":"aabbccddeeff00112233445566778899","rssi":-60,"ts":1}
@@ -247,11 +247,11 @@ chain_fx() {  # $1 sandbox, $2 rotated-epoch:minseq:maxseq, $3 current-epoch:min
   local ce="${3%%:*}"; local crest="${3#*:}"; local cmin="${crest%%:*}"; local cmax="${crest#*:}"
   : > "$fx/w5_events.1.jsonl"
   for s in $(seq "$omin" "$omax"); do
-    printf '{"v":1,"run":"tr","wallMs":1,"monoNs":1,"seq":%d,"event":"a","caseEpoch":%d,"keyEpoch":1,"runEpoch":5,"ts":%d}\n' \
+    printf '{"v":1,"run":"tr","wallMs":1,"monoNs":1,"epoch":1,"seq":%d,"event":"a","caseEpoch":%d,"keyEpoch":1,"runEpoch":5,"ts":%d}\n' \
       "$s" "$oe" "$s" >> "$fx/w5_events.1.jsonl"; done
   : > "$fx/w5_events.jsonl"
   for s in $(seq "$cmin" "$cmax"); do
-    printf '{"v":1,"run":"tr","wallMs":1,"monoNs":1,"seq":%d,"event":"b","caseEpoch":%d,"keyEpoch":1,"runEpoch":5,"ts":%d}\n' \
+    printf '{"v":1,"run":"tr","wallMs":1,"monoNs":1,"epoch":1,"seq":%d,"event":"b","caseEpoch":%d,"keyEpoch":1,"runEpoch":5,"ts":%d}\n' \
       "$s" "$ce" "$s" >> "$fx/w5_events.jsonl"; done
   printf '{"token":"aabbccddeeff00112233445566778899","rssi":-60,"ts":1}\n' \
     > "$fx/w5_rssi_log.jsonl"
@@ -309,17 +309,17 @@ fi
 # across the rotation — a rotation is size-based within one {case,key,run} epoch.
 setup_keymix() {
   cat > "$1/fixtures/w5_events.jsonl" <<'EOF'
-{"v":1,"run":"tr","wallMs":1,"monoNs":1,"seq":1,"event":"a","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"ts":1}
-{"v":1,"run":"tr","wallMs":1,"monoNs":1,"seq":2,"event":"b","caseEpoch":2,"keyEpoch":9,"runEpoch":5,"ts":2}
+{"v":1,"run":"tr","wallMs":1,"monoNs":1,"epoch":1,"seq":1,"event":"a","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"ts":1}
+{"v":1,"run":"tr","wallMs":1,"monoNs":1,"epoch":1,"seq":2,"event":"b","caseEpoch":2,"keyEpoch":9,"runEpoch":5,"ts":2}
 EOF
 }
 run_case keymix_infile 16 setup_keymix   # keyEpoch changes within the file
 setup_runmix_xfile() {
   cat > "$1/fixtures/w5_events.1.jsonl" <<'EOF'
-{"v":1,"run":"tr","wallMs":1,"monoNs":1,"seq":1,"event":"a","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"ts":1}
+{"v":1,"run":"tr","wallMs":1,"monoNs":1,"epoch":1,"seq":1,"event":"a","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"ts":1}
 EOF
   cat > "$1/fixtures/w5_events.jsonl" <<'EOF'
-{"v":1,"run":"tr","wallMs":1,"monoNs":1,"seq":2,"event":"b","caseEpoch":2,"keyEpoch":1,"runEpoch":6,"ts":2}
+{"v":1,"run":"tr","wallMs":1,"monoNs":1,"epoch":1,"seq":2,"event":"b","caseEpoch":2,"keyEpoch":1,"runEpoch":6,"ts":2}
 EOF
   printf '{"token":"aabbccddeeff00112233445566778899","rssi":-60,"ts":1}\n' \
     > "$1/fixtures/w5_rssi_log.jsonl"
@@ -331,12 +331,47 @@ run_case runmix_xfile 21 setup_runmix_xfile   # runEpoch differs across rotation
 setup_noevent() {
   local fx="$1/fixtures"
   cat > "$fx/w5_events.jsonl" <<'EOF'
-{"v":1,"run":"tr","wallMs":1,"monoNs":1,"seq":1,"caseEpoch":2,"keyEpoch":1,"runEpoch":5,"ts":1}
+{"v":1,"run":"tr","wallMs":1,"monoNs":1,"epoch":1,"seq":1,"caseEpoch":2,"keyEpoch":1,"runEpoch":5,"ts":1}
 EOF
   printf '{"token":"aabbccddeeff00112233445566778899","rssi":-60,"ts":1}\n' \
     > "$fx/w5_rssi_log.jsonl"
 }
 run_case noevent 23 setup_noevent
+
+# 20. CASE PATH-TRAVERSAL: a CASE that escapes hardware_evidence is rejected
+# BEFORE any path is built or device is touched — no op runs outside OUT_ROOT.
+SB_CT="$(make_sandbox)"; valid_fixtures "$SB_CT"
+mkdir -p "$SB_CT/work/victimc"; : > "$SB_CT/work/victimc/keep"
+( cd "$SB_CT/work" && HW_MATRIX_XCRUN="$SB_CT/bin/xcrun" FIXTURES="$SB_CT/fixtures" \
+  XCRUN_MARKER="$SB_CT/m" INRANGE_DIAG_RUN_SECRET="$SECRET" \
+  bash ./hw_matrix_pull.sh test-udid iphone14 "../victimc" ) >/dev/null 2>&1
+ct_rc=$?
+if [ "$ct_rc" -eq 6 ] && [ -f "$SB_CT/work/victimc/keep" ] \
+   && [ ! -f "$SB_CT/m" ]; then
+  ok "unsafe CASE rejected before any path/device operation"
+else
+  bad "CASE traversal guard failed (rc=$ct_rc victim=$([ -f "$SB_CT/work/victimc/keep" ] && echo kept || echo GONE))"
+fi
+
+# 21-22. SCHEMA VERSION + MANDATORY epoch
+setup_badver() {
+  local fx="$1/fixtures"
+  cat > "$fx/w5_events.jsonl" <<'EOF'
+{"v":999,"run":"tr","wallMs":1,"monoNs":1,"epoch":1,"seq":1,"event":"a","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"ts":1}
+EOF
+  printf '{"token":"aabbccddeeff00112233445566778899","rssi":-60,"ts":1}\n' \
+    > "$fx/w5_rssi_log.jsonl"
+}
+run_case badver 23 setup_badver          # unsupported schema version
+setup_noepoch() {
+  local fx="$1/fixtures"
+  cat > "$fx/w5_events.jsonl" <<'EOF'
+{"v":1,"run":"tr","wallMs":1,"monoNs":1,"seq":1,"event":"a","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"ts":1}
+EOF
+  printf '{"token":"aabbccddeeff00112233445566778899","rssi":-60,"ts":1}\n' \
+    > "$fx/w5_rssi_log.jsonl"
+}
+run_case noepoch 23 setup_noepoch        # missing mandatory 'epoch'
 
 echo "== $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]

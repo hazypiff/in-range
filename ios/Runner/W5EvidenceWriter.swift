@@ -117,11 +117,16 @@ import Foundation
           try h.seekToEnd()
           try h.write(contentsOf: bytes)
         } catch { ok = false }
+        // A close failure leaves durability UNCERTAIN (buffered bytes may not
+        // have flushed), so it must NOT report success — otherwise a caller like
+        // recordPriorLoss would ack prior loss against a possibly non-durable
+        // record. Treat it as a failed append (ok=false) AND type it.
         if consumeInjected("close") {
           try? h.close()  // still release the fd; only the typed failure is faked
           noteOpFailure("close")
+          ok = false
         } else {
-          do { try h.close() } catch { noteOpFailure("close") }
+          do { try h.close() } catch { noteOpFailure("close"); ok = false }
         }
       } else {
         try? h.close()
