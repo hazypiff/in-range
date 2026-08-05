@@ -105,17 +105,23 @@ enum W5Diag {
       guard hex.count >= 32, hex.count % 2 == 0, let d = hexToData(hex) else {
         return ["ok": false, "rejected": "invalid-hex"]
       }
-      runSecretLock.lock()
-      let changed = _cachedRunSecret != nil && _cachedRunSecret != d
-      diagDefaults?.set(hex, forKey: provisionedSecretKey)
-      _cachedRunSecret = d
-      runSecretLock.unlock()
-      if changed {
-        // Key changed mid-session → new key epoch + fresh evidence epoch.
-        _ = resetCase(reason: "keyRotate")
-        diagDefaults?.set(keyEpoch + 1, forKey: keyEpochKey)
+      // ONE writer-serialized transaction: compare-vs-persisted, replace the
+      // secret, and (if changed) rotate the key epoch + wipe — so no event can
+      // ever be written with the new key into the old file/epoch, and a nil
+      // in-memory cache after relaunch cannot hide a persisted key change.
+      return eventWriter.withLock {
+        let prior = persistedSecretLocked()
+        let changed = prior != nil && prior != d
+        runSecretLock.lock()
+        diagDefaults?.set(hex, forKey: provisionedSecretKey)
+        _cachedRunSecret = d
+        runSecretLock.unlock()
+        if changed {
+          resetCaseLocked(reason: "keyRotate")
+          diagDefaults?.set(keyEpoch + 1, forKey: keyEpochKey)
+        }
+        return ["ok": true, "keyEpoch": keyEpoch, "rotated": changed]
       }
-      return ["ok": true, "keyEpoch": keyEpoch, "rotated": changed]
     #else
       return ["ok": false]
     #endif
@@ -137,27 +143,35 @@ enum W5Diag {
   static func resetCase(reason: String = "reset") -> [String: Any] {
     #if INRANGE_DIAG
       // Serialize with any in-flight append/rotate on the events writer.
-      return eventWriter.withLock {
-        BackgroundBeacon.wipeDiagnosticFiles()  // current + rotated artifacts
-        diagDefaults?.removeObject(forKey: "bb.w5rssi.off")  // RSSI drain offset
-        faultPeerHandle = nil
-        helloDelayPending = nil
-        seqCounter = 0
-        for k in W5EvidenceWriter.droppedKeys + W5EvidenceWriter.opFailKeys {
-          diagDefaults?.removeObject(forKey: k)
-        }
-        let newCase = caseEpoch + 1
-        diagDefaults?.set(newCase, forKey: caseEpochKey)
-        // SECRET RETAINED (owner ruling).
-        return [
-          "ok": true, "caseEpoch": newCase, "keyEpoch": keyEpoch,
-          "secretRetained": true, "reason": reason,
-        ]
-      }
+      return eventWriter.withLock { resetCaseLocked(reason: reason) }
     #else
       return ["ok": false]
     #endif
   }
+
+  #if INRANGE_DIAG
+    /// The case-reset body. The CALLER MUST hold the events-writer lock, so a
+    /// key rotation (provision) can wipe + rotate WITHIN its own transaction and
+    /// controls/sequence are cleared atomically with respect to arm/consume.
+    @discardableResult
+    static func resetCaseLocked(reason: String) -> [String: Any] {
+      BackgroundBeacon.wipeDiagnosticFiles()  // current + rotated artifacts
+      diagDefaults?.removeObject(forKey: "bb.w5rssi.off")  // RSSI drain offset
+      faultPeerHandle = nil
+      helloDelayPending = nil
+      seqCounter = 0
+      for k in W5EvidenceWriter.droppedKeys + W5EvidenceWriter.opFailKeys {
+        diagDefaults?.removeObject(forKey: k)
+      }
+      let newCase = caseEpoch + 1
+      diagDefaults?.set(newCase, forKey: caseEpochKey)
+      // SECRET RETAINED (owner ruling).
+      return [
+        "ok": true, "caseEpoch": newCase, "keyEpoch": keyEpoch,
+        "secretRetained": true, "reason": reason,
+      ]
+    }
+  #endif
 
   /// Destroy the persisted fleet secret. REJECTED while W5 is active — the
   /// owner ruling makes destruction a separate stopped-W5 operation, distinct
@@ -181,29 +195,40 @@ enum W5Diag {
   /// Arm the one-shot pre-HELLO_ACK fault for a peer (Case 1 reclamation).
   /// A specific peer token scopes the fault to that peer; nil arms the next
   /// dial to anyone (use only when the target alias is not yet known).
+  /// Arm the one-shot pre-HELLO_ACK fault for a SPECIFIC peer (Case 1). All
+  /// control state (fault/delay) is mutated UNDER the events-writer boundary, so
+  /// a `resetCase` clears controls atomically w.r.t. arm/consume; the handle is
+  /// derived inside the lock (consistent eventWriter→runSecret order). The emit
+  /// happens after the lock is released (emit takes the lock itself).
   @discardableResult
   static func armFault(peerRaw: String?) -> [String: Any] {
     #if INRANGE_DIAG
-      // NO WILDCARD (work order): a nil/empty/unresolvable target fails closed.
-      guard let h = handle("peer", peerRaw) else {
+      // NO WILDCARD: a nil/empty/unresolvable target fails closed.
+      let armed: String? = eventWriter.withLock {
+        guard let h = handle("peer", peerRaw) else { return nil }
+        faultPeerHandle = h
+        return h
+      }
+      guard let armed else {
         emit(.faultInject, role: .app, reason: "arm-rejected")
         return ["ok": false, "rejected": "no-peer"]
       }
-      faultPeerHandle = h
       // Observable lifecycle: armed → fired (preAckDrop) → [disarmed].
       emit(.faultInject, role: .outbound, peer: peerRaw, reason: "armed")
-      return ["ok": true, "armed": true, "peer": h]
+      return ["ok": true, "armed": true, "peer": armed]
     #else
       return ["ok": false]
     #endif
   }
 
-  /// Disarm any pending fault (peer-scoped control cleanup between cases, so an
-  /// armed-but-never-consumed fault can't fire on a later unrelated dial).
+  /// Disarm any pending fault (peer-scoped control cleanup between cases).
   static func disarmFault() {
     #if INRANGE_DIAG
-      let was = faultPeerHandle != nil
-      faultPeerHandle = nil
+      let was = eventWriter.withLock {
+        let w = faultPeerHandle != nil
+        faultPeerHandle = nil
+        return w
+      }
       if was { emit(.faultInject, role: .app, reason: "disarmed") }
     #endif
   }
@@ -211,26 +236,28 @@ enum W5Diag {
   /// Whether a fault is currently armed (diagnostics/tests). False in Release.
   static var isFaultArmed: Bool {
     #if INRANGE_DIAG
-      return faultPeerHandle != nil
+      return eventWriter.withLock { faultPeerHandle != nil }
     #else
       return false
     #endif
   }
 
   /// Arm a ONE-SHOT diagnostic HELLO delay (seconds) for the next outbound
-  /// HELLO — widens the connect↔HELLO_ACK window for Case 1 deterministically,
-  /// but ONLY when explicitly armed (not on every diag dial) and only once.
+  /// HELLO — ONLY when explicitly armed, once. Under the writer boundary.
   static func armHelloDelay(_ seconds: Double) {
     #if INRANGE_DIAG
-      helloDelayPending = seconds > 0 ? seconds : nil
+      eventWriter.withLock { helloDelayPending = seconds > 0 ? seconds : nil }
     #endif
   }
 
   /// The one-shot HELLO delay to apply now, then cleared (0 = none/not armed).
   static func consumeHelloDelay() -> Double {
     #if INRANGE_DIAG
-      defer { helloDelayPending = nil }
-      return helloDelayPending ?? 0
+      return eventWriter.withLock {
+        let d = helloDelayPending ?? 0
+        helloDelayPending = nil
+        return d
+      }
     #else
       return 0
     #endif
@@ -239,14 +266,17 @@ enum W5Diag {
   /// True (and clears) if a pre-ACK fault should fire for this outbound peer.
   static func consumePreAckFault(peerRaw: String?) -> Bool {
     #if INRANGE_DIAG
-      guard let armed = faultPeerHandle else { return false }
-      // Peer-scoped, exactly-once: fires only for the armed peer, never a
-      // wildcard, and clears on consumption.
-      if armed == handle("peer", peerRaw) {
-        faultPeerHandle = nil
-        return true
+      return eventWriter.withLock {
+        guard let armed = faultPeerHandle else { return false }
+        // Peer-scoped, exactly-once: fires only for the armed peer, never a
+        // wildcard, and clears on consumption. Handle derived inside the
+        // boundary (eventWriter→runSecret order).
+        if armed == handle("peer", peerRaw) {
+          faultPeerHandle = nil
+          return true
+        }
+        return false
       }
-      return false
     #else
       return false
     #endif
@@ -291,19 +321,30 @@ enum W5Diag {
       return d
     }
 
-    private static func resolveRunSecret() -> Data {
-      if let hex = ProcessInfo.processInfo.environment["INRANGE_DIAG_RUN_SECRET"],
-        hex.count >= 32, let d = hexToData(hex) {
+    private static func validHex(_ hex: String?) -> Data? {
+      guard let hex, hex.count >= 32, hex.count % 2 == 0 else { return nil }
+      return hexToData(hex)
+    }
+
+    /// The PERSISTED/injected secret WITHOUT generating a fallback — used to
+    /// decide whether a newly-provisioned key actually differs from a prior one
+    /// (a nil in-memory cache must not hide a persisted key). nil = none yet.
+    private static func persistedSecretLocked() -> Data? {
+      if let d = validHex(ProcessInfo.processInfo.environment["INRANGE_DIAG_RUN_SECRET"]) {
         return d
       }
-      if let hex = diagDefaults?.string(forKey: provisionedSecretKey),
-        hex.count >= 32, let d = hexToData(hex) {
+      if let d = validHex(diagDefaults?.string(forKey: provisionedSecretKey)) {
         return d
       }
       if let b64 = diagDefaults?.string(forKey: runSecretKey),
         let d = Data(base64Encoded: b64), d.count == 32 {
         return d
       }
+      return nil
+    }
+
+    private static func resolveRunSecret() -> Data {
+      if let d = persistedSecretLocked() { return d }
       var b = [UInt8](repeating: 0, count: 32)
       _ = SecRandomCopyBytes(kSecRandomDefault, 32, &b)
       let d = Data(b)
