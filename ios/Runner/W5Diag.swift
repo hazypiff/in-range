@@ -67,6 +67,7 @@ enum W5Diag {
           "epoch": bootEpoch,
           "keyEpoch": snap.keyEpoch,
           "caseEpoch": snap.caseEpoch,
+          "runEpoch": runEpoch,
           "wallMs": Int(Date().timeIntervalSince1970 * 1000),
           "monoNs": DispatchTime.now().uptimeNanoseconds,
           "seq": nextSeqLocked(),
@@ -93,8 +94,11 @@ enum W5Diag {
     #endif
   }
 
-  /// Provision the shared fleet run secret (hex). Validated: >= 32 chars, EVEN
-  /// length, valid hex — a short/odd/non-hex value MUST NOT mutate state.
+  /// Provision the shared fleet run secret (hex). Validated: >= 64 hex chars
+  /// (a full 256-bit key), EVEN length, valid hex — a short/odd/non-hex value
+  /// MUST NOT mutate state. The >= 64 floor MATCHES the frozen puller/artifact
+  /// contract (`hw_matrix_pull.sh` validates >= 64 hex before contact), so a key
+  /// that provisions here is one the evidence chain will accept end to end.
   /// Persisted (survives OS restoration). If a DIFFERENT key arrives while an
   /// evidence epoch is active, this atomically rotates to a VISIBLY NEW key
   /// epoch and wipes the current evidence (never continues the same JSONL under
@@ -102,7 +106,7 @@ enum W5Diag {
   @discardableResult
   static func provisionRunSecret(_ hex: String) -> [String: Any] {
     #if INRANGE_DIAG
-      guard hex.count >= 32, hex.count % 2 == 0, let d = hexToData(hex) else {
+      guard hex.count >= 64, hex.count % 2 == 0, let d = hexToData(hex) else {
         return ["ok": false, "rejected": "invalid-hex"]
       }
       // ONE writer-serialized transaction: compare-vs-persisted, replace the
@@ -134,8 +138,9 @@ enum W5Diag {
   ///   epoch, waits for in-flight writes, wipes every current + rotated
   ///   artifact, clears fault/delay, and resets sequence/run state. Between
   ///   matrix cases.
-  /// - `destroySessionSecret(w5Active:)` — the ONLY operation that destroys the
-  ///   secret; rejected while W5 is active (must be stopped first).
+  /// - `destroySessionSecret(w5Quiescent:)` — the ONLY operation that destroys
+  ///   the secret; rejected unless W5 is genuinely quiescent (no live sessions,
+  ///   in-flight connects, links, leases, or timers — not a persisted flag).
   ///
   /// `runLabel`/`bootEpoch` are public per-process; `keyEpoch` (public) marks a
   /// key change; `caseEpoch` (public) marks a case reset. None is the secret.
@@ -150,43 +155,58 @@ enum W5Diag {
   }
 
   #if INRANGE_DIAG
-    /// The case-reset body. The CALLER MUST hold the events-writer lock, so a
-    /// key rotation (provision) can wipe + rotate WITHIN its own transaction and
-    /// controls/sequence are cleared atomically with respect to arm/consume.
+    /// The case-reset body. The CALLER MUST hold the session lock, so wipe across
+    /// EVERY evidence writer, control clearing, sequence + run-state reset, and
+    /// epoch rotation are one transaction that cannot race an append/trim.
+    /// Returns a structured, TYPED result (per-file wipe outcomes) — a wipe
+    /// failure is visible, not hidden behind a bare "ok".
     @discardableResult
     static func resetCaseLocked(reason: String) -> [String: Any] {
-      BackgroundBeacon.wipeDiagnosticFiles()  // current + rotated artifacts
+      // Wipe every family's current + rotated artifacts under the shared lock.
+      var wiped: [String: Bool] = [:]
+      for w in [eventWriter, wakeWriter, rssiWriter] {
+        for (name, ok) in w.wipeLocked() { wiped[name] = ok }
+      }
       diagDefaults?.removeObject(forKey: "bb.w5rssi.off")  // RSSI drain offset
       faultPeerHandle = nil
       helloDelayPending = nil
       seqCounter = 0
-      for k in W5EvidenceWriter.droppedKeys + W5EvidenceWriter.opFailKeys {
-        diagDefaults?.removeObject(forKey: k)
-      }
+      W5EvidenceWriter.ackPriorLoss()  // clear all loss/op-failure counters
       let newCase = caseEpoch + 1
       diagDefaults?.set(newCase, forKey: caseEpochKey)
+      diagDefaults?.set(runEpoch + 1, forKey: runEpochKey)  // reset run state
+      let allWiped = !wiped.values.contains(false)
       // SECRET RETAINED (owner ruling).
       return [
-        "ok": true, "caseEpoch": newCase, "keyEpoch": keyEpoch,
-        "secretRetained": true, "reason": reason,
+        "ok": allWiped, "caseEpoch": newCase, "runEpoch": runEpoch,
+        "keyEpoch": keyEpoch, "secretRetained": true, "reason": reason,
+        "wiped": wiped,
       ]
     }
   #endif
 
-  /// Destroy the persisted fleet secret. REJECTED while W5 is active — the
-  /// owner ruling makes destruction a separate stopped-W5 operation, distinct
-  /// from `resetCase`. Bumps the key epoch. Structured ack.
+  /// Destroy the persisted fleet secret. REJECTED unless W5 is genuinely
+  /// QUIESCENT (managers/sessions/timers stopped — not merely the persisted
+  /// feature flag). Routes through the SAME session boundary as reset (wipes
+  /// evidence, clears controls, resets sequence/run) so it cannot produce a
+  /// one-file/two-key result. Bumps the key epoch. Structured ack.
   @discardableResult
-  static func destroySessionSecret(w5Active: Bool) -> [String: Any] {
+  static func destroySessionSecret(w5Quiescent: Bool) -> [String: Any] {
     #if INRANGE_DIAG
-      if w5Active { return ["ok": false, "rejected": "w5-active"] }
-      runSecretLock.lock()
-      diagDefaults?.removeObject(forKey: runSecretKey)
-      diagDefaults?.removeObject(forKey: provisionedSecretKey)
-      _cachedRunSecret = nil
-      runSecretLock.unlock()
-      diagDefaults?.set(keyEpoch + 1, forKey: keyEpochKey)
-      return ["ok": true, "secretDestroyed": true, "keyEpoch": keyEpoch]
+      return eventWriter.withLock {
+        if !w5Quiescent { return ["ok": false, "rejected": "w5-active"] }
+        let r = resetCaseLocked(reason: "destroy")  // wipe/clear/reset atomically
+        runSecretLock.lock()
+        diagDefaults?.removeObject(forKey: runSecretKey)
+        diagDefaults?.removeObject(forKey: provisionedSecretKey)
+        _cachedRunSecret = nil
+        runSecretLock.unlock()
+        diagDefaults?.set(keyEpoch + 1, forKey: keyEpochKey)
+        return [
+          "ok": true, "secretDestroyed": true, "keyEpoch": keyEpoch,
+          "caseEpoch": caseEpoch, "wiped": r["wiped"] ?? [:],
+        ]
+      }
     #else
       return ["ok": false]
     #endif
@@ -289,11 +309,14 @@ enum W5Diag {
     private static var seqCounter: UInt64 = 0
     private static var faultPeerHandle: String?
     private static var helloDelayPending: Double?
-    // B4: the events JSONL now shares the one serialized evidence writer with
-    // the wake + RSSI logs (absent-vs-inaccessible, protection/backup after
-    // every op, per-family bounded drop counter).
+    // ONE session boundary (recursive) shared by every evidence writer AND the
+    // controls/secret ops below — so append/rotate/wipe/control/provision/
+    // destroy across all families are serialized, and a control mutation can
+    // emit its ack event within the same transaction (A1/A2).
+    static let sessionLock = NSRecursiveLock()
     static let eventWriter = W5EvidenceWriter(
-      fileName: "w5_events.jsonl", cap: 4 * 1024 * 1024, rotation: .dotOne)
+      fileName: "w5_events.jsonl", cap: 4 * 1024 * 1024, rotation: .dotOne,
+      lock: sessionLock)
     static var droppedWrites: Int { eventWriter.dropped }
     private static let diagDefaults = UserDefaults(suiteName: "io.inrange.diag")
 
@@ -322,7 +345,10 @@ enum W5Diag {
     }
 
     private static func validHex(_ hex: String?) -> Data? {
-      guard let hex, hex.count >= 32, hex.count % 2 == 0 else { return nil }
+      // >= 64 hex (256-bit) — the same floor as provisionRunSecret and the
+      // frozen puller contract, so an injected/persisted secret that resolves
+      // here is one the whole evidence chain accepts.
+      guard let hex, hex.count >= 64, hex.count % 2 == 0 else { return nil }
       return hexToData(hex)
     }
 
@@ -418,23 +444,44 @@ enum W5Diag {
     }
   #endif
 
-  /// Sum + reset the PRIOR run's dropped-write count across every evidence
-  /// family (events, wake, RSSI). Release-safe (0 when no diag machinery ships).
-  static func drainPriorDroppedWrites() -> Int {
+  /// A4 retained-until-ack boot accounting: PEEK the prior run's total loss,
+  /// durably record it as a boot event, and ACK (clear) the counters ONLY if
+  /// that record actually appended — so a failed boot append can never erase
+  /// prior loss. All under the session boundary. Release-safe no-op.
+  static func recordPriorLoss() {
     #if INRANGE_DIAG
-      return W5EvidenceWriter.drainPriorDropped()
-    #else
-      return 0
+      eventWriter.withLock {
+        let loss = W5EvidenceWriter.peekPriorLoss()
+        var obj: [String: Any] = [
+          "v": 1, "run": runLabel, "epoch": bootEpoch,
+          "keyEpoch": keyEpoch, "caseEpoch": caseEpoch, "runEpoch": runEpoch,
+          "wallMs": Int(Date().timeIntervalSince1970 * 1000),
+          "monoNs": DispatchTime.now().uptimeNanoseconds,
+          "seq": nextSeqLocked(), "event": Event.boot.rawValue,
+          "role": Role.app.rawValue, "reason": "priorLoss", "count": loss,
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: obj),
+          let s = String(data: data, encoding: .utf8),
+          eventWriter.appendLocked(s + "\n") {
+          W5EvidenceWriter.ackPriorLoss()  // ack ONLY after a durable record
+        }
+      }
     #endif
   }
 
-  /// Shared writers for the non-W5Diag families, so all three go through the
-  /// one primitive. Diag-only.
+  /// Shared writers for the non-W5Diag families — all on the SAME session lock.
   #if INRANGE_DIAG
     static let wakeWriter = W5EvidenceWriter(
-      fileName: "bb_wake_log.txt", cap: 2 * 1024 * 1024, rotation: .dotOne)
+      fileName: "bb_wake_log.txt", cap: 2 * 1024 * 1024, rotation: .dotOne,
+      lock: sessionLock)
     static let rssiWriter = W5EvidenceWriter(
-      fileName: "w5_rssi_log.jsonl", cap: 4 * 1024 * 1024, rotation: .external)
+      fileName: "w5_rssi_log.jsonl", cap: 4 * 1024 * 1024, rotation: .external,
+      lock: sessionLock)
+
+    /// Public, RESETTABLE run epoch — `resetCase` rotates it (bootEpoch/runLabel
+    /// are immutable process identity; this carries the reset run-state).
+    static let runEpochKey = "bb.w5diag.runepoch"
+    static var runEpoch: Int { diagDefaults?.integer(forKey: runEpochKey) ?? 0 }
   #endif
 
   /// Release-safe truncated handle for a raw id — for text logs (wake log) that

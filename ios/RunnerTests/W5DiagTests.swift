@@ -73,19 +73,25 @@ final class W5DiagTests: XCTestCase {
       return mac.prefix(7).map { String(format: "%02x", $0) }.joined()
     }
 
-    // B3: the run secret in use under the diag scheme is the INJECTED env
-    // secret (fleet alignment), not a per-process random. The diag scheme sets
-    // INRANGE_DIAG_RUN_SECRET; handles must equal the truncated HMAC-SHA256
-    // computed with THAT secret — proving the injection path is wired.
-    func testHandleUsesInjectedRunSecret() throws {
-      guard let hex = ProcessInfo.processInfo.environment["INRANGE_DIAG_RUN_SECRET"],
-        hex.count >= 32
-      else {
-        throw XCTSkip("diag scheme did not inject INRANGE_DIAG_RUN_SECRET")
-      }
+    // A5 (was B3): the run secret in use is the PROVISIONED fleet secret, not a
+    // per-process random. This test PROVISIONS a known secret and asserts the
+    // handle equals the truncated HMAC-SHA256 computed with THAT secret — so it
+    // exercises the injection path deterministically and NEVER skips (an
+    // environment-conditional skip could hide a broken injection path as green).
+    func testHandleUsesProvisionedRunSecret() {
+      let hex = String(repeating: "b7", count: 32)  // 64 hex, known value
+      W5Diag.provisionRunSecret(hex)
       let got = W5Diag.handle("peer", "tok-A")
       let want = Self.expectedHandle(domain: "peer", raw: "tok-A", secretHex: hex)
-      XCTAssertEqual(got, want, "handle must use the injected fleet secret")
+      XCTAssertEqual(got, want, "handle must use the provisioned fleet secret")
+      // A different provisioned secret changes the handle — proving it is the
+      // secret in use, not a coincidence.
+      let hex2 = String(repeating: "3c", count: 32)
+      W5Diag.provisionRunSecret(hex2)
+      let got2 = W5Diag.handle("peer", "tok-A")
+      let want2 = Self.expectedHandle(domain: "peer", raw: "tok-A", secretHex: hex2)
+      XCTAssertEqual(got2, want2, "re-provision re-keys the handle")
+      XCTAssertNotEqual(got, got2, "distinct secrets ⇒ distinct handles")
     }
 
     // B3: provisioning API persists a valid fleet secret to the diag suite and
@@ -153,11 +159,108 @@ final class W5DiagTests: XCTestCase {
     func testDestroySecretRejectedWhileW5ActiveAllowedWhenStopped() {
       W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))
       XCTAssertEqual(
-        W5Diag.destroySessionSecret(w5Active: true)["rejected"] as? String,
+        W5Diag.destroySessionSecret(w5Quiescent: false)["rejected"] as? String,
         "w5-active", "must refuse while W5 is up")
-      let ok = W5Diag.destroySessionSecret(w5Active: false)
+      let ok = W5Diag.destroySessionSecret(w5Quiescent: true)
       XCTAssertEqual(ok["ok"] as? Bool, true)
       XCTAssertEqual(ok["secretDestroyed"] as? Bool, true)
+    }
+
+    // A1: destruction is gated by REAL controller quiescence, computed from live
+    // W5 state (sessions/in-flight/links/leases/timers) — NOT the persisted
+    // feature flag. A live committed lease ⇒ not quiescent ⇒ destroy REFUSED;
+    // after the REAL dropPeer teardown ⇒ quiescent ⇒ destroy SUCCEEDS. This is
+    // the predicate `destroyW5Secret` feeds from `BackgroundBeacon.isW5Quiescent`.
+    func testDestroyGatedByRealControllerQuiescence() {
+      let bb = BackgroundBeacon()
+      withExtendedLifetime(bb) {
+        bb.testEnableW5Links()
+        XCTAssertTrue(bb.isW5Quiescent, "no links yet ⇒ quiescent")
+        bb.w5Link.testSeedOutboundLink(
+          peripheralID: UUID(), myCand: "cand-a", peerCand: "cand-b",
+          alias: "aliasQ", linkId: "LQ")
+        XCTAssertFalse(
+          bb.isW5Quiescent,
+          "a live committed lease ⇒ NOT quiescent (real state, not the flag)")
+        XCTAssertEqual(
+          W5Diag.destroySessionSecret(w5Quiescent: bb.isW5Quiescent)["rejected"]
+            as? String,
+          "w5-active", "destruction REFUSED while a real lease is live")
+        // Tear the lease down through the REAL channel boundary Dart calls.
+        let d = bb.dropPeerByToken("aliasQ")
+        XCTAssertEqual(d["leaseEnded"] as? Bool, true, "real teardown ended lease")
+        XCTAssertTrue(bb.isW5Quiescent, "after real teardown ⇒ quiescent")
+        W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))
+        let ok = W5Diag.destroySessionSecret(w5Quiescent: bb.isW5Quiescent)
+        XCTAssertEqual(ok["ok"] as? Bool, true, "destruction ALLOWED once quiescent")
+        XCTAssertEqual(ok["secretDestroyed"] as? Bool, true)
+      }
+    }
+
+    // A1/A2: concurrent reset + emit + destroy all serialize on the ONE shared
+    // session lock — no torn evidence line, no crash — and the terminal state is
+    // consistent: the secret is RETAINED across every concurrent resetCase
+    // (owner ruling), and every emitted line is well-formed JSON.
+    func testConcurrentResetAndEmitSerializeNoTornLine() {
+      let sec = String(repeating: "9f", count: 32)  // 64 hex
+      W5Diag.provisionRunSecret(sec)
+      _ = W5Diag.resetCase()  // start from a clean evidence file
+      let group = DispatchGroup()
+      let q = DispatchQueue(label: "w5.concurrency", attributes: .concurrent)
+      for i in 0..<12 {
+        q.async(group: group) {
+          if i % 4 == 0 {
+            _ = W5Diag.resetCase()
+          } else {
+            W5Diag.emit(.beat, role: .app)
+          }
+        }
+      }
+      group.wait()
+      // Secret survived every concurrent reset (retained, not rotated away).
+      let want = Self.expectedHandle(domain: "peer", raw: "k", secretHex: sec)
+      XCTAssertEqual(
+        W5Diag.handle("peer", "k"), want, "secret retained across concurrent resets")
+      // Any lines present are intact JSON — no interleaved/torn append.
+      let docs = FileManager.default.urls(
+        for: .documentDirectory, in: .userDomainMask)[0]
+      let url = docs.appendingPathComponent("w5_events.jsonl")
+      if let body = try? String(contentsOf: url, encoding: .utf8) {
+        for l in body.split(separator: "\n", omittingEmptySubsequences: true) {
+          XCTAssertNoThrow(
+            try JSONSerialization.jsonObject(with: Data(l.utf8)),
+            "no torn line under concurrent reset+emit: \(l)")
+        }
+      }
+    }
+
+    // A2: resetCase wipes EVERY family's current AND rotated artifact in one
+    // serialized boundary — events, wake, AND RSSI, including each ".1" sibling —
+    // and clears controls. A wipe that missed a rotation (or a family) would
+    // leave a file behind; the inventory-based wipe must catch all six.
+    func testResetCaseWipesEveryFamilyIncludingRotations() {
+      let fm = FileManager.default
+      let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+      let files = [
+        "w5_events.jsonl", "w5_events.1.jsonl",
+        "bb_wake_log.txt", "bb_wake_log.1.txt",
+        "w5_rssi_log.jsonl", "w5_rssi_log.1.jsonl",
+      ]
+      for f in files {
+        try? "seed\n".write(
+          to: docs.appendingPathComponent(f), atomically: true, encoding: .utf8)
+      }
+      W5Diag.armFault(peerRaw: "p")
+      W5Diag.armHelloDelay(2)
+      let ack = W5Diag.resetCase()
+      XCTAssertEqual(ack["ok"] as? Bool, true, "every wipe reported success")
+      for f in files {
+        XCTAssertFalse(
+          fm.fileExists(atPath: docs.appendingPathComponent(f).path),
+          "reset must remove \(f) (current + rotated, every family)")
+      }
+      XCTAssertFalse(W5Diag.isFaultArmed, "fault cleared in the same boundary")
+      XCTAssertEqual(W5Diag.consumeHelloDelay(), 0, "delay cleared")
     }
 
     // B3: a short/odd/non-hex secret must NOT mutate state.
@@ -168,6 +271,24 @@ final class W5DiagTests: XCTestCase {
       XCTAssertEqual(W5Diag.provisionRunSecret("abc")["ok"] as? Bool, false)  // odd
       XCTAssertEqual(W5Diag.provisionRunSecret("ab")["ok"] as? Bool, false)  // short
       XCTAssertEqual(W5Diag.handle("peer", "z"), good, "state unchanged")
+    }
+
+    // A4 alignment: the native provisioning floor MATCHES the frozen puller
+    // contract (>= 64 hex / 256-bit). A 32-hex key — accepted under the old
+    // 32-CHAR floor — must now be REJECTED, so a key can never provision on the
+    // device yet be refused by the evidence puller.
+    func testProvisionRequires64HexMatchingPullerContract() {
+      W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))  // 64 hex base
+      let good = W5Diag.handle("peer", "z")
+      let thirtyTwoHex = String(repeating: "cd", count: 16)  // 32 hex, 128-bit
+      XCTAssertEqual(thirtyTwoHex.count, 32)
+      XCTAssertEqual(
+        W5Diag.provisionRunSecret(thirtyTwoHex)["ok"] as? Bool, false,
+        "a 32-hex key is below the 64-hex puller floor → rejected")
+      XCTAssertEqual(W5Diag.handle("peer", "z"), good, "state unchanged")
+      XCTAssertEqual(
+        W5Diag.provisionRunSecret(String(repeating: "9a", count: 32))["ok"]
+          as? Bool, true, "a full 64-hex key is accepted")
     }
 
     // B3: provisioning a DIFFERENT key mid-session rotates the key epoch.
@@ -223,7 +344,7 @@ final class W5DiagTests: XCTestCase {
     func testAbsentFileIsCreatedAndProtectionAppliedWhenReported() throws {
       let name = "ewtest_a.jsonl"
       try? FileManager.default.removeItem(at: url(name))
-      let w = W5EvidenceWriter(fileName: name, cap: 1_000_000, rotation: .dotOne)
+      let w = W5EvidenceWriter(fileName: name, cap: 1_000_000, rotation: .dotOne, lock: NSRecursiveLock())
       XCTAssertTrue(w.append("line1\n"))
       XCTAssertTrue(FileManager.default.fileExists(atPath: url(name).path))
       // Data protection + backup exclusion ARE applied on create, but the iOS
@@ -255,7 +376,7 @@ final class W5DiagTests: XCTestCase {
       // must treat it as inaccessible (drop), NOT absent (overwrite).
       try FileManager.default.setAttributes(
         [.posixPermissions: 0o444], ofItemAtPath: path)
-      let w = W5EvidenceWriter(fileName: name, cap: 1_000_000, rotation: .dotOne)
+      let w = W5EvidenceWriter(fileName: name, cap: 1_000_000, rotation: .dotOne, lock: NSRecursiveLock())
       XCTAssertFalse(w.append("SHOULD-NOT-APPEAR\n"))
       XCTAssertGreaterThan(w.dropped, 0, "an inaccessible write must be counted")
       try FileManager.default.setAttributes(
@@ -269,7 +390,7 @@ final class W5DiagTests: XCTestCase {
       let name = "ewtest_b.jsonl"
       try? FileManager.default.removeItem(at: url(name))
       try? FileManager.default.removeItem(at: url("ewtest_b.1.jsonl"))
-      let w = W5EvidenceWriter(fileName: name, cap: 10, rotation: .dotOne)
+      let w = W5EvidenceWriter(fileName: name, cap: 10, rotation: .dotOne, lock: NSRecursiveLock())
       XCTAssertTrue(w.append("AAAAAAAAAAAA\n"))  // 13 bytes > cap
       XCTAssertTrue(w.append("B\n"))  // over cap → rotate first, then write fresh
       XCTAssertEqual(
@@ -283,7 +404,7 @@ final class W5DiagTests: XCTestCase {
     func testManyAppendsPreserveOrderAndEveryLine() throws {
       let name = "ewtest_a.jsonl"
       try? FileManager.default.removeItem(at: url(name))
-      let w = W5EvidenceWriter(fileName: name, cap: 1_000_000, rotation: .dotOne)
+      let w = W5EvidenceWriter(fileName: name, cap: 1_000_000, rotation: .dotOne, lock: NSRecursiveLock())
       for i in 0..<200 { XCTAssertTrue(w.append("line\(i)\n")) }
       let lines = try String(contentsOf: url(name), encoding: .utf8)
         .split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
@@ -297,7 +418,7 @@ final class W5DiagTests: XCTestCase {
     func testConcurrentAppendsAreSerializedAndComplete() {
       let name = "ewtest_conc.jsonl"
       try? FileManager.default.removeItem(at: url(name))
-      let w = W5EvidenceWriter(fileName: name, cap: 10_000_000, rotation: .dotOne)
+      let w = W5EvidenceWriter(fileName: name, cap: 10_000_000, rotation: .dotOne, lock: NSRecursiveLock())
       let group = DispatchGroup()
       let q = DispatchQueue(label: "ewtest.conc", attributes: .concurrent)
       let threads = 16, per = 40
@@ -316,13 +437,111 @@ final class W5DiagTests: XCTestCase {
       }
     }
 
-    func testDrainPriorDroppedSumsAndResetsEveryFamily() {
+    // A4: PEEK sums dropped + typed op-failures across EVERY family WITHOUT
+    // clearing (so a failed boot append can't erase loss before it is durably
+    // recorded); ACK clears only after the boot event is written.
+    func testPeekPriorLossSumsEveryFamilyAckClears() {
       let d = UserDefaults(suiteName: "io.inrange.diag")
+      // Clear any residue from other tests so the sum is deterministic.
+      for k in d?.dictionaryRepresentation().keys ?? [:].keys
+      where k.hasPrefix(W5EvidenceWriter.opFailPrefix)
+        || k.hasPrefix(W5EvidenceWriter.droppedPrefix) {
+        d?.removeObject(forKey: k)
+      }
       d?.set(3, forKey: "bb.evwrite.dropped.w5_events.jsonl")
       d?.set(2, forKey: "bb.evwrite.dropped.bb_wake_log.txt")
       d?.set(1, forKey: "bb.evwrite.dropped.w5_rssi_log.jsonl")
-      XCTAssertEqual(W5EvidenceWriter.drainPriorDropped(), 6)
-      XCTAssertEqual(W5EvidenceWriter.drainPriorDropped(), 0, "reset after drain")
+      // Typed op-failures (rotate/close/wipe) also count toward loss.
+      d?.set(4, forKey: "bb.evwrite.opfail.w5_events.jsonl.rotate")
+      d?.set(5, forKey: "bb.evwrite.opfail.w5_rssi_log.jsonl.close")
+      XCTAssertEqual(W5EvidenceWriter.peekPriorLoss(), 15,
+        "dropped(6) + typed op-failures(9) across all families")
+      XCTAssertEqual(W5EvidenceWriter.peekPriorLoss(), 15,
+        "PEEK does not clear — a second peek returns the same total")
+      W5EvidenceWriter.ackPriorLoss()
+      XCTAssertEqual(W5EvidenceWriter.peekPriorLoss(), 0, "ACK cleared every key")
+    }
+
+    private func opFail(_ file: String, _ op: String) -> Int {
+      UserDefaults(suiteName: "io.inrange.diag")?
+        .integer(forKey: "bb.evwrite.opfail.\(file).\(op)") ?? 0
+    }
+
+    // A4: EVERY writer file-op failure is TYPED and accounted. Using the diag-
+    // only injection seam, force each op to fail and assert its own counter
+    // (`bb.evwrite.opfail.<file>.<op>`) increments — so a soak's silent I/O
+    // losses are attributable per operation, not merged into one bucket.
+    func testInjectedFileOpFailuresAreTypedAndAccounted() throws {
+      W5EvidenceWriter.resetInjectedFailures()
+      let name = "ewtest_a.jsonl"
+      try? FileManager.default.removeItem(at: url(name))
+      try? FileManager.default.removeItem(at: url("ewtest_a.1.jsonl"))
+      let d = UserDefaults(suiteName: "io.inrange.diag")
+      for op in ["rotate", "rotate-unlink", "protect", "backup", "close", "wipe"] {
+        d?.removeObject(forKey: "bb.evwrite.opfail.\(name).\(op)")
+      }
+      let w = W5EvidenceWriter(
+        fileName: name, cap: 10, rotation: .dotOne, lock: NSRecursiveLock())
+
+      // protect + backup: fail on the very first create's applyProtection.
+      W5EvidenceWriter.injectedFailures["\(name).protect"] = 1
+      W5EvidenceWriter.injectedFailures["\(name).backup"] = 1
+      XCTAssertTrue(w.append("first\n"))  // append still SUCCEEDS…
+      XCTAssertEqual(opFail(name, "protect"), 1, "protect failure typed")
+      XCTAssertEqual(opFail(name, "backup"), 1, "backup failure typed")
+
+      // close: force the post-write handle close to be accounted.
+      W5EvidenceWriter.injectedFailures["\(name).close"] = 1
+      _ = w.append("second\n")
+      XCTAssertEqual(opFail(name, "close"), 1, "close failure typed")
+
+      // rotate-unlink + rotate: grow past cap so a rotation is attempted, and
+      // fail both the stale-.1 unlink and the move.
+      try? "OLD\n".write(to: url("ewtest_a.1.jsonl"), atomically: true, encoding: .utf8)
+      W5EvidenceWriter.injectedFailures["\(name).rotate-unlink"] = 1
+      W5EvidenceWriter.injectedFailures["\(name).rotate"] = 1
+      _ = w.append("AAAAAAAAAAAAAAAAAAAA\n")  // > cap 10 → rotate attempted
+      XCTAssertEqual(opFail(name, "rotate-unlink"), 1, "rotate-unlink typed")
+      XCTAssertEqual(opFail(name, "rotate"), 1, "rotate typed")
+
+      // wipe: force a delete failure and prove wipeLocked reports it per-file.
+      W5EvidenceWriter.injectedFailures["\(name).wipe"] = 1
+      let wiped = w.wipeLocked()
+      XCTAssertEqual(wiped[name], false, "wipe reports the failed file as false")
+      XCTAssertEqual(opFail(name, "wipe"), 1, "wipe failure typed")
+
+      W5EvidenceWriter.resetInjectedFailures()
+    }
+
+    // A4: the boot loss-record is ATOMIC w.r.t. acknowledgment — if the durable
+    // boot append fails, prior loss counters are RETAINED (never acked), so a
+    // failed boot can't erase the evidence that loss occurred.
+    func testBootRecordDoesNotAckWhenAppendFails() throws {
+      W5EvidenceWriter.resetInjectedFailures()
+      let d = UserDefaults(suiteName: "io.inrange.diag")
+      for k in d?.dictionaryRepresentation().keys ?? [:].keys
+      where k.hasPrefix(W5EvidenceWriter.opFailPrefix)
+        || k.hasPrefix(W5EvidenceWriter.droppedPrefix) {
+        d?.removeObject(forKey: k)
+      }
+      d?.set(7, forKey: "bb.evwrite.dropped.w5_events.jsonl")
+      XCTAssertEqual(W5EvidenceWriter.peekPriorLoss(), 7)
+      // recordPriorLoss must NOT call ackPriorLoss when the append did not land.
+      // Make the events file inaccessible so appendLocked drops (real failure).
+      let events = FileManager.default.urls(
+        for: .documentDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("w5_events.jsonl")
+      try? "x".data(using: .utf8)!.write(to: events)
+      try FileManager.default.setAttributes(
+        [.posixPermissions: 0o444], ofItemAtPath: events.path)
+      W5Diag.recordPriorLoss()
+      try FileManager.default.setAttributes(
+        [.posixPermissions: 0o644], ofItemAtPath: events.path)
+      XCTAssertGreaterThanOrEqual(
+        W5EvidenceWriter.peekPriorLoss(), 7,
+        "a failed boot append must RETAIN prior loss (never ack it away)")
+      try? FileManager.default.removeItem(at: events)
+      W5EvidenceWriter.ackPriorLoss()
     }
   }
 #endif

@@ -128,6 +128,15 @@ final class BackgroundBeacon: NSObject {
       return false
     #endif
   }
+
+  /// REAL W5 quiescence (A1): not the persisted feature flag, but proof that no
+  /// live W5 work exists — no sessions, no in-flight connects, and the
+  /// controller holds no links/leases/timers. Used to gate secret destruction.
+  var isW5Quiescent: Bool {
+    if !w5LinksEnabled { return true }  // disabled → nothing W5 is running
+    return w5.isEmpty && inflight.isEmpty && w5Link.isQuiescent
+  }
+
   // Callback-primed cadence: after a write CONFIRMS (didWriteValueFor), the
   // next beat is scheduled ~4 s out. Herald-shaped — not an instant loop.
   private static let w5Cadence: TimeInterval = 4
@@ -251,12 +260,11 @@ final class BackgroundBeacon: NSObject {
     }
     reconcileStateStamp()  // H-DIAG-3: before any restoration
     logWake("boot enabled=\(defaults.bool(forKey: Self.keyEnabled))")
-    // Surface the PRIOR run's dropped-write count across EVERY evidence family
-    // (events + wake + RSSI), then reset — integrity loss is never silent.
-    let priorDropped = W5Diag.drainPriorDroppedWrites()
+    // A4: PEEK the prior run's loss, durably RECORD it, then ACK — a failed boot
+    // append can never erase prior loss before it is recorded.
+    W5Diag.recordPriorLoss()
     W5Diag.emit(.boot, role: .app,
-      result: defaults.bool(forKey: Self.keyEnabled) ? "enabled" : "disabled",
-      count: priorDropped)
+      result: defaults.bool(forKey: Self.keyEnabled) ? "enabled" : "disabled")
     // Cold-launch marker: whether a W5 snapshot is present to restore. Combined
     // with the presence/absence of preceding restore* events in the JSONL this
     // lets Case 3 tell a fresh cold launch from an OS restoration relaunch.
@@ -377,10 +385,11 @@ final class BackgroundBeacon: NSObject {
         result(nil)
       case "setDiagRunSecret":
         // Diag-only: provision the shared fleet run secret (hex) so HMAC
-        // handles align across a fleet and survive OS restoration. No-op in a
-        // release binary (W5Diag compiles the body out).
-        W5Diag.provisionRunSecret((call.arguments as? String) ?? "")
-        result(nil)
+        // handles align across a fleet and survive OS restoration. Returns the
+        // structured provisioning ack (`ok`, `rotated`, `keyEpoch`) so Dart can
+        // AWAIT it and fail closed — never enabling W5 on an unprovisioned key
+        // (A3). No-op in a release binary (W5Diag compiles the body out).
+        result(W5Diag.provisionRunSecret((call.arguments as? String) ?? ""))
       case "armW5Fault":
         // Diag-only: arm a one-shot, PEER-SCOPED pre-HELLO_ACK drop. No wildcard
         // — nil/empty fails closed. Returns a structured ack. Release no-op.
@@ -406,8 +415,9 @@ final class BackgroundBeacon: NSObject {
         // wipe evidence, clear controls + sequence. Returns a structured ack.
         result(W5Diag.resetCase())
       case "destroyW5Secret":
-        // Owner ruling: the ONLY secret-destroying op; rejected while W5 active.
-        result(W5Diag.destroySessionSecret(w5Active: self.w5LinksEnabled))
+        // Owner ruling: the ONLY secret-destroying op; rejected unless W5 is
+        // genuinely QUIESCENT (live managers/sessions, not the persisted flag).
+        result(W5Diag.destroySessionSecret(w5Quiescent: self.isW5Quiescent))
       case "setW5Links":
         // Test-only gate for W5 persistent links (INRANGE_W5_LINKS).
         self.defaults.set((call.arguments as? Bool) ?? false, forKey: Self.keyW5Links)

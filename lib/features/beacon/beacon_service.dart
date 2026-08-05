@@ -1016,16 +1016,32 @@ class BeaconService {
         currentUntil: _currentToken!.expiresAt,
       );
       final ok = await _bgBeacon.start(payload);
-      // Diag run secret first (before any W5 event can emit) so fleet HMAC
-      // handles align and survive restoration. Gated on the compile-time diag
-      // flag so the whole call — and the run-secret key literal — tree-shakes
-      // out of production (B5). Awaited so provisioning lands before setW5Links
-      // enables emits (B3 boot-before-provision ordering).
+      // A3 KEY-READY GATE. The fleet run secret is provisioned FIRST and its
+      // native ack is AWAITED, so W5 persistent links are enabled only after the
+      // key is confirmed in place — fail closed, so no native manager can emit a
+      // W5 event under a random or absent key. Gated on the compile-time diag
+      // flag so the whole call — and the run-secret key literal — tree-shakes out
+      // of production (B5). Precedence: the build-time `diagRunSecret` dart-
+      // define is the single provisioned key; a failed or empty provision holds
+      // W5 OFF regardless of `w5LinksEnabled`.
       if (AppConfig.kDiagBuild) {
-        await _bgBeacon.setDiagRunSecret(AppConfig.diagRunSecret);
+        final ack = await _bgBeacon.setDiagRunSecret(AppConfig.diagRunSecret);
+        final keyReady = ack != null && ack['ok'] == true;
+        if (AppConfig.w5LinksEnabled && keyReady) {
+          await _bgBeacon.setW5Links(true);
+        } else {
+          // Assert OFF (idempotent) so a stale native flag from a prior install
+          // cannot leave W5 enabled under an unprovisioned key.
+          await _bgBeacon.setW5Links(false);
+          if (AppConfig.w5LinksEnabled && !keyReady) {
+            debugPrint(
+                'W5 links held OFF: fleet key not provisioned (fail-closed)');
+          }
+        }
+      } else {
+        // Production: W5 is compile-inert natively; assert OFF regardless.
+        unawaited(_bgBeacon.setW5Links(false));
       }
-      // W5 test gate: only establish persistent links when the build opts in.
-      unawaited(_bgBeacon.setW5Links(AppConfig.w5LinksEnabled));
       // Crack #1: refresh the native wake-ping endpoint + JWT on every
       // (re)start — rotation re-enters here every ~15 min, keeping the
       // stored token fresh. Endpoint is null until the server half (issue

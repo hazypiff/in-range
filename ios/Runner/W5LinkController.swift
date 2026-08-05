@@ -75,6 +75,16 @@ final class W5LinkController {
   private var retryTimers: [String: Timer] = [:]
   private var graceTimers: [String: Timer] = [:]
   private var prevAliasTimers: [String: Timer] = [:]
+
+  /// True only when the controller holds NO live W5 state — no links, no leases,
+  /// no timers, no queued control frames. Used to prove real W5 quiescence
+  /// before a destructive secret operation (A1).
+  var isQuiescent: Bool {
+    outLinks.isEmpty && inLinks.isEmpty && leaseByHandle.isEmpty
+      && retryTimers.isEmpty && graceTimers.isEmpty && prevAliasTimers.isEmpty
+      && pendingControl.isEmpty && myPrevTokenTimer == nil
+  }
+
   /// Control notifies refused by the queue; flushed from isReady.
   private var pendingControl: [(Data, CBCentral)] = []
   private var persistTimer: Timer?

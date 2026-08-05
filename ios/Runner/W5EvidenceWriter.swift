@@ -4,24 +4,19 @@ import Foundation
 /// family (W5 events JSONL, native wake log, W5 RSSI log). Diag-only — the whole
 /// type compiles out of Release, so no evidence machinery ships.
 ///
-/// Guarantees the panel required for locked-phone integrity:
-/// - **locked-state writes SUCCEED**: files use
-///   `completeUntilFirstUserAuthentication` — accessible after the first unlock
-///   post-boot and stay accessible when the phone re-locks (the standard class
-///   for background daemons). The whole point of this evidence is to be written
-///   while the phone is locked in a pocket during a soak; `completeUnlessOpen`
-///   (an earlier mistake) made per-append open/close fail under lock and drop
-///   every locked write.
+/// Every writer shares ONE session lock (injected), so append/rotate/wipe across
+/// ALL families — and the W5Diag controls/secret ops that also take it — are one
+/// serialized session boundary. The lock is recursive so a control mutation can
+/// emit its acknowledgment event within the same transaction.
+///
+/// Guarantees:
+/// - **locked-state writes SUCCEED**: `completeUntilFirstUserAuthentication`.
 /// - **absent vs inaccessible**: a missing file is CREATED; an existing file
-///   that cannot be opened for writing is treated as inaccessible and the line
-///   is DROPPED — it is never replaced by a single-line file (Phase-3.3 defect).
-/// - **protection + backup exclusion after EVERY op** (create, append, rotate).
-/// - **serialized**: one lock per file. `append` takes it internally; callers
-///   with related file work (RSSI trim/drain/ack) run under `withLock` so
-///   cross-thread (BLE queue vs channel/main) access cannot race the rotate or
-///   the drain offset.
-/// - **bounded failure accounting**: every drop increments a per-file counter
-///   persisted to the diag suite, surfaced at the next boot.
+///   that cannot be opened is DROPPED, never replaced by a single line.
+/// - **protection + backup exclusion after EVERY op**, verified where reported.
+/// - **typed, retained-until-ack failure accounting**: every drop AND every
+///   file-op failure is counted per (file, operation) and only cleared after a
+///   durable boot acknowledgment (peek → record → ack).
 #if INRANGE_DIAG
   final class W5EvidenceWriter {
     enum Rotation {
@@ -29,26 +24,56 @@ import Foundation
       case external  // caller trims after append (RSSI drain offsets)
     }
 
-    private let url: URL
+    let url: URL
     private let cap: Int
     private let rotation: Rotation
+    private let fileName: String
     private let droppedKey: String
-    private let lock = NSLock()
+    private let lock: NSRecursiveLock
     private static let diagDefaults = UserDefaults(suiteName: "io.inrange.diag")
+    static let opFailPrefix = "bb.evwrite.opfail."
+    static let droppedPrefix = "bb.evwrite.dropped."
 
     private(set) var dropped = 0
 
-    init(fileName: String, cap: Int, rotation: Rotation) {
+    // TEST-ONLY (diag build) deterministic file-op fault injection. Keyed by
+    // "<fileName>.<op>"; each entry forces that op to fail `count` more times so
+    // a test can assert the TYPED failure counter increments for every op
+    // (rotate / rotate-unlink / protect / backup / close / wipe) without relying
+    // on fragile real-FS permission tricks. The whole type compiles out of
+    // Release, so this seam is never present in a production binary.
+    static var injectedFailures: [String: Int] = [:]
+    static func resetInjectedFailures() { injectedFailures = [:] }
+    private func consumeInjected(_ op: String) -> Bool {
+      let k = "\(fileName).\(op)"
+      guard let n = Self.injectedFailures[k], n > 0 else { return false }
+      Self.injectedFailures[k] = n - 1
+      return true
+    }
+
+    init(fileName: String, cap: Int, rotation: Rotation, lock: NSRecursiveLock) {
+      self.fileName = fileName
       self.url = FileManager.default.urls(
         for: .documentDirectory, in: .userDomainMask)[0]
         .appendingPathComponent(fileName)
       self.cap = cap
       self.rotation = rotation
-      self.droppedKey = "bb.evwrite.dropped.\(fileName)"
+      self.droppedKey = "\(Self.droppedPrefix)\(fileName)"
+      self.lock = lock
     }
 
-    /// Append one already-formatted line (caller includes any trailing newline).
-    /// Returns false and accounts a drop on any failure. Takes the lock.
+    /// The rotated (".1") sibling URL — part of this family's inventory.
+    var rotatedURL: URL {
+      let ext = url.pathExtension
+      let base = ext.isEmpty ? fileName : String(fileName.dropLast(ext.count + 1))
+      let name = ext.isEmpty ? "\(base).1" : "\(base).1.\(ext)"
+      return url.deletingLastPathComponent().appendingPathComponent(name)
+    }
+
+    /// Every artifact this family owns (current + rotated) — the authoritative
+    /// inventory used by wipe/reset so no rotation is missed.
+    var inventory: [URL] { [url, rotatedURL] }
+
     @discardableResult
     func append(_ text: String) -> Bool {
       lock.lock()
@@ -56,10 +81,8 @@ import Foundation
       return appendLocked(text)
     }
 
-    /// Core append; the CALLER MUST hold the lock (via `append` or `withLock`).
-    /// This lets the events writer make seq-assignment + append ONE atomic
-    /// critical section, so a line's `seq` always matches its file order even
-    /// under concurrent emits (B4).
+    /// Core append; the CALLER MUST hold the shared lock (via `append`/`withLock`
+    /// or the session boundary), so seq-assign + append is one atomic section.
     @discardableResult
     func appendLocked(_ text: String) -> Bool {
       guard let bytes = text.data(using: .utf8) else {
@@ -68,21 +91,13 @@ import Foundation
       }
       let fm = FileManager.default
 
-      // Rotate BEFORE writing when over cap (dotOne only). If the rotation
-      // MOVE fails, the op-failure is already accounted; we still append (the
-      // file stays slightly over cap for one more line) rather than drop
-      // evidence — preservation over a strict cap bound. The Bool is consumed so
-      // the outcome is explicit, not silently ignored.
       if rotation == .dotOne, fm.fileExists(atPath: url.path),
         let size = (try? fm.attributesOfItem(atPath: url.path)[.size]) as? Int,
         size > cap {
-        if !rotateDotOne() {
-          // accounted in rotateDotOne(); fall through and append anyway.
-        }
+        _ = rotateDotOne()  // accounted on failure; append proceeds either way
       }
 
       if !fm.fileExists(atPath: url.path) {
-        // ABSENT → create fresh, protected (locked-state-writable), excluded.
         do { try bytes.write(to: url, options: .completeFileProtectionUntilFirstUserAuthentication) }
         catch {
           droppedLocked()
@@ -92,10 +107,8 @@ import Foundation
         return true
       }
 
-      // EXISTS → append. If it cannot be OPENED it is inaccessible, NOT absent:
-      // drop the line, never overwrite an existing (possibly locked) log.
       guard let h = try? FileHandle(forWritingTo: url) else {
-        droppedLocked()
+        droppedLocked()  // inaccessible existing file — never overwrite
         return false
       }
       var ok = true
@@ -104,11 +117,13 @@ import Foundation
           try h.seekToEnd()
           try h.write(contentsOf: bytes)
         } catch { ok = false }
-        try? h.close()
+        if consumeInjected("close") {
+          try? h.close()  // still release the fd; only the typed failure is faked
+          noteOpFailure("close")
+        } else {
+          do { try h.close() } catch { noteOpFailure("close") }
+        }
       } else {
-        // iOS 13.0–13.3: no non-trapping FileHandle write. We already proved
-        // the file exists AND is openable, so a read-append-write replaces a
-        // known-accessible file (not the absent/inaccessible ambiguity).
         try? h.close()
         if let existing = try? Data(contentsOf: url) {
           do { try (existing + bytes).write(to: url, options: .atomic) }
@@ -125,20 +140,23 @@ import Foundation
       return true
     }
 
-    /// Rotate; returns false (and accounts an op-failure) if the move failed —
-    /// so a failed rotation is never silently followed by an append to the
-    /// over-cap file with no record.
     @discardableResult
     private func rotateDotOne() -> Bool {
-      let name = url.lastPathComponent
-      let ext = url.pathExtension
-      let base = ext.isEmpty ? name : String(name.dropLast(ext.count + 1))
-      let rotatedName = ext.isEmpty ? "\(base).1" : "\(base).1.\(ext)"
-      let prev = url.deletingLastPathComponent().appendingPathComponent(rotatedName)
-      try? FileManager.default.removeItem(at: prev)
-      do {
-        try FileManager.default.moveItem(at: url, to: prev)
-      } catch {
+      let prev = rotatedURL
+      if FileManager.default.fileExists(atPath: prev.path) {
+        if consumeInjected("rotate-unlink") {
+          noteOpFailure("rotate-unlink")
+        } else {
+          do { try FileManager.default.removeItem(at: prev) }
+          catch { noteOpFailure("rotate-unlink") }
+        }
+      }
+      if consumeInjected("rotate") {
+        noteOpFailure("rotate")
+        return false
+      }
+      do { try FileManager.default.moveItem(at: url, to: prev) }
+      catch {
         noteOpFailure("rotate")
         return false
       }
@@ -146,84 +164,103 @@ import Foundation
       return true
     }
 
-    /// Data protection + backup exclusion, reapplied after every op that can
-    /// create or replace the file. Accounts a failure and VERIFIES the
-    /// backup-exclusion read-back (the one attribute the platform reports), so a
-    /// silent attribute loss on replacement is not invisible.
     private func applyProtection(_ u: URL) {
-      do {
-        try FileManager.default.setAttributes(
-          [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
-          ofItemAtPath: u.path)
-      } catch { noteOpFailure("protect") }
-      var m = u
-      var res = URLResourceValues()
-      res.isExcludedFromBackup = true
-      do { try m.setResourceValues(res) } catch { noteOpFailure("backup") }
-      // Verify the backup-exclusion took (device reports it; simulator returns
-      // nil, in which case we cannot verify and do not falsely fail).
-      if let excluded = try? u.resourceValues(forKeys: [.isExcludedFromBackupKey])
-        .isExcludedFromBackup, excluded == false {
-        noteOpFailure("backup-verify")
+      if consumeInjected("protect") {
+        noteOpFailure("protect")
+      } else {
+        do {
+          try FileManager.default.setAttributes(
+            [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+            ofItemAtPath: u.path)
+        } catch { noteOpFailure("protect") }
+      }
+      if consumeInjected("backup") {
+        noteOpFailure("backup")
+      } else {
+        var m = u
+        var res = URLResourceValues()
+        res.isExcludedFromBackup = true
+        do { try m.setResourceValues(res) } catch { noteOpFailure("backup") }
+        if let excluded = try? u.resourceValues(forKeys: [.isExcludedFromBackupKey])
+          .isExcludedFromBackup, excluded == false {
+          noteOpFailure("backup-verify")
+        }
       }
     }
 
-    private func noteOpFailure(_ kind: String) {
-      let k = "bb.evwrite.opfail.\(url.lastPathComponent)"
-      let n = (Self.diagDefaults?.integer(forKey: k) ?? 0) + 1
-      Self.diagDefaults?.set(n, forKey: k)
+    /// Delete every artifact this family owns; returns a TYPED per-file result so
+    /// a wipe cannot silently fail and still report success (A2). Caller holds
+    /// the session lock.
+    @discardableResult
+    func wipeLocked() -> [String: Bool] {
+      var out: [String: Bool] = [:]
+      for u in inventory where FileManager.default.fileExists(atPath: u.path) {
+        if consumeInjected("wipe") {
+          out[u.lastPathComponent] = false
+          noteOpFailure("wipe")
+          continue
+        }
+        do {
+          try FileManager.default.removeItem(at: u)
+          out[u.lastPathComponent] = true
+        } catch {
+          out[u.lastPathComponent] = false
+          noteOpFailure("wipe")
+        }
+      }
+      return out
     }
 
-    /// Run `body` holding this writer's lock — for related file work (RSSI
-    /// trim/drain/ack) that must serialize with `append` across threads. Must
-    /// NOT call `append` from inside (the lock is non-reentrant).
+    /// Run `body` under the shared session lock. Recursive, so nested control +
+    /// emit transactions are one critical section.
     func withLock<T>(_ body: () -> T) -> T {
       lock.lock()
       defer { lock.unlock() }
       return body()
     }
 
-    /// Account a drop; the CALLER MUST hold the lock (append/withLock).
+    /// Account a drop; the CALLER MUST hold the lock.
     func droppedLocked() {
       dropped += 1
       let n = (Self.diagDefaults?.integer(forKey: droppedKey) ?? 0) + 1
       Self.diagDefaults?.set(n, forKey: droppedKey)
     }
 
-    /// Account a drop that happened before append (e.g. JSON serialization
-    /// failed), so no integrity loss is silent regardless of where it occurs.
+    /// A pre-append drop (takes the lock).
     func noteExternalDrop() {
       lock.lock(); defer { lock.unlock() }
       droppedLocked()
     }
 
-    /// The persisted dropped-write keys for every family — summed + reset at
-    /// boot so integrity loss is never silent.
-    static let droppedKeys = [
-      "bb.evwrite.dropped.w5_events.jsonl",
-      "bb.evwrite.dropped.bb_wake_log.txt",
-      "bb.evwrite.dropped.w5_rssi_log.jsonl",
-    ]
+    /// Typed-by-operation failure counter: `bb.evwrite.opfail.<file>.<op>`.
+    private func noteOpFailure(_ op: String) {
+      let k = "\(Self.opFailPrefix)\(fileName).\(op)"
+      let n = (Self.diagDefaults?.integer(forKey: k) ?? 0) + 1
+      Self.diagDefaults?.set(n, forKey: k)
+    }
 
-    /// Per-file op-failure keys (rotate/protect/backup) — bounded accounting for
-    /// the file operations that can fail silently.
-    static let opFailKeys = [
-      "bb.evwrite.opfail.w5_events.jsonl",
-      "bb.evwrite.opfail.bb_wake_log.txt",
-      "bb.evwrite.opfail.w5_rssi_log.jsonl",
-      "bb.evwrite.opfail.w5_events.1.jsonl",
-      "bb.evwrite.opfail.bb_wake_log.1.txt",
-    ]
+    // MARK: - retained-until-ack loss accounting (A4)
 
-    /// Sum the prior run's dropped writes + op-failures across ALL families,
-    /// then reset them — no integrity loss (write OR file-op) is silent.
-    static func drainPriorDropped() -> Int {
+    /// PEEK the prior run's total loss (dropped + typed op-failures) across ALL
+    /// families WITHOUT clearing — so a failed boot append cannot erase loss
+    /// before it is durably recorded. Enumerates by prefix so rotated files and
+    /// every operation kind are included.
+    static func peekPriorLoss() -> Int {
+      guard let all = diagDefaults?.dictionaryRepresentation() else { return 0 }
       var total = 0
-      for k in droppedKeys + opFailKeys {
-        total += diagDefaults?.integer(forKey: k) ?? 0
-        diagDefaults?.removeObject(forKey: k)
+      for (k, v) in all where k.hasPrefix(opFailPrefix) || k.hasPrefix(droppedPrefix) {
+        total += (v as? Int) ?? 0
       }
       return total
+    }
+
+    /// ACK (clear) the loss counters — call ONLY after the boot event that
+    /// records `peekPriorLoss()` has been durably appended.
+    static func ackPriorLoss() {
+      guard let all = diagDefaults?.dictionaryRepresentation() else { return }
+      for k in all.keys where k.hasPrefix(opFailPrefix) || k.hasPrefix(droppedPrefix) {
+        diagDefaults?.removeObject(forKey: k)
+      }
     }
   }
 #endif

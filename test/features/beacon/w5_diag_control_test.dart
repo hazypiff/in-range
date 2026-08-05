@@ -64,7 +64,62 @@ void main() {
 
   test('setDiagRunSecret is a no-op for an empty secret (no channel call)',
       () async {
-    await bb.setDiagRunSecret('');
+    final ack = await bb.setDiagRunSecret('');
     expect(calls, isEmpty);
+    expect(ack, isNull, reason: 'empty secret ⇒ null ack ⇒ NOT key-ready');
+  });
+
+  // A3 key-ready gate: a successful provision round-trips the native ack so the
+  // caller can confirm `ok:true` before enabling W5 (startup-readiness).
+  test('setDiagRunSecret returns the native provisioning ack (key-ready)',
+      () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      return <String, dynamic>{'ok': true, 'rotated': false, 'keyEpoch': 3};
+    });
+    final ack = await bb.setDiagRunSecret('a1' * 32); // 64 hex
+    expect(ack, isNotNull);
+    expect(ack!['ok'], isTrue, reason: 'provisioned ⇒ key-ready');
+    expect(ack['keyEpoch'], 3);
+  });
+
+  // A3: a REJECTED provision (bad hex) round-trips `ok:false` — NOT null — so the
+  // gate holds W5 OFF (fail closed) rather than treating it as ready.
+  test('setDiagRunSecret surfaces a rejected provision as ok:false', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      return <String, dynamic>{'ok': false};
+    });
+    final ack = await bb.setDiagRunSecret('zz'); // invalid → native rejects
+    expect(ack, isNotNull);
+    expect(ack!['ok'], isFalse,
+        reason: 'rejected ⇒ NOT key-ready ⇒ W5 stays OFF');
+  });
+
+  // A3: a channel/persistence FAILURE fails closed to a null ack (never a throw
+  // that could leave provisioning ambiguous), so the gate holds W5 OFF.
+  test('setDiagRunSecret fails closed to null on a channel error', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      throw PlatformException(code: 'boom');
+    });
+    final ack = await bb.setDiagRunSecret('a1' * 32);
+    expect(ack, isNull, reason: 'persistence failure ⇒ null ⇒ NOT key-ready');
+  });
+
+  // A3: repeated provisioning is forwarded each time (a re-key on restart must
+  // reach native, not be swallowed) and the last ack governs readiness.
+  test('setDiagRunSecret forwards every (repeated) provision', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      return <String, dynamic>{'ok': true, 'rotated': calls.length > 1};
+    });
+    await bb.setDiagRunSecret('a1' * 32);
+    final second = await bb.setDiagRunSecret('b2' * 32);
+    expect(calls, hasLength(2), reason: 'both provisions reach native');
+    expect(second!['rotated'], isTrue, reason: 'a changed key reports rotation');
   });
 }
