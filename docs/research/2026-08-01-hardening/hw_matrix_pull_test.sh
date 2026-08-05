@@ -373,5 +373,22 @@ EOF
 }
 run_case noepoch 23 setup_noepoch        # missing mandatory 'epoch'
 
+# 23. ALL-DOTS CASE: `.` passes the token regex + has no `..`, but resolves OUT
+# to the evidence ROOT — must be rejected before any path op, leaving the root
+# intact.
+SB_DOT="$(make_sandbox)"; valid_fixtures "$SB_DOT"
+mkdir -p "$SB_DOT/work/hardware_evidence/realcase"
+: > "$SB_DOT/work/hardware_evidence/realcase/keep"
+( cd "$SB_DOT/work" && HW_MATRIX_XCRUN="$SB_DOT/bin/xcrun" FIXTURES="$SB_DOT/fixtures" \
+  XCRUN_MARKER="$SB_DOT/m" INRANGE_DIAG_RUN_SECRET="$SECRET" \
+  bash ./hw_matrix_pull.sh test-udid iphone14 "." ) >/dev/null 2>&1
+dot_rc=$?
+if [ "$dot_rc" -eq 6 ] && [ -f "$SB_DOT/work/hardware_evidence/realcase/keep" ] \
+   && [ ! -f "$SB_DOT/m" ]; then
+  ok "all-dots CASE ('.') rejected; evidence root untouched"
+else
+  bad "all-dots CASE guard failed (rc=$dot_rc root=$([ -d "$SB_DOT/work/hardware_evidence" ] && echo intact || echo MOVED))"
+fi
+
 echo "== $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]

@@ -48,9 +48,13 @@ UDID="${1:?UDID required}"; LABEL="${2:?label required}"; CASE="${3:?case requir
 # CASE=../../victim). Validated BEFORE any path is built or device is touched.
 for tok in "LABEL:$LABEL" "CASE:$CASE"; do
   name="${tok%%:*}"; val="${tok#*:}"
+  # Must be a token [A-Za-z0-9._-]+, contain no '..', and NOT be an all-dots
+  # component ('.' / '..' / '...'): '.' resolves OUT to the evidence root itself,
+  # which the legacy migration would then move away. Reject before any path op.
   if ! printf '%s' "$val" | grep -Eq '^[A-Za-z0-9._-]+$' \
-     || printf '%s' "$val" | grep -q '\.\.'; then
-    echo "ERROR: $name must match [A-Za-z0-9._-]+ with no '..' (got: '$val')." >&2
+     || printf '%s' "$val" | grep -q '\.\.' \
+     || printf '%s' "$val" | grep -Eq '^\.+$'; then
+    echo "ERROR: $name must be [A-Za-z0-9._-]+, not '..'/all-dots (got: '$val')." >&2
     exit 6
   fi
 done
