@@ -1,0 +1,75 @@
+• Independent Review — Wave A (b1a292b..0af42a1)
+══════════════════════════════════════════════
+
+Read the full diff directly. Traced every predicate against the code and the t
+wo committed harnesses (hw_matrix_pull_test.sh, W5DiagTests.swift additions),
+including the new lock/publish path line by line.
+
+Per-predicate verdicts
+──────────────────────
+
+A1 — real-quiescence destruction serialization: PASS isW5Quiescent (Background
+Beacon.swift +30) reads live state only (w5/inflight/w5Link.isQuiescent incl.
+persistTimer), deliberately ignoring the persisted flag. persistTimer = nil is
+cleared only after the persist write completes (W5LinkController.swift +812),
+closing the spurious-quiescent window. destroySessionSecret routes through res
+etCaseLocked inside eventWriter.withLock and aborts — secret retained, keyEpoc
+h unadvanced — on any wipe failure (W5Diag.swift +243). Covered by testDestroy
+GatedByRealControllerQuiescence and testDestroyAbortsAndRetainsSecretWhenWipeF
+ails.
+
+A2 — reset wipes every family incl. rotations, secret retained, serialized, RS
+SI ack epoch-guarded: PASS resetCaseLocked iterates [eventWriter, wakeWriter,
+rssiWriter].wipeLocked(), and inventory is [url, rotatedURL] — all six artifac
+ts. Transactional: any wipe failure returns ok:false with no epoch rotation, n
+o control clear, no seq reset, no ack. Secret retained on all paths. lastDrain
+CaseEpoch captured at drain and checked in ackFileSamples under the same sessi
+on lock that reset's wipe takes (W5LinkController.swift +980, +1066). Covered
+by testResetCaseWipesEveryFamilyIncludingRotations, testWipeFailureDuringReset
+RetainsTypedCounter, testRssiAckDiscardedAfterCaseReset, testConcurrentResetAn
+dEmitSerializeNoTornLine.
+
+A3 — fail-closed native key gate, transactional rotation: PASS w5LinksEnabled
+= flag AND hasFleetKey (injected or provisioned, never the fallback). Rotation
+wipes old-key evidence before committing the new key; wipe failure → old key r
+etained, epoch unadvanced, rotate-wipe-failed. Dart gate provisions and awaits
+the ack before start(payload), asserts the flag either way, and fails to null/
+OFF on channel error (beacon_service.dart +1018). 64-hex floor matches the pul
+ler contract (testProvisionRequires64HexMatchingPullerContract). Close-failure
+durability correctly forces ok=false so recordPriorLoss never acks an undurabl
+e record (W5EvidenceWriter.swift +120).
+
+A4 — strict staged puller incl. serialized 3-device merge: PASS Pre-contact se
+cret validation (≥64 even hex); LABEL/CASE token validation before any path op
+; partial-copy discard on devicectl failure; mandatory primary; strict JSONL s
+chema with no regex fallback, duplicate-key and strict-UTF-8 rejection, per-ru
+n seq monotonicity, intra-file epoch constancy, cross-rotation epoch equality
++ per-run seq ordering; residual-id post-scan; atomic symlink swap via os.repl
+ace (no follow); tamper-safe superseded-rev cleanup; legacy dir move-aside wit
+h restore-on-failure; and the new per-case mkdir lock serializes seed→swap so
+concurrent same-case publishers cannot lost-update (test 31 proves both labels
+survive; test 32 proves fail-closed exit 7 on a held lock). Lock released via
+EXIT trap on all paths after acquisition.
+
+A5 — no controlling skip: PASS testHandleUsesProvisionedRunSecret provisions a
+known key deterministically and asserts handle equality plus re-key divergence
+— no XCTSkip, no environment conditional. Dart A3 tests assert ack round-trip,
+rejection, and channel-error fail-closed.
+
+Remaining defects
+─────────────────
+
+none.
+
+(Checked and cleared as non-defects: set -e &&-list semantics in the migration
+/cleanup guards are correct — non-final test commands can't exit, final comman
+ds failing is the intended fail-closed path; the python chain-check exit codes
+propagate through set -e even where the explicit rc=$? is redundant; the seed-
+merge dereferences <case> by design — <case> is only ever produced by this too
+l pointing inside OUT_ROOT, and a foreign symlink is post-hoc tree tampering e
+quivalent to editing any published file, with the deletion direction already g
+uarded per test 14; in_range_local.db is pulled but intentionally unpublished,
+wiped with staging.)
+
+OVERALL = APPROVE
+

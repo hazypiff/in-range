@@ -1,0 +1,9 @@
+A1 VERDICT = PASS  
+A2 VERDICT = PASS  
+A3 VERDICT = PASS  
+A4 VERDICT = PASS  
+A5 VERDICT = PASS  
+
+Complete list of remaining defects: none.
+
+OVERALL = APPROVE
