@@ -184,23 +184,34 @@ enum W5Diag {
       for w in [eventWriter, wakeWriter, rssiWriter] {
         for (name, ok) in w.wipeLocked() { wiped[name] = ok }
       }
+      let allWiped = !wiped.values.contains(false)
+      // TRANSACTIONAL on the wipe. If ANY artifact could not be wiped, the reset
+      // FAILS CLOSED: do NOT rotate the case/run epoch, clear controls, reset the
+      // sequence, remove the RSSI offset, or ack loss. Advancing the epoch while
+      // a stranded old-epoch file survives would let later records land in it
+      // under a new epoch (mixed-epoch evidence). The typed wipe-failure counters
+      // are RETAINED so the failure surfaces at the next boot; ok:false is
+      // returned with the per-file map. State is left as-was (minus whatever
+      // partial wipe already succeeded, which only removes evidence — never
+      // rotates identity).
+      if !allWiped {
+        return [
+          "ok": false, "caseEpoch": caseEpoch, "runEpoch": runEpoch,
+          "keyEpoch": keyEpoch, "secretRetained": true, "reason": reason,
+          "wiped": wiped,
+        ]
+      }
       diagDefaults?.removeObject(forKey: "bb.w5rssi.off")  // RSSI drain offset
       faultPeerHandle = nil
       helloDelayPending = nil
       seqCounter = 0
-      let allWiped = !wiped.values.contains(false)
-      // Clear the loss/op-failure counters ONLY when every wipe succeeded. If a
-      // wipe FAILED, its typed counter (just recorded by wipeLocked) must be
-      // RETAINED so the failure surfaces at the next boot's loss record — acking
-      // here would erase the very failure this reset produced (A4 retained typed
-      // accounting).
-      if allWiped { W5EvidenceWriter.ackPriorLoss() }
+      W5EvidenceWriter.ackPriorLoss()
       let newCase = caseEpoch + 1
       diagDefaults?.set(newCase, forKey: caseEpochKey)
       diagDefaults?.set(runEpoch + 1, forKey: runEpochKey)  // reset run state
       // SECRET RETAINED (owner ruling).
       return [
-        "ok": allWiped, "caseEpoch": newCase, "runEpoch": runEpoch,
+        "ok": true, "caseEpoch": newCase, "runEpoch": runEpoch,
         "keyEpoch": keyEpoch, "secretRetained": true, "reason": reason,
         "wiped": wiped,
       ]

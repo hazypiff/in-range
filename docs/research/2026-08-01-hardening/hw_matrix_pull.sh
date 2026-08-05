@@ -332,6 +332,26 @@ fi
 # evidence, never nothing. The prior data dir is removed only AFTER the swap.
 mkdir -p "$OUT_ROOT"
 REV="$(mktemp -d "${OUT}.rev.XXXXXX")"   # fresh versioned data dir for this run
+# THREE-DEVICE MATRIX: a case ACCUMULATES every device label (files are named
+# `<label>_<artifact>`). Seed the new revision with the OTHER labels' already-
+# published, already-validated files (dereferencing the existing `<case>`), then
+# overlay THIS label's fresh files below — so publishing one device NEVER deletes
+# another device's evidence in the same case. Files are matched by the
+# `<label>_` prefix; this label's prior files are the ones being replaced.
+if [ -d "$OUT" ]; then
+  for existing in "$OUT"/*; do
+    [ -e "$existing" ] || continue
+    eb="$(basename "$existing")"
+    case "$eb" in
+      "${LABEL}_"*) : ;;                    # this label's prior files → replaced
+      *) cp "$existing" "$REV"/ || {        # another device's files → preserve
+           rm -rf "$REV"
+           echo "ERROR: could not carry over an existing label's evidence." >&2
+           exit 5
+         } ;;
+    esac
+  done
+fi
 # Fail closed on a staging-copy error (disk full, permission, transient I/O) —
 # never publish a partial revision, and re-assert the mandatory primary is
 # actually present in the staged rev before it can be swapped into place.

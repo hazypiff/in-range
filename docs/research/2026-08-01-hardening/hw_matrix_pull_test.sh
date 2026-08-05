@@ -447,5 +447,31 @@ EOF
 }
 run_case dupkey 25 setup_dupkey
 
+# 29-30. THREE-DEVICE MATRIX: a case accumulates every device label. Publishing a
+# second device must PRESERVE the first's evidence, and re-publishing the first
+# must not delete the second.
+SB_MD="$(make_sandbox)"; valid_fixtures "$SB_MD"
+pub_dev() { ( cd "$SB_MD/work" && HW_MATRIX_XCRUN="$SB_MD/bin/xcrun" \
+  FIXTURES="$SB_MD/fixtures" XCRUN_MARKER="$SB_MD/m" \
+  INRANGE_DIAG_RUN_SECRET="$SECRET" \
+  bash ./hw_matrix_pull.sh test-udid "$1" caseMD ) >/dev/null 2>&1; }
+pub_dev iphone14; md1=$?
+pub_dev iphone13; md2=$?
+MDDIR="$SB_MD/work/hardware_evidence/caseMD"
+if [ "$md1" -eq 0 ] && [ "$md2" -eq 0 ] \
+   && [ -f "$MDDIR/iphone14_w5_events.jsonl" ] \
+   && [ -f "$MDDIR/iphone13_w5_events.jsonl" ]; then
+  ok "multi-device: both device labels accumulate in one case"
+else
+  bad "multi-device merge failed (md1=$md1 md2=$md2)"
+fi
+pub_dev iphone14; md3=$?   # re-publish device A
+if [ "$md3" -eq 0 ] && [ -f "$MDDIR/iphone14_w5_events.jsonl" ] \
+   && [ -f "$MDDIR/iphone13_w5_events.jsonl" ]; then
+  ok "multi-device: re-publishing one device preserves the others"
+else
+  bad "multi-device re-publish dropped a device (md3=$md3)"
+fi
+
 echo "== $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]
