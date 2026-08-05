@@ -123,7 +123,12 @@ final class BackgroundBeacon: NSObject {
     // production binary this is a constant false — the whole W5/CA6E link
     // layer is inert regardless of what a prior diag install left in defaults.
     #if INRANGE_DIAG
-      return defaults.bool(forKey: Self.keyW5Links)
+      // Fail closed: W5 requires BOTH the opt-in flag AND a REAL fleet key
+      // (injected or Dart-provisioned — never the generated per-install
+      // fallback). So a stale persisted flag from a prior install cannot enable
+      // W5 under a random/absent key even if the Dart key-ready gate could not
+      // reach us (e.g. a swallowed setW5Links(false) on a flaky channel).
+      return defaults.bool(forKey: Self.keyW5Links) && W5Diag.hasFleetKey
     #else
       return false
     #endif

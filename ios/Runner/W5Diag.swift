@@ -171,11 +171,16 @@ enum W5Diag {
       faultPeerHandle = nil
       helloDelayPending = nil
       seqCounter = 0
-      W5EvidenceWriter.ackPriorLoss()  // clear all loss/op-failure counters
+      let allWiped = !wiped.values.contains(false)
+      // Clear the loss/op-failure counters ONLY when every wipe succeeded. If a
+      // wipe FAILED, its typed counter (just recorded by wipeLocked) must be
+      // RETAINED so the failure surfaces at the next boot's loss record — acking
+      // here would erase the very failure this reset produced (A4 retained typed
+      // accounting).
+      if allWiped { W5EvidenceWriter.ackPriorLoss() }
       let newCase = caseEpoch + 1
       diagDefaults?.set(newCase, forKey: caseEpochKey)
       diagDefaults?.set(runEpoch + 1, forKey: runEpochKey)  // reset run state
-      let allWiped = !wiped.values.contains(false)
       // SECRET RETAINED (owner ruling).
       return [
         "ok": allWiped, "caseEpoch": newCase, "runEpoch": runEpoch,
@@ -355,6 +360,19 @@ enum W5Diag {
       // here is one the whole evidence chain accepts.
       guard let hex, hex.count >= 64, hex.count % 2 == 0 else { return nil }
       return hexToData(hex)
+    }
+
+    /// True iff a REAL fleet key is in place — an injected env secret OR a
+    /// Dart-provisioned one — NOT the generated per-install fallback. W5 link
+    /// enablement is gated on this so a stale persisted `w5LinksEnabled` flag can
+    /// never enable W5 activity under a random/absent key even if the Dart
+    /// key-ready gate could not reach native (fail closed at the native level).
+    static var hasFleetKey: Bool {
+      if validHex(ProcessInfo.processInfo.environment["INRANGE_DIAG_RUN_SECRET"])
+        != nil {
+        return true
+      }
+      return validHex(diagDefaults?.string(forKey: provisionedSecretKey)) != nil
     }
 
     /// The PERSISTED/injected secret WITHOUT generating a fallback — used to

@@ -204,29 +204,32 @@ if grep -rEln \
   exit 3
 fi
 
-# --- 6. ATOMIC PUBLISH ------------------------------------------------------
-# Build the full new dir in a sibling staging dir, then swap it into place with
-# renames only. The prior published dir is moved aside FIRST and kept until the
-# new dir is confirmed in place; if the final rename fails, the prior dir is
-# restored — so a failed publish never leaves NO evidence.
+# --- 6. ATOMIC PUBLISH (symlink swap) ---------------------------------------
+# `<case>` is a SYMLINK to a versioned data dir. Publishing = build the full new
+# data dir, then repoint the symlink with a SINGLE rename(2). rename is atomic
+# and replaces the prior symlink in place, so there is NEVER a moment where
+# `<case>` is absent or half-written — a concurrent reader, a committer, or a
+# process kill always sees either the old complete evidence or the new complete
+# evidence, never nothing. The prior data dir is removed only AFTER the swap.
 mkdir -p "$OUT_ROOT"
-PUB_TMP="$(mktemp -d "$OUT_ROOT/.pub.${CASE}.XXXXXX")"
-cp "$SAN"/* "$PUB_TMP"/ 2>/dev/null || true
-PREV=""
-if [ -d "$OUT" ]; then
-  PREV="${OUT}.prev.$$"
-  mv "$OUT" "$PREV"           # keep the prior evidence aside, do not delete yet
-fi
-if mv "$PUB_TMP" "$OUT"; then  # atomic rename on the same filesystem
-  [ -n "$PREV" ] && rm -rf "$PREV"
+REV="$(mktemp -d "${OUT}.rev.XXXXXX")"   # fresh versioned data dir for this run
+cp "$SAN"/* "$REV"/ 2>/dev/null || true
+PREV_REV=""
+[ -L "$OUT" ] && PREV_REV="$(readlink "$OUT")"
+# One-time migration: an older run may have left `<case>` as a real dir.
+if [ -e "$OUT" ] && [ ! -L "$OUT" ]; then rm -rf "$OUT"; fi
+LINKTMP="${OUT}.link.$$"
+ln -s "$(basename "$REV")" "$LINKTMP"
+if mv "$LINKTMP" "$OUT"; then            # atomic rename: replaces prior symlink
+  if [ -n "$PREV_REV" ] && [ "$PREV_REV" != "$(basename "$REV")" ]; then
+    rm -rf "${OUT_ROOT}/${PREV_REV}"     # drop the superseded rev after the swap
+  fi
 else
-  # Restore the prior evidence rather than leaving the case unpublished.
-  [ -n "$PREV" ] && mv "$PREV" "$OUT"
-  rm -rf "$PUB_TMP"
-  echo "ERROR: publish rename failed; prior evidence restored." >&2
+  rm -rf "$LINKTMP" "$REV"
+  echo "ERROR: publish symlink swap failed; prior evidence untouched." >&2
   exit 4
 fi
 
 echo "Raw (uncommitted, wiped on exit): $RAW"
-echo "Sanitized + validated (commit-safe): $OUT"
+echo "Sanitized + validated (commit-safe): $OUT -> $(readlink "$OUT")"
 ls -1 "$OUT"

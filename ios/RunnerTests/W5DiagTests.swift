@@ -174,6 +174,9 @@ final class W5DiagTests: XCTestCase {
     func testDestroyGatedByRealControllerQuiescence() {
       let bb = BackgroundBeacon()
       withExtendedLifetime(bb) {
+        // A real fleet key must be provisioned for W5 to be enable-able (native
+        // fail-closed gate) so the seed drives the REAL w5Link path.
+        W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))
         bb.testEnableW5Links()
         XCTAssertTrue(bb.isW5Quiescent, "no links yet ⇒ quiescent")
         bb.w5Link.testSeedOutboundLink(
@@ -203,6 +206,25 @@ final class W5DiagTests: XCTestCase {
         let ok = W5Diag.destroySessionSecret(w5Quiescent: bb.isW5Quiescent)
         XCTAssertEqual(ok["ok"] as? Bool, true, "destruction ALLOWED once quiescent")
         XCTAssertEqual(ok["secretDestroyed"] as? Bool, true)
+      }
+    }
+
+    // A3 fail-closed at the NATIVE level: the W5-links gate requires BOTH the
+    // opt-in flag AND a real fleet key (injected or provisioned — never the
+    // generated fallback). A stale flag alone must NOT enable W5, so a lost
+    // setW5Links(false) can never leave W5 emitting under a random/absent key.
+    func testW5LinksRequiresRealFleetKey() {
+      let bb = BackgroundBeacon()
+      withExtendedLifetime(bb) {
+        // Clear any provisioned key (destroy is allowed while quiescent).
+        _ = W5Diag.destroySessionSecret(w5Quiescent: true)
+        bb.testEnableW5Links()
+        XCTAssertFalse(
+          bb.w5LinksEnabled,
+          "flag set but no fleet key ⇒ W5 stays OFF (fail closed)")
+        W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))
+        XCTAssertTrue(
+          bb.w5LinksEnabled, "flag + provisioned fleet key ⇒ W5 enabled")
       }
     }
 
@@ -270,6 +292,30 @@ final class W5DiagTests: XCTestCase {
       }
       XCTAssertFalse(W5Diag.isFaultArmed, "fault cleared in the same boundary")
       XCTAssertEqual(W5Diag.consumeHelloDelay(), 0, "delay cleared")
+    }
+
+    // A4 retained accounting: if a wipe FAILS during resetCase, its typed counter
+    // must SURVIVE the reset (not be acked away in the same call), so the failure
+    // surfaces at the next boot's loss record. resetCase's `ok` is false too.
+    func testWipeFailureDuringResetRetainsTypedCounter() {
+      W5EvidenceWriter.resetInjectedFailures()
+      let d = UserDefaults(suiteName: "io.inrange.diag")
+      let key = "bb.evwrite.opfail.w5_events.jsonl.wipe"
+      d?.removeObject(forKey: key)
+      // Ensure the events file exists so a wipe is actually attempted.
+      let events = FileManager.default.urls(
+        for: .documentDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("w5_events.jsonl")
+      try? "x\n".write(to: events, atomically: true, encoding: .utf8)
+      W5EvidenceWriter.injectedFailures["w5_events.jsonl.wipe"] = 1
+      let ack = W5Diag.resetCase()
+      XCTAssertEqual(ack["ok"] as? Bool, false, "a failed wipe ⇒ reset not fully ok")
+      XCTAssertGreaterThan(
+        d?.integer(forKey: key) ?? 0, 0,
+        "typed wipe failure RETAINED (not acked away by the same reset)")
+      W5EvidenceWriter.resetInjectedFailures()
+      d?.removeObject(forKey: key)
+      try? FileManager.default.removeItem(at: events)
     }
 
     // B3: a short/odd/non-hex secret must NOT mutate state.

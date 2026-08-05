@@ -187,19 +187,26 @@ SB_ATOMIC="$(make_sandbox)"; valid_fixtures "$SB_ATOMIC"
   INRANGE_DIAG_RUN_SECRET="$SECRET" \
   bash ./hw_matrix_pull.sh test-udid iphone14 caseA ) >/dev/null 2>&1
 first_ok=$?
-# Now corrupt the primary and re-run the SAME case → should fail (exit 2)…
+CASEDIR="$SB_ATOMIC/work/hardware_evidence/caseA"
+# The published case is a SYMLINK (the atomic-swap mechanism) → a versioned rev.
+[ -L "$CASEDIR" ] && ok "published case is a symlink (atomic-swap target)" \
+  || bad "published case is not a symlink"
+link_before="$(readlink "$CASEDIR" 2>/dev/null)"
+# Now corrupt the primary and re-run the SAME case → fails at JSONL validation
+# (exit 11) BEFORE the publish step, so the symlink must be byte-for-byte intact.
 printf 'BROKEN\n' > "$SB_ATOMIC/fixtures/w5_events.jsonl"
-# …but a malformed (non-empty) primary reaches the JSONL validator (exit 11).
 ( cd "$SB_ATOMIC/work" && HW_MATRIX_XCRUN="$SB_ATOMIC/bin/xcrun" \
   FIXTURES="$SB_ATOMIC/fixtures" XCRUN_MARKER="$SB_ATOMIC/m" \
   INRANGE_DIAG_RUN_SECRET="$SECRET" \
   bash ./hw_matrix_pull.sh test-udid iphone14 caseA ) >/dev/null 2>&1
 second_rc=$?
+link_after="$(readlink "$CASEDIR" 2>/dev/null)"
 if [ "$first_ok" -eq 0 ] && [ "$second_rc" -ne 0 ] \
-   && [ -f "$SB_ATOMIC/work/hardware_evidence/caseA/iphone14_w5_events.jsonl" ]; then
-  ok "atomic publish: prior good output survives a later failed run"
+   && [ -f "$CASEDIR/iphone14_w5_events.jsonl" ] \
+   && [ "$link_before" = "$link_after" ]; then
+  ok "atomic publish: failed run leaves the prior symlink + evidence untouched"
 else
-  bad "atomic publish violated (first=$first_ok second=$second_rc)"
+  bad "atomic publish violated (first=$first_ok second=$second_rc link:$link_before→$link_after)"
 fi
 
 echo "== $PASS passed, $FAIL failed =="

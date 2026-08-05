@@ -161,6 +161,9 @@ final class W5TeardownTests: XCTestCase {
     func testChannelDropPeerByTokenCommittedHit() {
       let bb = BackgroundBeacon()
       withExtendedLifetime(bb) {
+        // W5 is enable-able only with a real fleet key provisioned (native
+        // fail-closed gate), so the seed exercises the REAL w5Link path.
+        W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))
         bb.testEnableW5Links()
         bb.w5Link.testSeedOutboundLink(
           peripheralID: UUID(), myCand: "cand-a", peerCand: "cand-b",
