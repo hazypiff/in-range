@@ -305,5 +305,26 @@ else
   bad "partial primary mishandled (rc=$pp_rc published=$([ -e "$SB_PP/work/hardware_evidence/casePP" ] && echo YES || echo no))"
 fi
 
+# 17-18. EPOCH CONSTANCY: keyEpoch/runEpoch must be constant within a file AND
+# across the rotation — a rotation is size-based within one {case,key,run} epoch.
+setup_keymix() {
+  cat > "$1/fixtures/w5_events.jsonl" <<'EOF'
+{"seq":1,"event":"a","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"ts":1}
+{"seq":2,"event":"b","caseEpoch":2,"keyEpoch":9,"runEpoch":5,"ts":2}
+EOF
+}
+run_case keymix_infile 16 setup_keymix   # keyEpoch changes within the file
+setup_runmix_xfile() {
+  cat > "$1/fixtures/w5_events.1.jsonl" <<'EOF'
+{"seq":1,"event":"a","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"ts":1}
+EOF
+  cat > "$1/fixtures/w5_events.jsonl" <<'EOF'
+{"seq":2,"event":"b","caseEpoch":2,"keyEpoch":1,"runEpoch":6,"ts":2}
+EOF
+  printf '{"token":"aabbccddeeff00112233445566778899","rssi":-60,"ts":1}\n' \
+    > "$1/fixtures/w5_rssi_log.jsonl"
+}
+run_case runmix_xfile 21 setup_runmix_xfile   # runEpoch differs across rotation
+
 echo "== $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]

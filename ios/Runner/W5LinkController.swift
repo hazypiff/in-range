@@ -784,9 +784,6 @@ final class W5LinkController {
   }
 
   private func persistNow() {
-    // The scheduling timer is one-shot; clear the reference so a completed
-    // persist no longer counts as pending W5 work (isQuiescent, A1).
-    persistTimer = nil
     let snapshot = ownership.snapshot()
     var linkMeta: [String: [String: Any]] = [:]
     for (id, link) in outLinks {
@@ -812,6 +809,11 @@ final class W5LinkController {
       "candidateByAlias": candidateByAlias,
     ]
     bb.defaults.set(payload, forKey: Self.keyW5Snapshot)
+    // Clear the one-shot timer reference ONLY AFTER the persist write completes,
+    // so isQuiescent reports "not quiescent" for the entire duration of the
+    // write — a concurrent destroy can never see a spurious-quiescent state
+    // while real persistence work is still in flight (A1).
+    persistTimer = nil
   }
 
   private func clearPersistedState() {

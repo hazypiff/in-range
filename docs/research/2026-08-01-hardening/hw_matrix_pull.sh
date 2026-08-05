@@ -124,7 +124,8 @@ def fatal(code, msg):
     sys.stderr.write("FATAL(%s): %s [%s]\n" % (code, msg, os.path.basename(src)))
     sys.exit(code)
 out, n = [], 0
-prev_seq, case_epoch = None, None
+prev_seq = None
+const_epochs = {}   # caseEpoch / keyEpoch / runEpoch must be constant in a file
 for i, line in enumerate(open(src, 'r', errors='replace'), start=1):
     s = line.rstrip('\n')
     if not s:
@@ -143,17 +144,19 @@ for i, line in enumerate(open(src, 'r', errors='replace'), start=1):
             fatal(14, "non-increasing seq (%r after %r) at line %d"
                   % (seq, prev_seq, i))
         prev_seq = seq
-        ce = obj.get("caseEpoch")
-        if not isinstance(ce, int) or isinstance(ce, bool):
-            fatal(15, "missing/invalid integer 'caseEpoch' at line %d" % i)
-        if case_epoch is None:
-            case_epoch = ce
-        elif ce != case_epoch:
-            fatal(16, "caseEpoch changed within file (%r != %r) at line %d"
-                  % (ce, case_epoch, i))
-        for req in ("keyEpoch", "runEpoch"):
-            if not isinstance(obj.get(req), int) or isinstance(obj.get(req), bool):
-                fatal(17, "missing/invalid integer '%s' at line %d" % (req, i))
+        # caseEpoch, keyEpoch, and runEpoch are ALL constant within one evidence
+        # file: any case reset / key rotation / run reset WIPES the files, so a
+        # single file can never legitimately mix epochs. Enforce constancy (not
+        # merely the type) so an epoch-mixed stream cannot pass as a valid chain.
+        for req in ("caseEpoch", "keyEpoch", "runEpoch"):
+            v = obj.get(req)
+            if not isinstance(v, int) or isinstance(v, bool):
+                fatal(15, "missing/invalid integer '%s' at line %d" % (req, i))
+            if req not in const_epochs:
+                const_epochs[req] = v
+            elif v != const_epochs[req]:
+                fatal(16, "%s changed within file (%r != %r) at line %d"
+                      % (req, v, const_epochs[req], i))
     elif mode == "rssi":
         if not (isinstance(obj.get("token"), str)
                 and isinstance(obj.get("rssi"), int) and not isinstance(obj.get("rssi"), bool)
@@ -216,19 +219,25 @@ if [ -f "$SAN/${LABEL}_w5_events.1.jsonl" ]; then
   python3 - "$SAN/${LABEL}_w5_events.1.jsonl" "$SAN/${LABEL}_w5_events.jsonl" <<'PY'
 import sys, json
 def bounds(p):
-    seqs, epochs = [], set()
+    seqs = []
+    ep = {"caseEpoch": set(), "keyEpoch": set(), "runEpoch": set()}
     for line in open(p):
         line = line.strip()
         if not line:
             continue
         o = json.loads(line)
-        seqs.append(o["seq"]); epochs.add(o["caseEpoch"])
-    return min(seqs), max(seqs), epochs
+        seqs.append(o["seq"])
+        for k in ep:
+            ep[k].add(o[k])
+    return min(seqs), max(seqs), ep
 o_min, o_max, o_ep = bounds(sys.argv[1])   # rotated (older)
 c_min, c_max, c_ep = bounds(sys.argv[2])   # current (newer)
-if o_ep != c_ep:
-    sys.stderr.write("FATAL(21): caseEpoch differs across rotation %r vs %r\n"
-                     % (o_ep, c_ep)); sys.exit(21)
+# All three epochs must match across the rotation — a rotation is size-based
+# within ONE {case,key,run} epoch; any epoch change would have wiped both files.
+for k in ("caseEpoch", "keyEpoch", "runEpoch"):
+    if o_ep[k] != c_ep[k]:
+        sys.stderr.write("FATAL(21): %s differs across rotation %r vs %r\n"
+                         % (k, o_ep[k], c_ep[k])); sys.exit(21)
 if not (o_max < c_min):
     sys.stderr.write("FATAL(22): rotated max seq %d not < current min seq %d\n"
                      % (o_max, c_min)); sys.exit(22)
