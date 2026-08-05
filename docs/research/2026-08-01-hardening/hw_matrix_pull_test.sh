@@ -473,5 +473,34 @@ else
   bad "multi-device re-publish dropped a device (md3=$md3)"
 fi
 
+# 31. CONCURRENT PUBLISHERS: two device pulls for the SAME case at once must both
+# survive — the per-case lock serializes the read-copy-swap merge (no lost update).
+SB_CC="$(make_sandbox)"; valid_fixtures "$SB_CC"
+ccpub() { ( cd "$SB_CC/work" && HW_MATRIX_XCRUN="$SB_CC/bin/xcrun" \
+  FIXTURES="$SB_CC/fixtures" XCRUN_MARKER="$SB_CC/m" \
+  INRANGE_DIAG_RUN_SECRET="$SECRET" \
+  bash ./hw_matrix_pull.sh test-udid "$1" caseCC ) >/dev/null 2>&1; }
+ccpub iphone14 & p1=$!
+ccpub iphone13 & p2=$!
+wait "$p1"; wait "$p2"
+CCDIR="$SB_CC/work/hardware_evidence/caseCC"
+if [ -f "$CCDIR/iphone14_w5_events.jsonl" ] \
+   && [ -f "$CCDIR/iphone13_w5_events.jsonl" ]; then
+  ok "concurrent publishers: both device labels survive (per-case lock)"
+else
+  bad "concurrent publish lost a device"
+fi
+
+# 32. HELD LOCK: a publish fails closed rather than lost-update past a held lock.
+SB_HL="$(make_sandbox)"; valid_fixtures "$SB_HL"
+mkdir -p "$SB_HL/work/hardware_evidence/.lock.caseHL"
+( cd "$SB_HL/work" && HW_MATRIX_XCRUN="$SB_HL/bin/xcrun" FIXTURES="$SB_HL/fixtures" \
+  XCRUN_MARKER="$SB_HL/m" INRANGE_DIAG_RUN_SECRET="$SECRET" \
+  HW_MATRIX_LOCK_TRIES=2 \
+  bash ./hw_matrix_pull.sh test-udid iphone14 caseHL ) >/dev/null 2>&1
+hl_rc=$?
+[ "$hl_rc" -eq 7 ] && ok "held publish lock ⇒ fail closed (exit 7)" \
+  || bad "held lock not honored (rc=$hl_rc)"
+
 echo "== $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]

@@ -323,7 +323,7 @@ if grep -rEln \
   exit 3
 fi
 
-# --- 6. ATOMIC PUBLISH (symlink swap) ---------------------------------------
+# --- 6. ATOMIC PUBLISH (per-case lock + symlink swap) -----------------------
 # `<case>` is a SYMLINK to a versioned data dir. Publishing = build the full new
 # data dir, then repoint the symlink with a SINGLE rename(2). rename is atomic
 # and replaces the prior symlink in place, so there is NEVER a moment where
@@ -331,6 +331,26 @@ fi
 # process kill always sees either the old complete evidence or the new complete
 # evidence, never nothing. The prior data dir is removed only AFTER the swap.
 mkdir -p "$OUT_ROOT"
+# The 3-device merge is a read-copy-swap: it seeds the new revision from the
+# CURRENT `<case>`. Two publishers of the SAME case running concurrently could
+# each seed from the same prior revision and lost-update each other on swap. So
+# serialize the ENTIRE seed-through-swap per case with an atomic mkdir lock
+# (portable; no flock dependency). Bounded spin, then fail closed.
+LOCKDIR="$OUT_ROOT/.lock.${CASE}"
+lock_tries=0
+lock_max="${HW_MATRIX_LOCK_TRIES:-600}"   # ~60s default (override for tests)
+until mkdir "$LOCKDIR" 2>/dev/null; do
+  lock_tries=$((lock_tries + 1))
+  if [ "$lock_tries" -gt "$lock_max" ]; then   # stale lock needs manual removal
+    echo "ERROR: could not acquire the publish lock for case '$CASE'" >&2
+    echo "       ($LOCKDIR) — another pull may be publishing, or a prior pull" >&2
+    echo "       crashed; remove the lock dir manually if stale." >&2
+    exit 7
+  fi
+  sleep 0.1
+done
+# Release the lock (and wipe staging) on ANY exit from here on.
+trap 'rmdir "$LOCKDIR" 2>/dev/null || :; rm -rf "$STAGE"' EXIT
 REV="$(mktemp -d "${OUT}.rev.XXXXXX")"   # fresh versioned data dir for this run
 # THREE-DEVICE MATRIX: a case ACCUMULATES every device label (files are named
 # `<label>_<artifact>`). Seed the new revision with the OTHER labels' already-
