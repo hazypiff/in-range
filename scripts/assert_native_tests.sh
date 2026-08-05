@@ -43,10 +43,12 @@ while IFS= read -r line; do
   [ -n "$line" ] || continue
   HAVE_SUMMARY=1
   n="$(printf '%s' "$line" | grep -Eo 'Executed [0-9]+' | grep -Eo '[0-9]+')"
-  m="$(printf '%s' "$line" | grep -Eo 'with [0-9]+ failures' | grep -Eo '[0-9]+')"
-  [ "${m:-0}" -eq 0 ] || fail "a summary line reports ${m} failures in $LOG"
+  m="$(printf '%s' "$line" | grep -Eo 'with [0-9]+ failures?' | grep -Eo '[0-9]+')"
+  [ "${m:-0}" -eq 0 ] || fail "a summary line reports ${m} failure(s) in $LOG"
   [ "${n:-0}" -le "$DISCOVERED" ] || DISCOVERED="${n:-0}"   # keep the max (aggregate)
-done < <(grep -Eo 'Executed [0-9]+ tests?, with [0-9]+ failures' "$LOG")
+  # Match singular AND plural forms ("1 test, with 1 failure") so a real failing
+  # run can never evade summary parsing on grammar alone (codex A5 re-review).
+done < <(grep -Eo 'Executed [0-9]+ tests?, with [0-9]+ failures?' "$LOG")
 
 if [ "$HAVE_SUMMARY" -eq 1 ]; then
   [ "$DISCOVERED" -eq "$PASSED_LINES" ] \
