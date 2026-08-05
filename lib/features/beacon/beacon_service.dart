@@ -1027,10 +1027,17 @@ class BeaconService {
       if (AppConfig.kDiagBuild) {
         final ack = await _bgBeacon.setDiagRunSecret(AppConfig.diagRunSecret);
         final keyReady = ack != null && ack['ok'] == true;
-        // Assert the flag explicitly either way (idempotent) so a stale native
-        // flag from a prior install cannot leave W5 enabled under an
-        // unprovisioned key.
-        await _bgBeacon.setW5Links(AppConfig.w5LinksEnabled && keyReady);
+        // Assert the flag explicitly either way (idempotent) and VERIFY the
+        // native side confirmed it (R5). A failed provision already forced the
+        // flag OFF natively; here we also fail closed if the requested-OFF was
+        // not acknowledged — never assume a swallowed disable succeeded.
+        final want = AppConfig.w5LinksEnabled && keyReady;
+        final confirmed = await _bgBeacon.setW5Links(want);
+        if (!want && confirmed != false) {
+          debugPrint(
+              'W5 links: requested OFF but native did not confirm OFF '
+              '(confirmed=$confirmed) — native gate still requires a fleet key');
+        }
         if (AppConfig.w5LinksEnabled && !keyReady) {
           debugPrint('W5 links held OFF: fleet key not provisioned (fail-closed)');
         }

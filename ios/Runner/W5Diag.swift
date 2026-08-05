@@ -114,6 +114,25 @@ enum W5Diag {
       // ever be written with the new key into the old file/epoch, and a nil
       // in-memory cache after relaunch cannot hide a persisted key change.
       return eventWriter.withLock {
+        // PRECEDENCE (R5): an injected ENV fleet key is AUTHORITATIVE and
+        // IMMUTABLE — it always wins in persistedSecretLocked. So provisioning
+        // is meaningful under an env key ONLY if it MATCHES: same key ⇒
+        // idempotent (persist, but no wipe / no rotate); a DIFFERENT key would
+        // never take effect, so FAIL CLOSED BEFORE any wipe rather than wiping
+        // evidence + advancing keyEpoch for a key that cannot win.
+        if let env = envSecretData() {
+          if env == d {
+            runSecretLock.lock()
+            diagDefaults?.set(hex, forKey: provisionedSecretKey)
+            _cachedRunSecret = env
+            runSecretLock.unlock()
+            return [
+              "ok": true, "keyEpoch": keyEpoch, "rotated": false,
+              "note": "matches-env",
+            ]
+          }
+          return ["ok": false, "rejected": "env-key-immutable"]
+        }
         let prior = persistedSecretLocked()
         let changed = prior != nil && prior != d
         if changed {
@@ -228,6 +247,16 @@ enum W5Diag {
     #if INRANGE_DIAG
       return eventWriter.withLock {
         if !w5Quiescent { return ["ok": false, "rejected": "w5-active"] }
+        // PRECEDENCE (R5): an injected ENV fleet key is IMMUTABLE — it resolves
+        // fresh from the environment every launch and cannot be destroyed.
+        // Report that TRUTHFULLY (secretDestroyed:false, hasFleetKey stays true)
+        // rather than removing the defaults keys and falsely claiming success
+        // while the env key remains authoritative.
+        if envSecretData() != nil {
+          return [
+            "ok": false, "rejected": "env-key-immutable", "secretDestroyed": false,
+          ]
+        }
         let r = resetCaseLocked(reason: "destroy")  // wipe/clear/reset atomically
         // If the evidence could not be FULLY wiped, do NOT destroy the secret or
         // advance the key epoch: a stranded old-key artifact plus a destroyed
@@ -268,19 +297,21 @@ enum W5Diag {
   @discardableResult
   static func armFault(peerRaw: String?) -> [String: Any] {
     #if INRANGE_DIAG
-      // NO WILDCARD: a nil/empty/unresolvable target fails closed.
-      let armed: String? = eventWriter.withLock {
-        guard let h = handle("peer", peerRaw) else { return nil }
+      // The control-state mutation AND its acknowledgment event are ONE locked
+      // transaction (R5). Emitting the ack after releasing the lock let a reset
+      // interleave — leaving a new-case `armed` event while the state was
+      // actually disarmed. NO WILDCARD: a nil/empty/unresolvable target fails
+      // closed. emit() re-enters the recursive session lock harmlessly.
+      return eventWriter.withLock {
+        guard let h = handle("peer", peerRaw) else {
+          emit(.faultInject, role: .app, reason: "arm-rejected")
+          return ["ok": false, "rejected": "no-peer"]
+        }
         faultPeerHandle = h
-        return h
+        // Observable lifecycle: armed → fired (preAckDrop) → [disarmed].
+        emit(.faultInject, role: .outbound, peer: peerRaw, reason: "armed")
+        return ["ok": true, "armed": true, "peer": h]
       }
-      guard let armed else {
-        emit(.faultInject, role: .app, reason: "arm-rejected")
-        return ["ok": false, "rejected": "no-peer"]
-      }
-      // Observable lifecycle: armed → fired (preAckDrop) → [disarmed].
-      emit(.faultInject, role: .outbound, peer: peerRaw, reason: "armed")
-      return ["ok": true, "armed": true, "peer": armed]
     #else
       return ["ok": false]
     #endif
@@ -289,12 +320,13 @@ enum W5Diag {
   /// Disarm any pending fault (peer-scoped control cleanup between cases).
   static func disarmFault() {
     #if INRANGE_DIAG
-      let was = eventWriter.withLock {
-        let w = faultPeerHandle != nil
+      // Mutation + acknowledgment in ONE locked transaction (R5) — a reset can
+      // no longer interleave between clearing the state and its `disarmed` event.
+      eventWriter.withLock {
+        let was = faultPeerHandle != nil
         faultPeerHandle = nil
-        return w
+        if was { emit(.faultInject, role: .app, reason: "disarmed") }
       }
-      if was { emit(.faultInject, role: .app, reason: "disarmed") }
     #endif
   }
 
@@ -397,26 +429,35 @@ enum W5Diag {
       return hexToData(hex)
     }
 
+    /// TEST-ONLY override of the injected env fleet key (ProcessInfo.environment
+    /// is read-only in-process, so the env precedence can't otherwise be
+    /// exercised). nil = use the real environment.
+    static var testEnvSecretOverride: String?
+    /// The raw injected ENV fleet-key hex (test override, else the process env).
+    private static var envSecretHex: String? {
+      testEnvSecretOverride
+        ?? ProcessInfo.processInfo.environment["INRANGE_DIAG_RUN_SECRET"]
+    }
+    /// The injected ENV fleet key as Data if present AND valid — the single
+    /// authoritative, IMMUTABLE key at the top of the precedence order (R5).
+    static func envSecretData() -> Data? { validHex(envSecretHex) }
+
     /// True iff a REAL fleet key is in place — an injected env secret OR a
     /// Dart-provisioned one — NOT the generated per-install fallback. W5 link
     /// enablement is gated on this so a stale persisted `w5LinksEnabled` flag can
     /// never enable W5 activity under a random/absent key even if the Dart
     /// key-ready gate could not reach native (fail closed at the native level).
     static var hasFleetKey: Bool {
-      if validHex(ProcessInfo.processInfo.environment["INRANGE_DIAG_RUN_SECRET"])
-        != nil {
-        return true
-      }
+      if envSecretData() != nil { return true }
       return validHex(diagDefaults?.string(forKey: provisionedSecretKey)) != nil
     }
 
     /// The PERSISTED/injected secret WITHOUT generating a fallback — used to
     /// decide whether a newly-provisioned key actually differs from a prior one
-    /// (a nil in-memory cache must not hide a persisted key). nil = none yet.
+    /// (a nil in-memory cache must not hide a persisted key). Precedence: env
+    /// (authoritative, immutable) → provisioned → generated. nil = none yet.
     private static func persistedSecretLocked() -> Data? {
-      if let d = validHex(ProcessInfo.processInfo.environment["INRANGE_DIAG_RUN_SECRET"]) {
-        return d
-      }
+      if let d = envSecretData() { return d }
       if let d = validHex(diagDefaults?.string(forKey: provisionedSecretKey)) {
         return d
       }
@@ -475,7 +516,14 @@ enum W5Diag {
             m.baseAddress, m.count, &mac)
         }
       }
-      return mac.prefix(7).map { String(format: "%02x", $0) }.joined()  // 14 hex
+      // ONE canonical published representation for every domain handle:
+      // `id:<14hex>` (truncated HMAC-SHA256, domain-separated). The `id:` prefix
+      // is the SAME representation the puller emits when it hashes raw RSSI/wake
+      // identifiers, so an event id-field and its RSSI/wake counterpart for the
+      // same raw token are byte-identical strings — the cross-family join the
+      // evidence relies on (R1). Never a bare handle: a bare 14-hex in an event
+      // field and an `id:`-prefixed one in the RSSI log would never join.
+      return "id:" + mac.prefix(7).map { String(format: "%02x", $0) }.joined()
     }
 
     // Public epochs (non-secret) persisted so restoration keeps the same case.
@@ -540,15 +588,42 @@ enum W5Diag {
       fileName: "w5_rssi_log.jsonl", cap: 4 * 1024 * 1024, rotation: .external,
       lock: sessionLock)
 
+    /// Wipe EVERY evidence family's current + rotated artifact through the writer
+    /// inventory, under the one session lock — so the foreign-flavor boot wipe
+    /// removes w5_rssi_log.1.jsonl too and bumps the wipe generation (no silent
+    /// bypass of the writer abstraction) (R3).
+    static func wipeAllEvidenceFiles() {
+      eventWriter.withLock {
+        for w in [eventWriter, wakeWriter, rssiWriter] { _ = w.wipeLocked() }
+      }
+    }
+
     /// Public, RESETTABLE run epoch — `resetCase` rotates it (bootEpoch/runLabel
     /// are immutable process identity; this carries the reset run-state).
     static let runEpochKey = "bb.w5diag.runepoch"
     static var runEpoch: Int { diagDefaults?.integer(forKey: runEpochKey) ?? 0 }
   #endif
 
+  /// Append a wake line whose id is a peer HANDLE, deriving the handle AND
+  /// appending the line in ONE session transaction (R5). Deriving the handle
+  /// separately (shortHandle) and appending later was two lock acquisitions — a
+  /// rotation in between could append an OLD-key handle AFTER the new-case wipe.
+  /// Holding the session lock across derive+append blocks any concurrent
+  /// rotation, so the handle and the file epoch are consistent. Release no-op.
+  static func logWakeHandled(_ prefix: String, token raw: String?) {
+    #if INRANGE_DIAG
+      wakeWriter.withLock {
+        let h = handle("peer", raw) ?? "-"
+        _ = wakeWriter.appendLocked(
+          "\(Int(Date().timeIntervalSince1970 * 1000)) \(prefix) p=\(h)\n")
+      }
+    #endif
+  }
+
   /// Release-safe truncated handle for a raw id — for text logs (wake log) that
   /// must NOT carry raw token fragments. Returns "-" in a Release build and for
-  /// nil/empty ids, so call sites need no `#if`.
+  /// nil/empty ids, so call sites need no `#if`. Prefer `logWakeHandled` when the
+  /// handle is written to the wake log (atomic derive+append).
   static func shortHandle(_ raw: String?) -> String {
     #if INRANGE_DIAG
       return handle("peer", raw) ?? "-"

@@ -80,7 +80,15 @@ final class W5LinkController {
   /// no timers, no queued control frames. Used to prove real W5 quiescence
   /// before a destructive secret operation (A1).
   var isQuiescent: Bool {
-    outLinks.isEmpty && inLinks.isEmpty && leaseByHandle.isEmpty
+    // ownership.activeLeases is the AUTHORITATIVE live-encounter count. A
+    // link-down places an encounter in GRACE and removes its link/handle/timers;
+    // restoration can then restore that in-grace live encounter with NO handles
+    // and NO returned peripheral, leaving every adapter map/timer empty while a
+    // lease is still live. Checking only the adapter state (as before) reports a
+    // false quiescent and would authorize secret destruction while W5 is live —
+    // so quiescence REQUIRES zero active leases too (R4).
+    ownership.activeLeases == 0
+      && outLinks.isEmpty && inLinks.isEmpty && leaseByHandle.isEmpty
       && retryTimers.isEmpty && graceTimers.isEmpty && prevAliasTimers.isEmpty
       && pendingControl.isEmpty && myPrevTokenTimer == nil
       && persistTimer == nil  // a pending persist write is still live W5 work
@@ -555,6 +563,10 @@ final class W5LinkController {
     func testIsCommitted(alias: String) -> Bool {
       ownership.leaseForAlias(alias).map { ownership.isCommitted($0) } ?? false
     }
+    /// Force the persist write synchronously (bypass the 0.05s timer) so a test
+    /// can capture a specific in-flight state (e.g. an in-grace snapshot, R4).
+    func testForcePersist() { persistNow() }
+    var testGraceTimerCount: Int { graceTimers.count }
   #endif
 
   func inboundGone(_ central: CBCentral) {
@@ -878,6 +890,23 @@ final class W5LinkController {
         helloSent: (meta["helloSent"] as? Bool) ?? false,
         established: (meta["established"] as? Bool) ?? false)
     }
+
+    // Re-arm the grace deadline for every restored IN-GRACE encounter. A grace
+    // timer is controller-local (not persisted), so a restored live-in-grace
+    // encounter would otherwise linger forever with no expiry — leaving
+    // ownership.activeLeases > 0 permanently (R4). Account for the already-
+    // elapsed grace time; expire immediately if the window has already passed.
+    let now = Date().timeIntervalSince1970
+    for lease in ownership.leaseIds where ownership.isInGrace(lease) {
+      let elapsed = ownership.graceStartedAt(lease).map { now - $0 } ?? 0
+      let remaining = Self.reconnectGrace - elapsed
+      if remaining <= 0 {
+        W5Diag.emit(.graceExpiry, lease: lease, reason: "restoreExpired")
+        apply(ownership.onGraceExpiry(leaseId: lease))
+      } else {
+        scheduleGrace(lease, after: remaining)
+      }
+    }
   }
 
   /// Called from peripheralManagerIsReady — retry refused control notifies.
@@ -891,11 +920,11 @@ final class W5LinkController {
 
   // MARK: - timers
 
-  private func scheduleGrace(_ lease: String) {
+  private func scheduleGrace(_ lease: String, after interval: TimeInterval = W5LinkController.reconnectGrace) {
     W5Diag.emit(.graceEnter, lease: lease)
     graceTimers[lease]?.invalidate()
     graceTimers[lease] = Timer.scheduledTimer(
-      withTimeInterval: Self.reconnectGrace, repeats: false
+      withTimeInterval: max(0, interval), repeats: false
     ) { [weak self] _ in
       guard let self else { return }
       self.graceTimers.removeValue(forKey: lease)
@@ -971,18 +1000,14 @@ final class W5LinkController {
 
   // MARK: - W5 RSSI persistence (file-backed; survives suspension + cap)
 
-  private var rssiFileURL: URL {
-    FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-      .appendingPathComponent("w5_rssi_log.jsonl")
-  }
   /// Byte offsets (end of each line) of the last drain, for exact acking.
   private var lastDrainLineEnds: [UInt64] = []
-  /// caseEpoch captured at drain time. A case reset / destroy / key-rotation
-  /// bumps caseEpoch AND wipes the RSSI file, so if the epoch changed between a
-  /// drain and its ack, the pending offsets refer to the OLD (now-gone) file and
-  /// MUST be discarded — applying them to the fresh file would skip or delete
-  /// new-case samples (A2).
-  private var lastDrainCaseEpoch: Int = -1
+  /// The writer wipe generation captured at drain time. ANY wipe ATTEMPT (a case
+  /// reset / destroy / key-rotation, INCLUDING a partial-failed reset that leaves
+  /// caseEpoch unchanged) bumps the generation, so a late ack whose generation
+  /// no longer matches refers to stale/removed data and MUST be discarded —
+  /// never applied to a fresh file (skipping/deleting new-case samples). R3.
+  private var lastDrainWipeGen: Int = -1
 
   /// Live push when Dart can hear it; file-append otherwise. The 500-entry
   /// UserDefaults sighting buffer truncated the 07-29 soak to its last ~35
@@ -1019,43 +1044,50 @@ final class W5LinkController {
   }
 
   private func trimRssiFileIfNeeded() {
-    let url = rssiFileURL
-    guard let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size])
-        as? Int, size > Self.rssiFileCap,
-      let all = try? Data(contentsOf: url)
-    else { return }
-    // Keep the newest half, cut at a line boundary; consumed offset resets —
-    // Dart-side ingest tolerates re-delivery (pull-and-ack is at-least-once).
-    let half = all.suffix(all.count / 2)
-    if let nl = half.firstIndex(of: 0x0A) {
-      try? all.suffix(from: nl + 1).write(to: url)
-      bb.defaults.removeObject(forKey: Self.keyRssiOffset)
-      lastDrainLineEnds = []
-    }
+    #if INRANGE_DIAG
+      // stat/read/replace go THROUGH the writer — typed, injectable, and under
+      // the session lock (R3). The replace reapplies + read-back-verifies
+      // protection/backup (the old direct write did neither).
+      let w = W5Diag.rssiWriter
+      guard let size = w.statSizeLocked(), size > Self.rssiFileCap,
+        let all = w.readLocked()
+      else { return }
+      // Keep the newest half, cut at a line boundary; consumed offset resets —
+      // Dart-side ingest tolerates re-delivery (pull-and-ack is at-least-once).
+      let half = all.suffix(all.count / 2)
+      if let nl = half.firstIndex(of: 0x0A),
+        w.replaceLocked(Data(all.suffix(from: nl + 1))) {
+        bb.defaults.removeObject(forKey: Self.keyRssiOffset)
+        lastDrainLineEnds = []
+      }
+    #endif
   }
 
   /// Un-acked file samples, oldest first, for drainBufferedSightings. Serialized
   /// with append/trim so a concurrent trim can't move the file under the read.
   func drainFileSamples(max maxCount: Int = 8000) -> [[String: Any]] {
     rssiSerialized {
-      guard let all = try? Data(contentsOf: rssiFileURL) else { return [] }
-      let start = UInt64(bb.defaults.integer(forKey: Self.keyRssiOffset))
-      guard start < all.count else { return [] }
-      var out: [[String: Any]] = []
-      lastDrainLineEnds = []
       #if INRANGE_DIAG
-        lastDrainCaseEpoch = W5Diag.caseEpoch
-      #endif
-      var idx = Int(start)
-      while idx < all.count, out.count < maxCount {
-        guard let nl = all[idx...].firstIndex(of: 0x0A) else { break }
-        if let obj = try? JSONSerialization.jsonObject(with: all[idx..<nl]) as? [String: Any] {
-          out.append(obj)
-          lastDrainLineEnds.append(UInt64(nl + 1))
+        guard let all = W5Diag.rssiWriter.readLocked() else { return [] }
+        lastDrainWipeGen = W5EvidenceWriter.wipeGeneration  // bind to this data
+        let start = UInt64(bb.defaults.integer(forKey: Self.keyRssiOffset))
+        guard start < all.count else { return [] }
+        var out: [[String: Any]] = []
+        lastDrainLineEnds = []
+        var idx = Int(start)
+        while idx < all.count, out.count < maxCount {
+          guard let nl = all[idx...].firstIndex(of: 0x0A) else { break }
+          if let obj = try? JSONSerialization.jsonObject(with: all[idx..<nl])
+            as? [String: Any] {
+            out.append(obj)
+            lastDrainLineEnds.append(UInt64(nl + 1))
+          }
+          idx = nl + 1
         }
-        idx = nl + 1
-      }
-      return out
+        return out
+      #else
+        return []
+      #endif
     }
   }
 
@@ -1064,25 +1096,26 @@ final class W5LinkController {
   func ackFileSamples(_ count: Int) {
     rssiSerialized {
       #if INRANGE_DIAG
-        // A reset/destroy/key-rotation since the drain bumped caseEpoch and wiped
-        // the RSSI file; these offsets are stale — discard rather than apply them
-        // to the fresh file (A2). Serialized on the same lock as reset's wipe.
-        if W5Diag.caseEpoch != lastDrainCaseEpoch {
+        // ANY wipe attempt since the drain (incl. a partial-failed reset that
+        // left caseEpoch unchanged) invalidates these offsets — discard rather
+        // than apply them to a fresh/changed file (R3). Same session lock as the
+        // wipe, so the generation read is coherent.
+        if W5EvidenceWriter.wipeGeneration != lastDrainWipeGen {
           lastDrainLineEnds = []
           return
         }
+        guard count > 0, !lastDrainLineEnds.isEmpty else { return }
+        let n = min(count, lastDrainLineEnds.count)
+        bb.defaults.set(Int(lastDrainLineEnds[n - 1]), forKey: Self.keyRssiOffset)
+        lastDrainLineEnds.removeFirst(n)
+        // Fully consumed → reclaim the file through the writer (typed delete).
+        if let size = W5Diag.rssiWriter.statSizeLocked(),
+          bb.defaults.integer(forKey: Self.keyRssiOffset) >= size {
+          _ = W5Diag.rssiWriter.deleteCurrentLocked()
+          bb.defaults.removeObject(forKey: Self.keyRssiOffset)
+          lastDrainLineEnds = []
+        }
       #endif
-      guard count > 0, !lastDrainLineEnds.isEmpty else { return }
-      let n = min(count, lastDrainLineEnds.count)
-      bb.defaults.set(Int(lastDrainLineEnds[n - 1]), forKey: Self.keyRssiOffset)
-      lastDrainLineEnds.removeFirst(n)
-      // Fully consumed → reclaim the file.
-      if let size = (try? FileManager.default.attributesOfItem(atPath: rssiFileURL.path)[.size])
-        as? Int, bb.defaults.integer(forKey: Self.keyRssiOffset) >= size {
-        try? FileManager.default.removeItem(at: rssiFileURL)
-        bb.defaults.removeObject(forKey: Self.keyRssiOffset)
-        lastDrainLineEnds = []
-      }
     }
   }
 }

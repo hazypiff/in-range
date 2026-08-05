@@ -122,4 +122,34 @@ void main() {
     expect(calls, hasLength(2), reason: 'both provisions reach native');
     expect(second!['rotated'], isTrue, reason: 'a changed key reports rotation');
   });
+
+  // R5: setW5Links is an ACKNOWLEDGED configuration transaction — it returns the
+  // CONFIRMED persisted flag so the caller can verify the requested state took.
+  test('setW5Links returns the native-confirmed flag', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      return call.arguments as bool?; // native echoes the persisted flag
+    });
+    expect(await bb.setW5Links(true), isTrue);
+    expect(await bb.setW5Links(false), isFalse);
+  });
+
+  test('setW5Links returns null on a channel error (never silent success)',
+      () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      throw PlatformException(code: 'boom');
+    });
+    expect(await bb.setW5Links(false), isNull,
+        reason: 'a channel error is NOT-confirmed, not success');
+  });
+
+  test('setW5Links surfaces a native OFF that was NOT honored', () async {
+    // Native keeps the flag true despite an OFF request (stale flag).
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async => true);
+    expect(await bb.setW5Links(false), isTrue,
+        reason: 'caller sees the un-honored OFF and can fail closed (R5)');
+  });
 }

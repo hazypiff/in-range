@@ -70,7 +70,8 @@ final class W5DiagTests: XCTestCase {
             m.baseAddress, m.count, &mac)
         }
       }
-      return mac.prefix(7).map { String(format: "%02x", $0) }.joined()
+      // Canonical published representation: `id:<14hex>` (matches W5Diag.handle).
+      return "id:" + mac.prefix(7).map { String(format: "%02x", $0) }.joined()
     }
 
     // A5 (was B3): the run secret in use is the PROVISIONED fleet secret, not a
@@ -392,6 +393,44 @@ final class W5DiagTests: XCTestCase {
       }
     }
 
+    // R3: a PARTIAL-FAILED reset does NOT advance caseEpoch (transactional), yet
+    // it still ATTEMPTS the wipe — so the writer wipe GENERATION bumps and a late
+    // RSSI ack must STILL be discarded. A caseEpoch-only guard would wrongly let
+    // the stale ack through (caseEpoch unchanged); the wipe-generation guard
+    // catches it.
+    func testRssiAckDiscardedAfterPartialFailedReset() {
+      W5EvidenceWriter.resetInjectedFailures()
+      let bb = BackgroundBeacon()
+      withExtendedLifetime(bb) {
+        let diag = UserDefaults(suiteName: "io.inrange.diag")
+        diag?.removeObject(forKey: "bb.w5rssi.off")
+        let docs = FileManager.default.urls(
+          for: .documentDirectory, in: .userDomainMask)[0]
+        let rurl = docs.appendingPathComponent("w5_rssi_log.jsonl")
+        try? "{\"token\":\"t\",\"rssi\":-60,\"ts\":1}\n{\"token\":\"t\",\"rssi\":-61,\"ts\":2}\n"
+          .write(to: rurl, atomically: true, encoding: .utf8)
+        let epochBefore = W5Diag.caseEpoch
+        let drained = bb.w5Link.drainFileSamples()
+        XCTAssertEqual(drained.count, 2)
+        // Force the events wipe to FAIL so the reset is transactional-abort
+        // (ok:false, caseEpoch NOT advanced) — but the wipe was still ATTEMPTED.
+        let events = docs.appendingPathComponent("w5_events.jsonl")
+        try? "x\n".write(to: events, atomically: true, encoding: .utf8)
+        W5EvidenceWriter.injectedFailures["w5_events.jsonl.wipe"] = 1
+        let ack = W5Diag.resetCase()
+        XCTAssertEqual(ack["ok"] as? Bool, false, "partial-failed reset")
+        XCTAssertEqual(
+          W5Diag.caseEpoch, epochBefore, "caseEpoch NOT advanced on failed wipe")
+        bb.w5Link.ackFileSamples(2)
+        XCTAssertEqual(
+          diag?.integer(forKey: "bb.w5rssi.off") ?? 0, 0,
+          "stale ack discarded via wipe generation despite unchanged caseEpoch")
+        W5EvidenceWriter.resetInjectedFailures()
+        try? FileManager.default.removeItem(at: rurl)
+        try? FileManager.default.removeItem(at: events)
+      }
+    }
+
     // B3: a short/odd/non-hex secret must NOT mutate state.
     func testInvalidSecretDoesNotMutateState() {
       W5Diag.provisionRunSecret(String(repeating: "cd", count: 32))
@@ -429,11 +468,87 @@ final class W5DiagTests: XCTestCase {
       XCTAssertEqual(W5Diag.keyEpoch, e0 + 1, "different key → new key epoch")
     }
 
+    // R5: ONE env-vs-provisioned precedence rule. An injected ENV fleet key is
+    // AUTHORITATIVE and IMMUTABLE: provisioning the SAME key is idempotent (no
+    // wipe/rotate); a DIFFERENT key is rejected BEFORE any wipe (it could never
+    // win); handles always use the env key; and destroy rejects it truthfully
+    // (secretDestroyed:false, hasFleetKey stays true) — no false "destroyed".
+    func testEnvKeyIsAuthoritativeImmutableAndPrecedent() {
+      let envKey = String(repeating: "ab", count: 32)
+      W5Diag.testEnvSecretOverride = envKey
+      defer { W5Diag.testEnvSecretOverride = nil }
+      let d = UserDefaults(suiteName: "io.inrange.diag")
+      d?.removeObject(forKey: "bb.w5diag.provisionedsecret")
+
+      // Provisioning the SAME key as the env key is idempotent — no rotation.
+      let e0 = W5Diag.keyEpoch
+      let same = W5Diag.provisionRunSecret(envKey)
+      XCTAssertEqual(same["ok"] as? Bool, true)
+      XCTAssertEqual(same["rotated"] as? Bool, false)
+      XCTAssertEqual(same["note"] as? String, "matches-env")
+      XCTAssertEqual(W5Diag.keyEpoch, e0, "idempotent same-key ⇒ no rotation")
+
+      // A DIFFERENT key is REJECTED before any wipe (env wins regardless).
+      let diff = W5Diag.provisionRunSecret(String(repeating: "cd", count: 32))
+      XCTAssertEqual(diff["ok"] as? Bool, false)
+      XCTAssertEqual(diff["rejected"] as? String, "env-key-immutable")
+      XCTAssertEqual(W5Diag.keyEpoch, e0, "rejected provision does NOT rotate")
+
+      // Handles resolve under the ENV key (top of precedence).
+      let want = Self.expectedHandle(domain: "peer", raw: "z", secretHex: envKey)
+      XCTAssertEqual(W5Diag.handle("peer", "z"), want)
+
+      // Destroy REJECTS an immutable env key and reports truthfully.
+      let destroyed = W5Diag.destroySessionSecret(w5Quiescent: true)
+      XCTAssertEqual(destroyed["ok"] as? Bool, false)
+      XCTAssertEqual(destroyed["rejected"] as? String, "env-key-immutable")
+      XCTAssertEqual(destroyed["secretDestroyed"] as? Bool, false)
+      XCTAssertTrue(
+        W5Diag.hasFleetKey, "env key remains authoritative after a 'destroy'")
+    }
+
+    // R5: armFault's state mutation and its acknowledgment event are ONE locked
+    // transaction — concurrent arm/disarm/reset never crash or tear an event
+    // line, and the final control state is coherent with the last operation.
+    func testConcurrentArmDisarmResetSerialize() {
+      W5Diag.provisionRunSecret(String(repeating: "9f", count: 32))
+      _ = W5Diag.resetCase()
+      let group = DispatchGroup()
+      let q = DispatchQueue(label: "w5.ctl", attributes: .concurrent)
+      for i in 0..<12 {
+        q.async(group: group) {
+          switch i % 3 {
+          case 0: _ = W5Diag.armFault(peerRaw: "p\(i)")
+          case 1: W5Diag.disarmFault()
+          default: _ = W5Diag.resetCase()
+          }
+        }
+      }
+      group.wait()
+      // Deterministic final state: disarm, then assert not armed.
+      W5Diag.disarmFault()
+      XCTAssertFalse(W5Diag.isFaultArmed, "coherent control state after churn")
+      // Every event line the churn produced is intact JSON (no torn write).
+      let url = FileManager.default.urls(
+        for: .documentDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("w5_events.jsonl")
+      if let body = try? String(contentsOf: url, encoding: .utf8) {
+        for l in body.split(separator: "\n", omittingEmptySubsequences: true) {
+          XCTAssertNoThrow(
+            try JSONSerialization.jsonObject(with: Data(l.utf8)),
+            "no torn control/ack line under concurrency")
+        }
+      }
+    }
+
     func testHandleDeterminismAndDomainSeparation() {
       let a = W5Diag.handle("peer", "tok-A")
       let b = W5Diag.handle("peer", "tok-A")
       XCTAssertEqual(a, b, "same domain+raw → same handle within a run")
-      XCTAssertEqual(a?.count, 14, "truncated HMAC = 14 hex")
+      XCTAssertEqual(a?.count, 17, "canonical handle = 'id:' + 14 hex")
+      XCTAssertEqual(a?.hasPrefix("id:"), true, "canonical handle carries the id: marker")
+      XCTAssertEqual(
+        a?.dropFirst(3).count, 14, "14-hex truncated HMAC after the marker")
       // Domain separation: same raw under different domains → different handle.
       XCTAssertNotEqual(
         W5Diag.handle("peer", "x"), W5Diag.handle("lease", "x"),
@@ -594,6 +709,44 @@ final class W5DiagTests: XCTestCase {
     private func opFail(_ file: String, _ op: String) -> Int {
       UserDefaults(suiteName: "io.inrange.diag")?
         .integer(forKey: "bb.evwrite.opfail.\(file).\(op)") ?? 0
+    }
+
+    // R3: the mandatory RSSI file operations (stat/read/replace/delete) run
+    // THROUGH the writer with typed accounting and the injection seam — no direct
+    // `try?` bypass. Force each to fail and assert its own typed counter, and
+    // that a wipe ATTEMPT bumps the global wipe generation.
+    func testRssiWriterFileOpsAreTypedAndInjectable() {
+      W5EvidenceWriter.resetInjectedFailures()
+      let name = "ewtest_rssi.jsonl"
+      try? FileManager.default.removeItem(at: url(name))
+      let d = UserDefaults(suiteName: "io.inrange.diag")
+      for op in ["stat", "read", "replace", "delete", "wipe"] {
+        d?.removeObject(forKey: "bb.evwrite.opfail.\(name).\(op)")
+      }
+      let w = W5EvidenceWriter(
+        fileName: name, cap: 1_000_000, rotation: .external, lock: NSRecursiveLock())
+      XCTAssertTrue(w.append("x\n"))  // create the file
+      W5EvidenceWriter.injectedFailures["\(name).stat"] = 1
+      XCTAssertNil(w.statSizeLocked())
+      XCTAssertEqual(opFail(name, "stat"), 1, "stat failure typed")
+      W5EvidenceWriter.injectedFailures["\(name).read"] = 1
+      XCTAssertNil(w.readLocked())
+      XCTAssertEqual(opFail(name, "read"), 1, "read failure typed")
+      W5EvidenceWriter.injectedFailures["\(name).replace"] = 1
+      XCTAssertFalse(w.replaceLocked(Data("y\n".utf8)))
+      XCTAssertEqual(opFail(name, "replace"), 1, "replace failure typed")
+      W5EvidenceWriter.injectedFailures["\(name).delete"] = 1
+      XCTAssertFalse(w.deleteCurrentLocked())
+      XCTAssertEqual(opFail(name, "delete"), 1, "delete failure typed")
+      // A wipe ATTEMPT bumps the global generation (even when it fails).
+      let g0 = W5EvidenceWriter.wipeGeneration
+      W5EvidenceWriter.injectedFailures["\(name).wipe"] = 1
+      _ = w.wipeLocked()
+      XCTAssertGreaterThan(
+        W5EvidenceWriter.wipeGeneration, g0, "wipe attempt bumps the generation")
+      XCTAssertEqual(opFail(name, "wipe"), 1, "wipe failure typed")
+      W5EvidenceWriter.resetInjectedFailures()
+      try? FileManager.default.removeItem(at: url(name))
     }
 
     // A4: EVERY writer file-op failure is TYPED and accounted. Using the diag-

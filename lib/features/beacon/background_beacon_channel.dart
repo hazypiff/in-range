@@ -342,12 +342,17 @@ class BackgroundBeaconChannel {
     }
   }
 
-  /// Test-only gate for W5 persistent links (INRANGE_W5_LINKS).
-  Future<void> setW5Links(bool enabled) async {
+  /// Gate for W5 persistent links (INRANGE_W5_LINKS). Returns the CONFIRMED
+  /// persisted flag the native side ended up with, so the caller can verify the
+  /// requested state actually took (an acknowledged configuration transaction).
+  /// Returns `null` on a channel error — treated as "not confirmed", never as
+  /// silent success (R5).
+  Future<bool?> setW5Links(bool enabled) async {
     try {
-      await _channel.invokeMethod<void>('setW5Links', enabled);
+      return await _channel.invokeMethod<bool>('setW5Links', enabled);
     } catch (e) {
       debugPrint('BackgroundBeacon setW5Links failed: $e');
+      return null;
     }
   }
 

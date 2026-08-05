@@ -51,29 +51,49 @@ while [ $# -gt 0 ]; do
   esac
 done
 base="$(basename "$src")"
-# PARTIAL_FAIL simulates devicectl writing some complete records then failing:
-# write one valid line to the destination and exit nonzero.
+# PARTIAL_FAIL: devicectl writes some complete records then dies with a
+# transport-style error (no not-found signature) — a partial copy.
 case " ${PARTIAL_FAIL:-} " in
   *" $base "*)
     [ -f "${FIXTURES:?}/$base" ] && head -n 1 "${FIXTURES}/$base" > "$dst"
+    echo "error: connection interrupted during copy" >&2
+    exit 1 ;;
+esac
+# TRANSPORT_FAIL: a permission/transport/container error (NOT a verified absence).
+case " ${TRANSPORT_FAIL:-} " in
+  *" $base "*)
+    echo "error: operation not permitted (transport)" >&2
     exit 1 ;;
 esac
 if [ -f "${FIXTURES:?}/$base" ]; then cp "${FIXTURES}/$base" "$dst"; exit 0; fi
-exit 1   # "no such file on device"
+# A MISSING fixture models a VERIFIED not-found on the device.
+echo "error: no such file: Documents/$base (FileNotFound)" >&2
+exit 1
 FAKE
   chmod +x "$sb/bin/xcrun"
   echo "$sb"
 }
 
-# Write a VALID fixture set into $1/fixtures.
+# Write a VALID, NATIVE-SHAPED fixture set into $1/fixtures.
+#
+# The event stream is what NATIVE writes: its id-fields are already handles
+# (`id:<14hex>` = the same truncated-HMAC representation W5Diag.handle emits),
+# NOT raw tokens — native HMACs the raw peer/lease before writing. The RSSI/wake
+# logs carry the RAW token (functional for Dart proximity), which the puller
+# hashes into the identical `id:<14hex>` at pull time. So an event's peer handle
+# and its RSSI token's sanitized handle for the same raw token are byte-identical
+# — the real cross-family join (R1). Feeding a raw 32-hex into an event field
+# (as the old fixture did) is impossible native output and is now rejected.
 valid_fixtures() {
   local fx="$1/fixtures"
-  local peer="aabbccddeeff00112233445566778899"   # 32 hex
+  local peer="aabbccddeeff00112233445566778899"   # raw 32-hex token
   local lease="11223344556677889900aabbccddeeff"
+  local peer_h; peer_h="$(handle peer "$peer")"    # native event handle id:<14hex>
+  local lease_h; lease_h="$(handle lease "$lease")"
   cat > "$fx/w5_events.jsonl" <<EOF
 {"v":1,"run":"tr","wallMs":1,"monoNs":1,"epoch":1,"seq":1,"event":"boot","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"ts":100}
-{"v":1,"run":"tr","wallMs":1,"monoNs":1,"epoch":1,"seq":2,"event":"dial","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"peer":"$peer","ts":101}
-{"v":1,"run":"tr","wallMs":1,"monoNs":1,"epoch":1,"seq":3,"event":"drop","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"lease":"$lease","ts":102}
+{"v":1,"run":"tr","wallMs":1,"monoNs":1,"epoch":1,"seq":2,"event":"dial","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"peer":"$peer_h","ts":101}
+{"v":1,"run":"tr","wallMs":1,"monoNs":1,"epoch":1,"seq":3,"event":"drop","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"lease":"$lease_h","ts":102}
 EOF
   cat > "$fx/w5_rssi_log.jsonl" <<EOF
 {"token":"$peer","rssi":-60,"ts":100}
@@ -107,15 +127,25 @@ OUTDIR="$SB/work/hardware_evidence/happy"
   && ok "happy published events" || bad "happy missing published events"
 [ -f "$OUTDIR/iphone14_w5_rssi_log.jsonl" ] \
   && ok "happy published rssi" || bad "happy missing published rssi"
-# Handle alignment: the sanitized rssi token == HMAC handle(peer, raw).
+# R1 END-TO-END JOIN: the native event peer HANDLE and the puller-sanitized RSSI
+# token for the SAME raw token must be the byte-identical `id:<14hex>` string.
+# want_h is the canonical handle (id: + truncated HMAC). It must appear:
+#  (a) as the sanitized RSSI token (puller hashed the raw token), AND
+#  (b) as the event peer field (native wrote the handle), AND
+# both must carry the `id:` marker (a bare handle would never join).
 want_h="$(handle peer aabbccddeeff00112233445566778899)"
-if grep -q "$want_h" "$OUTDIR/iphone14_w5_rssi_log.jsonl"; then
-  ok "sanitized handle aligns with W5Diag.handle(peer,·)"
-else bad "sanitized handle does NOT align (expected $want_h)"; fi
-# Same raw id ⇒ same handle across families (events peer field + rssi token).
-grep -q "$want_h" "$OUTDIR/iphone14_w5_events.jsonl" \
-  && ok "events peer field hashes to the same handle" \
-  || bad "events peer handle mismatch"
+case "$want_h" in id:*) : ;; *) bad "oracle handle missing id: marker: $want_h" ;; esac
+ev_peer="$(python3 -c 'import json,sys
+for l in open(sys.argv[1]):
+    o=json.loads(l);
+    if o.get("event")=="dial": print(o["peer"]); break' "$OUTDIR/iphone14_w5_events.jsonl")"
+rssi_tok="$(python3 -c 'import json,sys
+print(json.loads(open(sys.argv[1]).readline())["token"])' "$OUTDIR/iphone14_w5_rssi_log.jsonl")"
+if [ "$ev_peer" = "$want_h" ] && [ "$rssi_tok" = "$want_h" ]; then
+  ok "R1 join: event peer handle == sanitized RSSI token == $want_h (id:<14hex>)"
+else
+  bad "R1 join FAIL (event peer=$ev_peer rssi token=$rssi_tok want=$want_h)"
+fi
 # No raw id survived anywhere.
 if grep -rEq '[0-9a-fA-F]{32,}' "$OUTDIR"; then
   bad "raw hex survived into published output"; else ok "no raw id in published output"; fi
@@ -263,8 +293,9 @@ run_case chain_ok      0  setup_chain_ok
 run_case chain_overlap 22 setup_chain_overlap
 run_case chain_epoch   21 setup_chain_epoch
 
-# 14. PATH-TRAVERSAL SAFETY: a tampered `<case>` symlink whose target escapes
-# OUT_ROOT must NOT let the superseded-rev cleanup `rm -rf` outside OUT_ROOT.
+# 14. HOSTILE PRIOR SYMLINK: a tampered `<case>` symlink whose target escapes
+# OUT_ROOT must be REFUSED (exit 9) — never dereferenced to import foreign files
+# and never followed by the superseded-rev cleanup. The victim stays intact.
 SB_PT="$(make_sandbox)"; valid_fixtures "$SB_PT"
 mkdir -p "$SB_PT/work/hardware_evidence" "$SB_PT/work/victim"
 : > "$SB_PT/work/victim/keepme"
@@ -274,11 +305,10 @@ mkdir -p "$SB_PT/work/hardware_evidence" "$SB_PT/work/victim"
   INRANGE_DIAG_RUN_SECRET="$SECRET" \
   bash ./hw_matrix_pull.sh test-udid iphone14 caseT ) >/dev/null 2>&1
 pt_rc=$?
-if [ "$pt_rc" -eq 0 ] && [ -f "$SB_PT/work/victim/keepme" ] \
-   && [ -L "$SB_PT/work/hardware_evidence/caseT" ]; then
-  ok "path traversal: escaping prior symlink did NOT delete outside OUT_ROOT"
+if [ "$pt_rc" -eq 9 ] && [ -f "$SB_PT/work/victim/keepme" ]; then
+  ok "hostile prior symlink refused (exit 9); nothing outside OUT_ROOT touched"
 else
-  bad "path traversal guard failed (rc=$pt_rc victim=$([ -f "$SB_PT/work/victim/keepme" ] && echo kept || echo DELETED))"
+  bad "hostile prior symlink guard failed (rc=$pt_rc victim=$([ -f "$SB_PT/work/victim/keepme" ] && echo kept || echo DELETED))"
 fi
 
 # 15. EMPTY NON-PRIMARY family is TOLERATED (not conflated with corruption): a
@@ -299,8 +329,8 @@ SB_PP="$(make_sandbox)"; valid_fixtures "$SB_PP"
   INRANGE_DIAG_RUN_SECRET="$SECRET" \
   bash ./hw_matrix_pull.sh test-udid iphone14 casePP ) >/dev/null 2>&1
 pp_rc=$?
-if [ "$pp_rc" -eq 2 ] && [ ! -e "$SB_PP/work/hardware_evidence/casePP" ]; then
-  ok "partial primary copy discarded → run aborts, nothing published"
+if [ "$pp_rc" -eq 8 ] && [ ! -e "$SB_PP/work/hardware_evidence/casePP" ]; then
+  ok "partial primary copy is a transport failure (exit 8), nothing published"
 else
   bad "partial primary mishandled (rc=$pp_rc published=$([ -e "$SB_PP/work/hardware_evidence/casePP" ] && echo YES || echo no))"
 fi
@@ -501,6 +531,49 @@ mkdir -p "$SB_HL/work/hardware_evidence/.lock.caseHL"
 hl_rc=$?
 [ "$hl_rc" -eq 7 ] && ok "held publish lock ⇒ fail closed (exit 7)" \
   || bad "held lock not honored (rc=$hl_rc)"
+
+# 33. RAW ID IN AN EVENT FIELD is impossible native output — must hard-fail
+# (never silently re-hashed, which would hide the leak). R1.
+setup_raw_event_field() {
+  cat > "$1/fixtures/w5_events.jsonl" <<'EOF'
+{"v":1,"run":"tr","wallMs":1,"monoNs":1,"epoch":1,"seq":1,"event":"dial","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"peer":"aabbccddeeff00112233445566778899","ts":1}
+EOF
+  printf '{"token":"aabbccddeeff00112233445566778899","rssi":-60,"ts":1}\n' \
+    > "$1/fixtures/w5_rssi_log.jsonl"
+}
+run_case raw_event_field 26 setup_raw_event_field
+
+# 34. TRANSPORT FAILURE (not a verified absence) on ANY artifact aborts the run
+# (exit 8) — a permission/transport/container error must NOT be silently treated
+# as "file absent" and published as a partial case.
+setup_transport() { valid_fixtures "$1"; }
+SB_TF="$(make_sandbox)"; setup_transport "$SB_TF"
+( cd "$SB_TF/work" && HW_MATRIX_XCRUN="$SB_TF/bin/xcrun" FIXTURES="$SB_TF/fixtures" \
+  XCRUN_MARKER="$SB_TF/m" TRANSPORT_FAIL="w5_rssi_log.jsonl" \
+  INRANGE_DIAG_RUN_SECRET="$SECRET" \
+  bash ./hw_matrix_pull.sh test-udid iphone14 caseTF ) >/dev/null 2>&1
+tf_rc=$?
+[ "$tf_rc" -eq 8 ] && [ ! -e "$SB_TF/work/hardware_evidence/caseTF" ] \
+  && ok "transport failure on an optional artifact aborts (exit 8)" \
+  || bad "transport failure not distinguished from absence (rc=$tf_rc)"
+
+# 35. VERIFIED-ABSENT optional artifact publishes normally (exit 0): missing on
+# device is fine, only the primary is mandatory.
+setup_absent_opt() { valid_fixtures "$1"; rm -f "$1/fixtures/w5_rssi_log.jsonl"; }
+run_case absent_opt 0 setup_absent_opt
+[ -f "$SB/work/hardware_evidence/absent_opt/iphone14_w5_events.jsonl" ] \
+  && ok "verified-absent optional artifact still publishes the case" \
+  || bad "verified-absent optional broke the publish"
+
+# 36. NON-FINITE JSON (NaN/Infinity) is not valid strict JSON — hard fail.
+setup_nan() {
+  cat > "$1/fixtures/w5_events.jsonl" <<'EOF'
+{"v":1,"run":"tr","wallMs":1,"monoNs":1,"epoch":1,"seq":1,"event":"a","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"rssi":NaN,"ts":1}
+EOF
+  printf '{"token":"aabbccddeeff00112233445566778899","rssi":-60,"ts":1}\n' \
+    > "$1/fixtures/w5_rssi_log.jsonl"
+}
+run_case nan 25 setup_nan
 
 echo "== $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]

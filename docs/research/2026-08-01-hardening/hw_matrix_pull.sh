@@ -80,28 +80,37 @@ trap 'rm -rf "$STAGE"' EXIT
 OUT_ROOT="$(cd "$(dirname "$0")" && pwd)/hardware_evidence"
 OUT="$OUT_ROOT/${CASE}"
 
+# Pull ONE artifact. Distinguishes three outcomes (R2):
+#   0  = pulled OK  |  0 + "(absent ...)" = VERIFIED not-found on the device
+#   3  = transport / permission / container / partial-copy FAILURE (uncertain)
+# devicectl can also write several complete records then exit nonzero, so on any
+# failure the (possibly partial) destination is DELETED first — a partial file
+# must never survive as "evidence". Only a VERIFIED absence is an acceptable
+# missing artifact; every other failure aborts the run rather than publishing an
+# uncertain case.
 pull() {
-  # Remove any stale/partial destination first, and DELETE the destination on a
-  # failed copy — devicectl can write several complete records and then exit
-  # nonzero, and a partial-but-valid-prefix file would otherwise pass schema +
-  # sequence validation and be published as complete evidence. A failed copy
-  # therefore leaves the file ABSENT, so the mandatory-primary check aborts the
-  # run rather than shipping a truncated event stream.
   rm -f "$RAW/$1"
-  if "$XCRUN" devicectl device copy from --device "$UDID" --user mobile \
-      --domain-type appDataContainer --domain-identifier "$BUNDLE" \
-      --source "Documents/$1" --destination "$RAW/$1" >/dev/null 2>&1; then
-    echo "  pulled $1"
-  else
-    rm -f "$RAW/$1"   # discard any partial bytes a failed copy left behind
-    echo "  (no $1)"
+  local err rc
+  err="$("$XCRUN" devicectl device copy from --device "$UDID" --user mobile \
+    --domain-type appDataContainer --domain-identifier "$BUNDLE" \
+    --source "Documents/$1" --destination "$RAW/$1" 2>&1)"
+  rc=$?
+  if [ "$rc" -eq 0 ]; then echo "  pulled $1"; return 0; fi
+  rm -f "$RAW/$1"   # discard any partial bytes a failed copy left behind
+  if printf '%s' "$err" | grep -Eqi \
+    'not.?found|no such file|does not exist|nosuchfile|filenotfound|no matching'; then
+    echo "  (absent $1)"; return 0   # verified not-found — an acceptable absence
   fi
+  echo "ERROR: pull of '$1' failed (transport/permission/container) — not a" >&2
+  echo "       verified absence; refusing to publish an uncertain case:" >&2
+  printf '%s\n' "$err" | sed 's/^/       /' >&2
+  return 3
 }
 for f in bb_wake_log.txt bb_wake_log.1.txt \
          w5_events.jsonl w5_events.1.jsonl \
          w5_rssi_log.jsonl w5_rssi_log.1.jsonl \
          in_range_local.db; do
-  pull "$f"
+  pull "$f" || exit 8   # a transport failure on ANY artifact aborts the pull
 done
 
 # --- 3. MANDATORY PRIMARY ARTIFACT ------------------------------------------
@@ -141,6 +150,8 @@ def san(o):  # domain-aware id hashing, recursive
 def fatal(code, msg):
     sys.stderr.write("FATAL(%s): %s [%s]\n" % (code, msg, os.path.basename(src)))
     sys.exit(code)
+def no_finite(c):  # NaN / Infinity / -Infinity are NOT valid strict JSON
+    raise ValueError("non-finite JSON constant %r" % c)
 def no_dup(pairs):  # reject duplicate keys — an ambiguous/corrupted record
     d = {}
     for k, v in pairs:
@@ -161,7 +172,8 @@ for i, s in enumerate((ln.rstrip('\n') for ln in text.split('\n')), start=1):
     if not s:
         continue
     try:
-        obj = json.loads(s, object_pairs_hook=no_dup)   # NO regex fallback
+        obj = json.loads(s, object_pairs_hook=no_dup,
+                         parse_constant=no_finite)   # NO regex fallback / NaN
     except json.JSONDecodeError as e:
         fatal(11, "malformed JSON at line %d: %s" % (i, e))
     except ValueError as e:
@@ -214,12 +226,29 @@ for i, s in enumerate((ln.rstrip('\n') for ln in text.split('\n')), start=1):
             elif v != const_epochs[req]:
                 fatal(16, "%s changed within file (%r != %r) at line %d"
                       % (req, v, const_epochs[req], i))
+        # Event id-fields are ALREADY native-produced handles (id:<14hex> — the
+        # native layer HMACs the raw peer/lease/link/peripheral before writing).
+        # VALIDATE that representation; do NOT re-hash it. Re-hashing a raw id
+        # that leaked into an event field would silently convert the leak into a
+        # handle and HIDE it — so a non-handle value here is a HARD FAIL (R1).
+        for f in ("peer", "lease", "link", "peripheral"):
+            fv = obj.get(f)
+            if fv is None:
+                continue
+            if not (isinstance(fv, str) and re.match(r'^id:[0-9a-f]{14}$', fv)):
+                fatal(26, "event field '%s' is not a native handle id:<14hex>: "
+                          "%r at line %d" % (f, fv, i))
     elif mode == "rssi":
         if not (isinstance(obj.get("token"), str)
                 and isinstance(obj.get("rssi"), int) and not isinstance(obj.get("rssi"), bool)
                 and isinstance(obj.get("ts"), int) and not isinstance(obj.get("ts"), bool)):
             fatal(18, "rssi line %d must be {token:str, rssi:int, ts:int}" % i)
-    out.append(json.dumps(san(obj)))
+    # Events are already native-sanitized (handles) and are validated above, so
+    # write them AS-IS — never re-hash. Only the RSSI family carries a RAW token
+    # that the puller hashes into the SAME id:<14hex> representation.
+    # allow_nan=False refuses to SERIALIZE any non-finite value too (defence in
+    # depth beyond parse-time rejection).
+    out.append(json.dumps(obj if mode == "events" else san(obj), allow_nan=False))
     n += 1
 if n == 0 and mode == "events" and os.path.basename(src) == "w5_events.jsonl":
     # ONLY the PRIMARY event stream must carry records (a zero-record primary is
@@ -358,9 +387,32 @@ REV="$(mktemp -d "${OUT}.rev.XXXXXX")"   # fresh versioned data dir for this run
 # overlay THIS label's fresh files below — so publishing one device NEVER deletes
 # another device's evidence in the same case. Files are matched by the
 # `<label>_` prefix; this label's prior files are the ones being replaced.
-if [ -d "$OUT" ]; then
-  for existing in "$OUT"/*; do
-    [ -e "$existing" ] || continue
+# CANONICAL prior target only (R2): carry-over dereferences `<case>`, so a
+# tampered/foreign symlink pointing OUTSIDE hardware_evidence must not import
+# arbitrary files. Require `<case>` to be either absent, or a SYMLINK to a bare,
+# local `<case>.rev.*` revision that resolves under OUT_ROOT — and copy REGULAR
+# files ONLY (never nested dirs/symlinks/devices). The complete merged revision
+# is post-scanned again below.
+if [ -e "$OUT" ] || [ -L "$OUT" ]; then
+  if [ ! -L "$OUT" ]; then
+    rm -rf "$REV"
+    echo "ERROR: existing '$CASE' is not a canonical revision symlink." >&2
+    exit 9
+  fi
+  prev_target="$(readlink "$OUT")"
+  prev_base="$(basename "$prev_target")"
+  prev_resolved="$OUT_ROOT/$prev_base"
+  if [ "$prev_target" != "$prev_base" ] \
+     || printf '%s' "$prev_target" | grep -q '\.\.' \
+     || case "$prev_base" in "$(basename "$OUT").rev."*) false;; *) true;; esac \
+     || [ ! -d "$prev_resolved" ]; then
+    rm -rf "$REV"
+    echo "ERROR: '$CASE' points outside OUT_ROOT or is not a local revision" >&2
+    echo "       (target: $prev_target) — refusing to carry over foreign files." >&2
+    exit 9
+  fi
+  for existing in "$prev_resolved"/*; do
+    [ -f "$existing" ] && [ ! -L "$existing" ] || continue   # regular files only
     eb="$(basename "$existing")"
     case "$eb" in
       "${LABEL}_"*) : ;;                    # this label's prior files → replaced
@@ -384,6 +436,19 @@ if [ ! -s "$REV/${LABEL}_w5_events.jsonl" ]; then
   rm -rf "$REV"
   echo "ERROR: primary artifact missing from the staged revision." >&2
   exit 5
+fi
+# POST-SCAN the COMPLETE MERGED revision (this label's fresh files AND any
+# carried-over labels) for residual raw ids — a leak carried in from a prior
+# revision must block the publish, not just this run's sanitized output (R2).
+if grep -rEln \
+  '([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})|[0-9a-fA-F]{32,}' \
+  "$REV" >/dev/null 2>&1; then
+  echo "ERROR: residual raw id in the MERGED revision — refusing to publish:" >&2
+  grep -rEln \
+    '([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})|[0-9a-fA-F]{32,}' \
+    "$REV" >&2 || true
+  rm -rf "$REV"
+  exit 3
 fi
 PREV_REV=""
 [ -L "$OUT" ] && PREV_REV="$(readlink "$OUT")"

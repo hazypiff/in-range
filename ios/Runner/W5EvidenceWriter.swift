@@ -193,11 +193,18 @@ import Foundation
       }
     }
 
+    /// GLOBAL wipe generation — incremented on EVERY wipe ATTEMPT of ANY family
+    /// (success or partial failure), so a consumer holding a pre-wipe read (an
+    /// RSSI drain) can detect that its data is stale and discard a late ack even
+    /// when the wipe did not change caseEpoch (a partial-failed reset). R3.
+    static var wipeGeneration = 0
+
     /// Delete every artifact this family owns; returns a TYPED per-file result so
     /// a wipe cannot silently fail and still report success (A2). Caller holds
     /// the session lock.
     @discardableResult
     func wipeLocked() -> [String: Bool] {
+      Self.wipeGeneration += 1  // a wipe was ATTEMPTED — invalidate pending reads
       var out: [String: Bool] = [:]
       for u in inventory where FileManager.default.fileExists(atPath: u.path) {
         if consumeInjected("wipe") {
@@ -214,6 +221,60 @@ import Foundation
         }
       }
       return out
+    }
+
+    // MARK: - R3: mandatory RSSI file ops behind the writer (typed + injectable)
+    //
+    // The RSSI trim/drain/ack path performs stat/read/replace/delete on the
+    // current file. These run here — under the shared session lock, with typed
+    // failure accounting and the same injection seam — so no mandatory B4 file
+    // operation bypasses the writer abstraction. Callers hold the session lock.
+
+    /// Byte size of the current file, or nil if absent/unstattable (typed).
+    func statSizeLocked() -> Int? {
+      if consumeInjected("stat") { noteOpFailure("stat"); return nil }
+      guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+      guard let n = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size])
+        as? Int else {
+        noteOpFailure("stat"); return nil
+      }
+      return n
+    }
+
+    /// Full contents of the current file, or nil if absent/unreadable (typed).
+    func readLocked() -> Data? {
+      if consumeInjected("read") { noteOpFailure("read"); return nil }
+      guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+      guard let d = try? Data(contentsOf: url) else { noteOpFailure("read"); return nil }
+      return d
+    }
+
+    /// Atomically REPLACE the current file with `data`, then reapply protection +
+    /// backup exclusion and READ-BACK-VERIFY them (the trim path previously wrote
+    /// with no re-protection). Typed on failure. Returns success.
+    @discardableResult
+    func replaceLocked(_ data: Data) -> Bool {
+      if consumeInjected("replace") { noteOpFailure("replace"); return false }
+      do {
+        try data.write(to: url, options: [.atomic,
+          .completeFileProtectionUntilFirstUserAuthentication])
+      } catch { noteOpFailure("replace"); return false }
+      applyProtection(url)  // reapply + verify protection/backup (typed within)
+      // Read-back-verify the protection class actually took where reported.
+      if let prot = (try? FileManager.default.attributesOfItem(atPath: url.path)[.protectionKey])
+        as? FileProtectionType, prot != .completeUntilFirstUserAuthentication {
+        noteOpFailure("replace-verify")
+      }
+      return true
+    }
+
+    /// Delete the CURRENT file (not rotations) — the ack reclaim path. Typed.
+    @discardableResult
+    func deleteCurrentLocked() -> Bool {
+      guard FileManager.default.fileExists(atPath: url.path) else { return true }
+      if consumeInjected("delete") { noteOpFailure("delete"); return false }
+      do { try FileManager.default.removeItem(at: url); return true }
+      catch { noteOpFailure("delete"); return false }
     }
 
     /// Run `body` under the shared session lock. Recursive, so nested control +

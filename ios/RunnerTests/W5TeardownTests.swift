@@ -181,6 +181,48 @@ final class W5TeardownTests: XCTestCase {
         XCTAssertEqual(miss["lookupHit"] as? Bool, false)
       }
     }
+
+    // R4: a restored IN-GRACE live encounter carries NO handle/peripheral, so
+    // every adapter map/timer is empty — yet ownership.activeLeases == 1. Real
+    // quiescence must count the lease: isW5Quiescent MUST be false and secret
+    // destruction MUST be refused. (Before the fix, isQuiescent ignored
+    // activeLeases and reported quiescent, authorizing destruction while live.)
+    func testRestoredInGraceLeaseIsNotQuiescentAndBlocksDestroy() {
+      let diag = UserDefaults(suiteName: "io.inrange.diag")
+      diag?.removeObject(forKey: "bb.w5.snapshot")
+      W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))
+      let id = UUID()
+      let bb1 = BackgroundBeacon()
+      withExtendedLifetime(bb1) {
+        bb1.testEnableW5Links()
+        bb1.w5Link.testSeedOutboundLink(
+          peripheralID: id, myCand: "a", peerCand: "b", alias: "aliasG",
+          linkId: "LG")
+        XCTAssertEqual(bb1.w5Link.testActiveLeaseCount, 1, "seeded live lease")
+        bb1.w5Link.linkDown(id)  // established link dies → enters grace
+        XCTAssertEqual(
+          bb1.w5Link.testActiveLeaseCount, 1, "in-grace encounter still live")
+        bb1.w5Link.testForcePersist()  // capture the in-grace snapshot
+      }
+      let bb2 = BackgroundBeacon()
+      withExtendedLifetime(bb2) {
+        bb2.testEnableW5Links()
+        bb2.w5Link.restoreFromPersistence(restoredPeripherals: [])  // no rebind
+        XCTAssertEqual(
+          bb2.w5Link.testActiveLeaseCount, 1,
+          "restored a live in-grace encounter with no handle/peripheral")
+        XCTAssertFalse(
+          bb2.isW5Quiescent,
+          "a live lease ⇒ NOT quiescent despite empty adapter maps (R4)")
+        XCTAssertGreaterThan(
+          bb2.w5Link.testGraceTimerCount, 0,
+          "restore re-armed the grace deadline (no lingering-forever lease)")
+        XCTAssertEqual(
+          W5Diag.destroySessionSecret(w5Quiescent: bb2.isW5Quiescent)["rejected"]
+            as? String, "w5-active", "destroy refused while a lease is live")
+      }
+      diag?.removeObject(forKey: "bb.w5.snapshot")
+    }
   #endif
 
   // REAL CHANNEL ENTRY (B1): the platform-channel handler itself. A server

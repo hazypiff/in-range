@@ -170,13 +170,23 @@ final class BackgroundBeacon: NSObject {
   /// here; a foreign-flavor boot wipes them all.
   static let diagnosticFileNames = [
     "bb_wake_log.txt", "bb_wake_log.1.txt",
-    "w5_events.jsonl", "w5_events.1.jsonl", "w5_rssi_log.jsonl",
+    "w5_events.jsonl", "w5_events.1.jsonl",
+    "w5_rssi_log.jsonl", "w5_rssi_log.1.jsonl",
   ]
   static func wipeDiagnosticFiles() {
-    let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-    for name in diagnosticFileNames {
-      try? FileManager.default.removeItem(at: docs.appendingPathComponent(name))
-    }
+    #if INRANGE_DIAG
+      // Wipe through the writer inventory so EVERY current + rotated artifact
+      // (incl. w5_rssi_log.1.jsonl) is removed, typed, session-locked, and bumps
+      // the wipe generation — no silent bypass of the writer abstraction (R3).
+      W5Diag.wipeAllEvidenceFiles()
+    #else
+      // Release ships no evidence machinery; defensively remove any stale files.
+      let docs = FileManager.default.urls(
+        for: .documentDirectory, in: .userDomainMask)[0]
+      for name in diagnosticFileNames {
+        try? FileManager.default.removeItem(at: docs.appendingPathComponent(name))
+      }
+    #endif
   }
 
   private func reconcileStateStamp() {
@@ -398,7 +408,15 @@ final class BackgroundBeacon: NSObject {
         // structured provisioning ack (`ok`, `rotated`, `keyEpoch`) so Dart can
         // AWAIT it and fail closed — never enabling W5 on an unprovisioned key
         // (A3). No-op in a release binary (W5Diag compiles the body out).
-        result(W5Diag.provisionRunSecret((call.arguments as? String) ?? ""))
+        let provAck = W5Diag.provisionRunSecret((call.arguments as? String) ?? "")
+        // R5: a FAILED provision forces W5 OFF at the NATIVE level, independent
+        // of Dart's setW5Links. So a stale `bb.w5links=true` + an older valid
+        // provisioned key + a swallowed Dart disable can no longer start W5 under
+        // the stale key — the failed provision itself clears the flag.
+        if (provAck["ok"] as? Bool) != true {
+          self.defaults.set(false, forKey: Self.keyW5Links)
+        }
+        result(provAck)
       case "armW5Fault":
         // Diag-only: arm a one-shot, PEER-SCOPED pre-HELLO_ACK drop. No wildcard
         // — nil/empty fails closed. Returns a structured ack. Release no-op.
@@ -428,9 +446,12 @@ final class BackgroundBeacon: NSObject {
         // genuinely QUIESCENT (live managers/sessions, not the persisted flag).
         result(W5Diag.destroySessionSecret(w5Quiescent: self.isW5Quiescent))
       case "setW5Links":
-        // Test-only gate for W5 persistent links (INRANGE_W5_LINKS).
+        // Gate for W5 persistent links. Returns the CONFIRMED persisted flag so
+        // Dart's key-ready gate can verify the requested state actually took —
+        // an acknowledged configuration transaction rather than fire-and-forget
+        // (R5). The effective enablement is still `flag && hasFleetKey`.
         self.defaults.set((call.arguments as? Bool) ?? false, forKey: Self.keyW5Links)
-        result(nil)
+        result(self.defaults.bool(forKey: Self.keyW5Links))
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -1339,7 +1360,7 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
         peripheral: peripheral, tokenHex: hex, lastEvent: Date(),
         keepaliveChar: ka, lastRssiAt: .distantPast, lastBeatAt: .distantPast,
         writeInFlight: false, notifyReady: false, seq: 0, lastGattOp: "start")
-      logWake("w5-start p=\(W5Diag.shortHandle(hex))")
+      W5Diag.logWakeHandled("w5-start", token: hex)  // atomic derive+append (R5)
       inflight.removeValue(forKey: id)  // session owns the peripheral now
       if let ka = ka {
         // Subscribe first; the first beat fires from didUpdateNotificationState.
@@ -1445,7 +1466,7 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
   func w5End(_ id: UUID) {
     let _endTok = w5[id]?.tokenHex
     if let s = w5.removeValue(forKey: id) {
-      logWake("w5-end p=\(W5Diag.shortHandle(_endTok))")
+      W5Diag.logWakeHandled("w5-end", token: _endTok)  // atomic derive+append (R5)
       centralMgr?.cancelPeripheralConnection(s.peripheral)
     }
   }

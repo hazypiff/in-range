@@ -246,6 +246,14 @@ final class W5Ownership {
   func isInGrace(_ leaseId: String) -> Bool { enc[leaseId]?.inGrace ?? false }
   func leaseForAlias(_ alias: String) -> String? { aliasTo[alias] }
 
+  /// Every live/grace encounter id — so a restore adapter can re-arm grace
+  /// deadlines for encounters that carry no handle (R4).
+  var leaseIds: [String] { Array(enc.keys) }
+  /// When the reconnect grace window for [leaseId] began (nil if not in grace).
+  func graceStartedAt(_ leaseId: String) -> TimeInterval? {
+    enc[leaseId]?.graceStartedAt
+  }
+
   /// Endpoint-global handle → leaseId bijection (read-only for restore adapters).
   var handleToLease: [String: String] { handleTo }
 
