@@ -775,6 +775,36 @@ final class W5DiagTests: XCTestCase {
       try? FileManager.default.removeItem(at: url(name))
     }
 
+    // A2 (codex re-review): a read-back VERIFY that itself cannot read the
+    // attribute (unreadable → nil) is a verify FAILURE, typed — not silently
+    // accepted like a passing verify. Before the fix `if let excluded …, == false`
+    // and `if let prot …, != x` both swallowed a nil (unreadable) read. Inject an
+    // unreadable backup-exclusion and protection-class read and assert each typed
+    // counter increments (the write still succeeds either way).
+    func testVerifyReadFailuresAreTypedAndAccounted() throws {
+      W5EvidenceWriter.resetInjectedFailures()
+      let name = "ewtest_verify.jsonl"
+      try? FileManager.default.removeItem(at: url(name))
+      let d = UserDefaults(suiteName: "io.inrange.diag")
+      for op in ["backup-verify", "replace-verify"] {
+        d?.removeObject(forKey: "bb.evwrite.opfail.\(name).\(op)")
+      }
+      let w = W5EvidenceWriter(
+        fileName: name, cap: 1_000_000, rotation: .external, lock: NSRecursiveLock())
+      // backup-verify: force the exclusion read-back to be unreadable on create.
+      W5EvidenceWriter.injectedFailures["\(name).backup-verify"] = 1
+      XCTAssertTrue(w.append("x\n"), "append still succeeds; verify is accounted")
+      XCTAssertEqual(opFail(name, "backup-verify"), 1,
+        "an unreadable backup-exclusion verify is typed")
+      // replace-verify: force the protection-class read-back on replaceLocked.
+      W5EvidenceWriter.injectedFailures["\(name).replace-verify"] = 1
+      XCTAssertTrue(w.replaceLocked(Data("y\n".utf8)))
+      XCTAssertEqual(opFail(name, "replace-verify"), 1,
+        "an unreadable protection-class verify is typed")
+      W5EvidenceWriter.resetInjectedFailures()
+      try? FileManager.default.removeItem(at: url(name))
+    }
+
     // A4: EVERY writer file-op failure is TYPED and accounted. Using the diag-
     // only injection seam, force each op to fail and assert its own counter
     // (`bb.evwrite.opfail.<file>.<op>`) increments — so a soak's silent I/O

@@ -188,10 +188,16 @@ import Foundation
         var res = URLResourceValues()
         res.isExcludedFromBackup = true
         do { try m.setResourceValues(res) } catch { noteOpFailure("backup") }
-        if let excluded = try? u.resourceValues(forKeys: [.isExcludedFromBackupKey])
-          .isExcludedFromBackup, excluded == false {
-          noteOpFailure("backup-verify")
-        }
+        // Read-back-verify. A read that FAILS (nil — attribute unreadable) is as
+        // much a verify failure as reading back `false`: in neither case can we
+        // confirm the exclusion took, so both must be TYPED, not silently
+        // accepted (A2, codex re-review — the old `if let …, == false` swallowed
+        // an unreadable attribute). The injection seam models an unreadable read.
+        let excluded: Bool? = consumeInjected("backup-verify")
+          ? nil
+          : (try? u.resourceValues(forKeys: [.isExcludedFromBackupKey])
+              .isExcludedFromBackup) ?? nil
+        if excluded != true { noteOpFailure("backup-verify") }
       }
     }
 
@@ -262,11 +268,15 @@ import Foundation
           .completeFileProtectionUntilFirstUserAuthentication])
       } catch { noteOpFailure("replace"); return false }
       applyProtection(url)  // reapply + verify protection/backup (typed within)
-      // Read-back-verify the protection class actually took where reported.
-      if let prot = (try? FileManager.default.attributesOfItem(atPath: url.path)[.protectionKey])
-        as? FileProtectionType, prot != .completeUntilFirstUserAuthentication {
-        noteOpFailure("replace-verify")
-      }
+      // Read-back-verify the protection class actually took. An UNREADABLE
+      // attribute (nil) cannot confirm the class, so it is a verify failure too,
+      // not a silent pass (A2, codex re-review — the old `if let …, != x` swallowed
+      // an unreadable read). The injection seam models an unreadable read.
+      let prot: FileProtectionType? = consumeInjected("replace-verify")
+        ? nil
+        : (try? FileManager.default.attributesOfItem(atPath: url.path)[.protectionKey])
+            as? FileProtectionType
+      if prot != .completeUntilFirstUserAuthentication { noteOpFailure("replace-verify") }
       return true
     }
 
