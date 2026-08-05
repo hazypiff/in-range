@@ -141,17 +141,31 @@ def san(o):  # domain-aware id hashing, recursive
 def fatal(code, msg):
     sys.stderr.write("FATAL(%s): %s [%s]\n" % (code, msg, os.path.basename(src)))
     sys.exit(code)
+def no_dup(pairs):  # reject duplicate keys — an ambiguous/corrupted record
+    d = {}
+    for k, v in pairs:
+        if k in d:
+            raise ValueError("duplicate key %r" % k)
+        d[k] = v
+    return d
+# Read STRICT UTF-8 — invalid bytes are corruption, hard-fail (not silently
+# substituted, which could smuggle a valid-looking record past validation).
+try:
+    text = open(src, 'r', encoding='utf-8', errors='strict').read()
+except UnicodeDecodeError as e:
+    fatal(24, "invalid UTF-8: %s" % e)
 out, n = [], 0
-prev_seq = None
+prev_by_run = {}    # run -> last seq (seq restarts per process launch/run)
 const_epochs = {}   # caseEpoch / keyEpoch / runEpoch must be constant in a file
-for i, line in enumerate(open(src, 'r', errors='replace'), start=1):
-    s = line.rstrip('\n')
+for i, s in enumerate((ln.rstrip('\n') for ln in text.split('\n')), start=1):
     if not s:
         continue
     try:
-        obj = json.loads(s)               # NO regex fallback for JSONL
-    except Exception as e:
+        obj = json.loads(s, object_pairs_hook=no_dup)   # NO regex fallback
+    except json.JSONDecodeError as e:
         fatal(11, "malformed JSON at line %d: %s" % (i, e))
+    except ValueError as e:
+        fatal(25, "ambiguous record at line %d: %s" % (i, e))  # e.g. duplicate key
     if not isinstance(obj, dict):
         fatal(12, "line %d is not a JSON object" % i)
     if mode == "events":
@@ -177,10 +191,16 @@ for i, line in enumerate(open(src, 'r', errors='replace'), start=1):
         seq = obj.get("seq")
         if not isinstance(seq, int) or isinstance(seq, bool):
             fatal(13, "missing/invalid integer 'seq' at line %d" % i)
-        if prev_seq is not None and seq <= prev_seq:
-            fatal(14, "non-increasing seq (%r after %r) at line %d"
-                  % (seq, prev_seq, i))
-        prev_seq = seq
+        # seq is monotonic PER PROCESS LAUNCH (native seqCounter is in-memory and
+        # restarts at 0 each launch), so it must strictly increase WITHIN one
+        # `run` but legitimately RESTARTS when `run` changes (a restoration
+        # relaunch — exactly the Case-3 evidence). Partition the check by run.
+        run_val = obj.get("run")
+        last = prev_by_run.get(run_val)
+        if last is not None and seq <= last:
+            fatal(14, "non-increasing seq (%r after %r) within run %s at line %d"
+                  % (seq, last, run_val, i))
+        prev_by_run[run_val] = seq
         # caseEpoch, keyEpoch, and runEpoch are ALL constant within one evidence
         # file: any case reset / key rotation / run reset WIPES the files, so a
         # single file can never legitimately mix epochs. Enforce constancy (not
@@ -246,40 +266,45 @@ sanitize_jsonl w5_rssi_log.1.jsonl rssi
 sanitize_text  bb_wake_log.txt
 sanitize_text  bb_wake_log.1.txt
 
-# Cross-file CHAIN validation for the event stream: a `.dotOne` rotation happens
-# WITHIN one case (a case reset wipes both files), so the rotated `.1` records
-# must share the SAME caseEpoch as the current file AND have strictly LOWER seq
-# than every current record. Validating each file in isolation would let a
-# conflicting epoch or an overlapping/decreasing seq across the boundary slip
-# through — so the chain is checked end to end here.
-# Only chain a NON-EMPTY rotated file — an empty (legit) rotation has no records
-# to chain against the current stream.
+# Cross-file CHAIN validation for the event stream. A `.dotOne` rotation happens
+# WITHIN one CASE (a case reset wipes both files), so caseEpoch/keyEpoch/runEpoch
+# MUST match across the rotated `.1` and the current file. seq, however, is
+# per-process-launch: a rotation may span an OS relaunch, so seq is NOT globally
+# ordered across the files. It is only ordered WITHIN a shared `run` — for any
+# run present in BOTH files, the current file's first seq must exceed the
+# rotated file's last seq for that run. Different runs (a relaunch boundary) have
+# no ordering constraint. Only a NON-EMPTY rotated file is chained.
 if [ -s "$SAN/${LABEL}_w5_events.1.jsonl" ]; then
   python3 - "$SAN/${LABEL}_w5_events.1.jsonl" "$SAN/${LABEL}_w5_events.jsonl" <<'PY'
 import sys, json
-def bounds(p):
-    seqs = []
+def scan(p):
+    per_run = {}   # run -> [min_seq, max_seq]
     ep = {"caseEpoch": set(), "keyEpoch": set(), "runEpoch": set()}
-    for line in open(p):
+    for line in open(p, encoding='utf-8'):
         line = line.strip()
         if not line:
             continue
         o = json.loads(line)
-        seqs.append(o["seq"])
+        r, s = o["run"], o["seq"]
+        if r not in per_run:
+            per_run[r] = [s, s]
+        else:
+            per_run[r][0] = min(per_run[r][0], s)
+            per_run[r][1] = max(per_run[r][1], s)
         for k in ep:
             ep[k].add(o[k])
-    return min(seqs), max(seqs), ep
-o_min, o_max, o_ep = bounds(sys.argv[1])   # rotated (older)
-c_min, c_max, c_ep = bounds(sys.argv[2])   # current (newer)
-# All three epochs must match across the rotation — a rotation is size-based
-# within ONE {case,key,run} epoch; any epoch change would have wiped both files.
+    return per_run, ep
+o_run, o_ep = scan(sys.argv[1])   # rotated (older)
+c_run, c_ep = scan(sys.argv[2])   # current (newer)
 for k in ("caseEpoch", "keyEpoch", "runEpoch"):
     if o_ep[k] != c_ep[k]:
         sys.stderr.write("FATAL(21): %s differs across rotation %r vs %r\n"
                          % (k, o_ep[k], c_ep[k])); sys.exit(21)
-if not (o_max < c_min):
-    sys.stderr.write("FATAL(22): rotated max seq %d not < current min seq %d\n"
-                     % (o_max, c_min)); sys.exit(22)
+for r in o_run:
+    if r in c_run and c_run[r][0] <= o_run[r][1]:
+        sys.stderr.write(
+            "FATAL(22): run %s current min seq %d not > rotated max seq %d\n"
+            % (r, c_run[r][0], o_run[r][1])); sys.exit(22)
 PY
   rc=$?
   [ "$rc" -ne 0 ] && exit "$rc"
@@ -323,33 +348,46 @@ fi
 PREV_REV=""
 [ -L "$OUT" ] && PREV_REV="$(readlink "$OUT")"
 # One-time migration: an older puller may have left `<case>` as a REAL dir. A
-# symlink cannot rename-replace a non-empty dir, so PRESERVE the legacy evidence
-# by renaming it into a versioned rev (a dir→dir rename, atomic) — never delete
-# it. The brief absence of `<case>` is bounded to this one-time upgrade.
+# symlink cannot rename-replace a non-empty dir, so move the legacy evidence
+# ASIDE (a dir→dir rename, atomic) — never delete it — and restore it if the
+# swap fails, so a failed migration never loses OR strands the prior evidence.
+LEGACY_ASIDE=""
 if [ -e "$OUT" ] && [ ! -L "$OUT" ]; then
-  mv "$OUT" "${OUT}.rev.legacy.$$"
+  LEGACY_ASIDE="${OUT}.rev.legacy.$$"
+  mv "$OUT" "$LEGACY_ASIDE"
 fi
 LINKTMP="${OUT}.link.$$"
-ln -s "$(basename "$REV")" "$LINKTMP"
+if ! ln -s "$(basename "$REV")" "$LINKTMP"; then
+  [ -n "$LEGACY_ASIDE" ] && mv "$LEGACY_ASIDE" "$OUT"   # restore legacy dir
+  rm -rf "$REV"
+  echo "ERROR: could not stage publish symlink; prior evidence restored." >&2
+  exit 4
+fi
 # Swap with rename(2) via python os.replace: it operates on the PATH and never
 # follows the destination symlink (unlike `mv`, which would move LINKTMP INTO
 # the old rev dir when `<case>` is a symlink-to-dir). Atomic; replaces the prior
 # `<case>` symlink in place with no absent/half-written interval.
 if python3 -c 'import os,sys; os.replace(sys.argv[1], sys.argv[2])' \
     "$LINKTMP" "$OUT"; then
-  # Remove the superseded rev — but ONLY if its name is a bare, expected local
-  # basename (`<case>.rev.*`, no slash, no `..`). A tampered/relative symlink
-  # target must never let this `rm -rf` escape OUT_ROOT.
+  # Published. Cleanup of superseded revisions is BEST-EFFORT and must not turn a
+  # successful publish into a nonzero exit — remove the prior rev / migrated
+  # legacy dir, ignoring failures. The superseded-rev name is validated as a
+  # bare, expected local basename (`<case>.rev.*`, no slash/`..`) so a tampered
+  # symlink target can never make this rm escape OUT_ROOT.
   if [ -n "$PREV_REV" ] && [ "$PREV_REV" != "$(basename "$REV")" ] \
      && [ "$PREV_REV" = "$(basename "$PREV_REV")" ]; then
     case "$PREV_REV" in
       *..*) : ;;                                   # reject any '..'
       "$(basename "$OUT").rev."*)
-        [ -d "${OUT_ROOT}/${PREV_REV}" ] && rm -rf "${OUT_ROOT}/${PREV_REV}" ;;
+        [ -d "${OUT_ROOT}/${PREV_REV}" ] && rm -rf "${OUT_ROOT}/${PREV_REV}" || : ;;
     esac
   fi
+  [ -n "$LEGACY_ASIDE" ] && rm -rf "$LEGACY_ASIDE" || :
 else
+  # Swap failed: restore the legacy dir (if any) and drop the staged rev/link, so
+  # the caller can reliably read a nonzero exit as "prior evidence untouched".
   rm -rf "$LINKTMP" "$REV"
+  [ -n "$LEGACY_ASIDE" ] && mv "$LEGACY_ASIDE" "$OUT"
   echo "ERROR: publish swap failed; prior evidence untouched." >&2
   exit 4
 fi

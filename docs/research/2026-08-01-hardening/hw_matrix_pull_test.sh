@@ -398,5 +398,54 @@ run_case empty_rot 0 setup_empty_rot
   && ok "empty rotated .1 tolerated; primary published" \
   || bad "empty rotated .1 blocked the publish"
 
+# 25-26. MULTI-LAUNCH / RESTORATION: seq restarts per process launch (`run`
+# changes) — the legit Case-3 evidence. It must PUBLISH, within-file AND across a
+# rotation boundary that spans a relaunch.
+setup_multilaunch() {
+  cat > "$1/fixtures/w5_events.jsonl" <<'EOF'
+{"v":1,"run":"aaaa","wallMs":1,"monoNs":1,"epoch":10,"seq":1,"event":"beat","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"ts":1}
+{"v":1,"run":"aaaa","wallMs":2,"monoNs":2,"epoch":10,"seq":2,"event":"beat","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"ts":2}
+{"v":1,"run":"bbbb","wallMs":3,"monoNs":3,"epoch":11,"seq":1,"event":"boot","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"ts":3}
+{"v":1,"run":"bbbb","wallMs":4,"monoNs":4,"epoch":11,"seq":2,"event":"beat","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"ts":4}
+EOF
+  printf '{"token":"aabbccddeeff00112233445566778899","rssi":-60,"ts":1}\n' \
+    > "$1/fixtures/w5_rssi_log.jsonl"
+}
+run_case multilaunch 0 setup_multilaunch
+[ -f "$SB/work/hardware_evidence/multilaunch/iphone14_w5_events.jsonl" ] \
+  && ok "multi-launch (seq restarts per run) publishes — Case-3 evidence" \
+  || bad "multi-launch evidence rejected"
+setup_multilaunch_xfile() {
+  cat > "$1/fixtures/w5_events.1.jsonl" <<'EOF'
+{"v":1,"run":"aaaa","wallMs":1,"monoNs":1,"epoch":10,"seq":9,"event":"beat","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"ts":1}
+EOF
+  cat > "$1/fixtures/w5_events.jsonl" <<'EOF'
+{"v":1,"run":"bbbb","wallMs":2,"monoNs":2,"epoch":11,"seq":1,"event":"boot","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"ts":2}
+EOF
+  printf '{"token":"aabbccddeeff00112233445566778899","rssi":-60,"ts":1}\n' \
+    > "$1/fixtures/w5_rssi_log.jsonl"
+}
+run_case multilaunch_xfile 0 setup_multilaunch_xfile   # rotation spans a relaunch
+
+# 27. INVALID UTF-8 in a JSONL evidence file is corruption → hard fail (not
+# silently substituted).
+setup_badutf8() {
+  printf '{"v":1,"run":"tr","wallMs":1,"monoNs":1,"epoch":1,"seq":1,"event":"a","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"x":"\xff"}\n' \
+    > "$1/fixtures/w5_events.jsonl"
+  printf '{"token":"aabbccddeeff00112233445566778899","rssi":-60,"ts":1}\n' \
+    > "$1/fixtures/w5_rssi_log.jsonl"
+}
+run_case badutf8 24 setup_badutf8
+
+# 28. DUPLICATE JSON KEY is an ambiguous/corrupted record → hard fail.
+setup_dupkey() {
+  cat > "$1/fixtures/w5_events.jsonl" <<'EOF'
+{"v":1,"run":"tr","wallMs":1,"monoNs":1,"epoch":1,"seq":1,"seq":2,"event":"a","caseEpoch":2,"keyEpoch":1,"runEpoch":5,"ts":1}
+EOF
+  printf '{"token":"aabbccddeeff00112233445566778899","rssi":-60,"ts":1}\n' \
+    > "$1/fixtures/w5_rssi_log.jsonl"
+}
+run_case dupkey 25 setup_dupkey
+
 echo "== $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]
