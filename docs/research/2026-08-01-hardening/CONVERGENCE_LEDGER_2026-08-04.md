@@ -8,8 +8,25 @@ deploy, history rewrite, or install before the corresponding gate.
 
 Models available on this Mac (recorded honestly, no silent substitution):
 Claude Code (this coordinator, `claude-opus-4-8`), `kimi` CLI 1.49.0, `codex`
-(GPT) CLI 0.146.0. The work order names "Claude Opus 5 / Kimi3 / GPT Sol"; the
-exact CLI identifiers above are what is invoked.
+(GPT) CLI 0.146.0. The work order names "Claude Opus 5 / Kimi3 / GPT Sol".
+
+### Requested backend identities (A6, established 2026-08-05, tool version vs backend)
+
+| Requested | Tool | Backend identity (probed) | Available? |
+|---|---|---|---|
+| GPT Sol | `codex` CLI 0.146.0 | `gpt-5.6-sol` (self-reported) | YES (default model) |
+| Kimi 3 | `kimi` CLI 1.49.0 | `kimi-code/k3` (config; use `-m kimi-code/k3`) | YES |
+| Opus 5 (Claude Opus 5) | this coordinator | `claude-opus-4-8` | **NO** |
+
+The Wave A model-ownership table assigns the **primary implementer/coordinator**
+role to **Opus 5**. This coordinator runs as `claude-opus-4-8`; there is no
+Claude Opus 5 in the available model set to invoke. Per the panel A6 rule, a
+requested backend that is unavailable must be reported as `EXTERNAL_BLOCKER`, not
+silently substituted. The two non-author REVIEW backends (Kimi 3 via
+`kimi -m kimi-code/k3`; GPT Sol via `codex` = `gpt-5.6-sol`) ARE available, so
+review can proceed the moment the implementer/coordinator backend question is
+resolved by the owner (grant Opus 5 access, or authorize `claude-opus-4-8` as
+the implementer/coordinator substitute).
 
 ## Owner provenance — fleet-key persistence (value-free)
 
