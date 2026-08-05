@@ -137,6 +137,19 @@ for i, line in enumerate(open(src, 'r', errors='replace'), start=1):
     if not isinstance(obj, dict):
         fatal(12, "line %d is not a JSON object" % i)
     if mode == "events":
+        # Mandatory event IDENTITY/provenance fields that W5Diag.emit always
+        # writes — a record missing these is not a valid diagnostic event and
+        # must not be published even if its seq/epochs happen to type-check.
+        ev = obj.get("event")
+        if not isinstance(ev, str) or not ev:
+            fatal(23, "missing/empty string 'event' at line %d" % i)
+        if not isinstance(obj.get("v"), int) or isinstance(obj.get("v"), bool):
+            fatal(23, "missing/invalid integer 'v' at line %d" % i)
+        if not isinstance(obj.get("run"), str) or not obj.get("run"):
+            fatal(23, "missing/empty string 'run' at line %d" % i)
+        for tk in ("wallMs", "monoNs"):
+            if not isinstance(obj.get(tk), int) or isinstance(obj.get(tk), bool):
+                fatal(23, "missing/invalid integer '%s' at line %d" % (tk, i))
         seq = obj.get("seq")
         if not isinstance(seq, int) or isinstance(seq, bool):
             fatal(13, "missing/invalid integer 'seq' at line %d" % i)
