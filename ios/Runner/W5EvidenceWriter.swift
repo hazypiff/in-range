@@ -250,20 +250,44 @@ import Foundation
     /// before it is durably recorded. Enumerates by prefix so rotated files and
     /// every operation kind are included.
     static func peekPriorLoss() -> Int {
-      guard let all = diagDefaults?.dictionaryRepresentation() else { return 0 }
-      var total = 0
-      for (k, v) in all where k.hasPrefix(opFailPrefix) || k.hasPrefix(droppedPrefix) {
-        total += (v as? Int) ?? 0
-      }
-      return total
+      peekPriorLossDetailed().values.reduce(0, +)
     }
 
-    /// ACK (clear) the loss counters — call ONLY after the boot event that
-    /// records `peekPriorLoss()` has been durably appended.
+    /// PEEK the prior loss as a per-key SNAPSHOT (key → count) WITHOUT clearing.
+    /// The snapshot is what a durable boot record then acks — so ONLY the exact
+    /// amounts recorded are cleared, and any NEW failure generated DURING the
+    /// boot append (e.g. an applyProtection failure on the record write itself)
+    /// is retained for the next boot rather than silently erased (A4).
+    static func peekPriorLossDetailed() -> [String: Int] {
+      guard let all = diagDefaults?.dictionaryRepresentation() else { return [:] }
+      var out: [String: Int] = [:]
+      for (k, v) in all
+      where k.hasPrefix(opFailPrefix) || k.hasPrefix(droppedPrefix) {
+        out[k] = (v as? Int) ?? 0
+      }
+      return out
+    }
+
+    /// ACK the loss counters — call ONLY after the boot event that recorded them
+    /// has been durably appended. Blanket form (clears everything) for a case
+    /// reset that fully wiped; use `ackPriorLoss(_:)` after a boot record so new
+    /// failures during the append survive.
     static func ackPriorLoss() {
-      guard let all = diagDefaults?.dictionaryRepresentation() else { return }
-      for k in all.keys where k.hasPrefix(opFailPrefix) || k.hasPrefix(droppedPrefix) {
-        diagDefaults?.removeObject(forKey: k)
+      ackPriorLoss(peekPriorLossDetailed())
+    }
+
+    /// ACK exactly the RECORDED amounts: decrement each snapshotted key by the
+    /// count that was durably recorded, retaining any increment that happened
+    /// after the snapshot (removing the key only when it drops to zero).
+    static func ackPriorLoss(_ recorded: [String: Int]) {
+      for (k, recordedCount) in recorded {
+        let cur = diagDefaults?.integer(forKey: k) ?? 0
+        let remaining = cur - recordedCount
+        if remaining > 0 {
+          diagDefaults?.set(remaining, forKey: k)
+        } else {
+          diagDefaults?.removeObject(forKey: k)
+        }
       }
     }
   }

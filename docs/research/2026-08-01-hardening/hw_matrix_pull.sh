@@ -216,17 +216,27 @@ REV="$(mktemp -d "${OUT}.rev.XXXXXX")"   # fresh versioned data dir for this run
 cp "$SAN"/* "$REV"/ 2>/dev/null || true
 PREV_REV=""
 [ -L "$OUT" ] && PREV_REV="$(readlink "$OUT")"
-# One-time migration: an older run may have left `<case>` as a real dir.
-if [ -e "$OUT" ] && [ ! -L "$OUT" ]; then rm -rf "$OUT"; fi
+# One-time migration: an older puller may have left `<case>` as a REAL dir. A
+# symlink cannot rename-replace a non-empty dir, so PRESERVE the legacy evidence
+# by renaming it into a versioned rev (a dir→dir rename, atomic) — never delete
+# it. The brief absence of `<case>` is bounded to this one-time upgrade.
+if [ -e "$OUT" ] && [ ! -L "$OUT" ]; then
+  mv "$OUT" "${OUT}.rev.legacy.$$"
+fi
 LINKTMP="${OUT}.link.$$"
 ln -s "$(basename "$REV")" "$LINKTMP"
-if mv "$LINKTMP" "$OUT"; then            # atomic rename: replaces prior symlink
+# Swap with rename(2) via python os.replace: it operates on the PATH and never
+# follows the destination symlink (unlike `mv`, which would move LINKTMP INTO
+# the old rev dir when `<case>` is a symlink-to-dir). Atomic; replaces the prior
+# `<case>` symlink in place with no absent/half-written interval.
+if python3 -c 'import os,sys; os.replace(sys.argv[1], sys.argv[2])' \
+    "$LINKTMP" "$OUT"; then
   if [ -n "$PREV_REV" ] && [ "$PREV_REV" != "$(basename "$REV")" ]; then
     rm -rf "${OUT_ROOT}/${PREV_REV}"     # drop the superseded rev after the swap
   fi
 else
   rm -rf "$LINKTMP" "$REV"
-  echo "ERROR: publish symlink swap failed; prior evidence untouched." >&2
+  echo "ERROR: publish swap failed; prior evidence untouched." >&2
   exit 4
 fi
 

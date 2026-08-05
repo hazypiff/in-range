@@ -474,8 +474,12 @@ enum W5Diag {
   static func recordPriorLoss() {
     #if INRANGE_DIAG
       eventWriter.withLock {
-        let loss = W5EvidenceWriter.peekPriorLoss()
-        var obj: [String: Any] = [
+        // Snapshot the per-key loss BEFORE the append records it. Ack only these
+        // exact amounts on success — a new failure the append itself generates
+        // (e.g. an applyProtection failure on THIS write) is retained, not erased.
+        let recorded = W5EvidenceWriter.peekPriorLossDetailed()
+        let loss = recorded.values.reduce(0, +)
+        let obj: [String: Any] = [
           "v": 1, "run": runLabel, "epoch": bootEpoch,
           "keyEpoch": keyEpoch, "caseEpoch": caseEpoch, "runEpoch": runEpoch,
           "wallMs": Int(Date().timeIntervalSince1970 * 1000),
@@ -486,7 +490,7 @@ enum W5Diag {
         if let data = try? JSONSerialization.data(withJSONObject: obj),
           let s = String(data: data, encoding: .utf8),
           eventWriter.appendLocked(s + "\n") {
-          W5EvidenceWriter.ackPriorLoss()  // ack ONLY after a durable record
+          W5EvidenceWriter.ackPriorLoss(recorded)  // ack ONLY the recorded amounts
         }
       }
     #endif

@@ -209,5 +209,29 @@ else
   bad "atomic publish violated (first=$first_ok second=$second_rc link:$link_before→$link_after)"
 fi
 
+# 10. SUCCESSFUL REPUBLISH: a second GOOD run must repoint <case> to a NEW rev,
+# remove the old rev, and leave <case> a resolvable (non-dangling) symlink — the
+# swap must NOT follow the destination symlink and bury the new link inside the
+# old rev dir (the `mv`-follow bug).
+SB_RE="$(make_sandbox)"; valid_fixtures "$SB_RE"
+run_re() { ( cd "$SB_RE/work" && HW_MATRIX_XCRUN="$SB_RE/bin/xcrun" \
+  FIXTURES="$SB_RE/fixtures" XCRUN_MARKER="$SB_RE/m" \
+  INRANGE_DIAG_RUN_SECRET="$SECRET" \
+  bash ./hw_matrix_pull.sh test-udid iphone14 caseR ) >/dev/null 2>&1; }
+run_re; re1=$?
+RCASE="$SB_RE/work/hardware_evidence/caseR"
+rev1="$(readlink "$RCASE" 2>/dev/null)"
+run_re; re2=$?
+rev2="$(readlink "$RCASE" 2>/dev/null)"
+n_revs="$(ls -d "$SB_RE/work/hardware_evidence/caseR".rev.* 2>/dev/null | wc -l | tr -d ' ')"
+if [ "$re1" -eq 0 ] && [ "$re2" -eq 0 ] && [ -L "$RCASE" ] \
+   && [ -f "$RCASE/iphone14_w5_events.jsonl" ] \
+   && [ -n "$rev1" ] && [ -n "$rev2" ] && [ "$rev1" != "$rev2" ] \
+   && [ "$n_revs" -eq 1 ]; then
+  ok "successful republish: <case> repoints to a new rev, old rev cleaned, no dangle"
+else
+  bad "republish broken (re1=$re1 re2=$re2 rev1=$rev1 rev2=$rev2 revs=$n_revs dangle=$([ -f "$RCASE/iphone14_w5_events.jsonl" ] && echo no || echo YES))"
+fi
+
 echo "== $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]

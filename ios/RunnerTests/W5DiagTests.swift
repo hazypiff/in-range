@@ -598,5 +598,41 @@ final class W5DiagTests: XCTestCase {
       try? FileManager.default.removeItem(at: events)
       W5EvidenceWriter.ackPriorLoss()
     }
+
+    // A4: a writer-op failure generated DURING the boot loss-record append (an
+    // applyProtection failure on the record write itself) must be RETAINED — the
+    // ack clears ONLY the amounts snapshotted before the append, never a new
+    // failure the append produced.
+    func testBootRecordRetainsFailureGeneratedDuringItsOwnAppend() throws {
+      W5EvidenceWriter.resetInjectedFailures()
+      let d = UserDefaults(suiteName: "io.inrange.diag")
+      for k in d?.dictionaryRepresentation().keys ?? [:].keys
+      where k.hasPrefix(W5EvidenceWriter.opFailPrefix)
+        || k.hasPrefix(W5EvidenceWriter.droppedPrefix) {
+        d?.removeObject(forKey: k)
+      }
+      let events = FileManager.default.urls(
+        for: .documentDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("w5_events.jsonl")
+      try? FileManager.default.removeItem(at: events)
+      d?.set(3, forKey: "bb.evwrite.dropped.w5_events.jsonl.write")  // prior loss
+      // Force applyProtection to fail on the events file DURING the boot append
+      // (the append itself still succeeds).
+      W5EvidenceWriter.injectedFailures["w5_events.jsonl.protect"] = 1
+      W5Diag.recordPriorLoss()
+      XCTAssertEqual(
+        d?.integer(forKey: "bb.evwrite.dropped.w5_events.jsonl.write") ?? -1, 0,
+        "the recorded prior loss IS acked after a durable record")
+      XCTAssertEqual(
+        d?.integer(forKey: "bb.evwrite.opfail.w5_events.jsonl.protect") ?? 0, 1,
+        "a failure generated DURING the append is RETAINED, not acked away")
+      W5EvidenceWriter.resetInjectedFailures()
+      for k in d?.dictionaryRepresentation().keys ?? [:].keys
+      where k.hasPrefix(W5EvidenceWriter.opFailPrefix)
+        || k.hasPrefix(W5EvidenceWriter.droppedPrefix) {
+        d?.removeObject(forKey: k)
+      }
+      try? FileManager.default.removeItem(at: events)
+    }
   }
 #endif
