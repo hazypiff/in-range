@@ -91,9 +91,11 @@ import Foundation
       }
       let fm = FileManager.default
 
-      if rotation == .dotOne, fm.fileExists(atPath: url.path),
-        let size = (try? fm.attributesOfItem(atPath: url.path)[.size]) as? Int,
-        size > cap {
+      // The over-cap check runs THROUGH the typed/injectable stat op — a stat
+      // failure here is accounted (`bb.evwrite.opfail.<file>.stat`) exactly like
+      // the RSSI path, never silently treated as "not over cap" (A2, codex
+      // re-review). Absent → nil (nothing to rotate); unstattable → nil + typed.
+      if rotation == .dotOne, let size = statSizeLocked(), size > cap {
         _ = rotateDotOne()  // accounted on failure; append proceeds either way
       }
 

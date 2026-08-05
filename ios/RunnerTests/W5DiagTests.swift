@@ -645,6 +645,32 @@ final class W5DiagTests: XCTestCase {
         "new file holds only the newest line")
     }
 
+    // A2 (codex re-review): the dot-one over-cap rotation check runs THROUGH the
+    // typed/injectable stat op. Before the fix the append path stat'd the file
+    // directly with `try?`, so a stat failure was silently treated as "not over
+    // cap" and NEVER accounted — a real stat error would then permit unbounded
+    // growth invisibly. Inject a stat failure on an over-cap dot-one file and
+    // assert the typed counter increments (the append still proceeds either way).
+    func testDotOneOverCapStatFailureIsTypedAndAccounted() throws {
+      W5EvidenceWriter.resetInjectedFailures()
+      let name = "ewtest_statacct.jsonl"
+      try? FileManager.default.removeItem(at: url(name))
+      try? FileManager.default.removeItem(at: url("ewtest_statacct.1.jsonl"))
+      UserDefaults(suiteName: "io.inrange.diag")?
+        .removeObject(forKey: "bb.evwrite.opfail.\(name).stat")
+      let w = W5EvidenceWriter(fileName: name, cap: 10, rotation: .dotOne, lock: NSRecursiveLock())
+      XCTAssertTrue(w.append("AAAAAAAAAAAA\n"))  // 13 bytes > cap 10 — now over cap
+      XCTAssertEqual(opFail(name, "stat"), 0, "no stat failure before injection")
+      // The NEXT append triggers the over-cap check; force its stat to fail.
+      W5EvidenceWriter.injectedFailures["\(name).stat"] = 1
+      XCTAssertTrue(w.append("B\n"), "append proceeds (size check fails open)")
+      XCTAssertEqual(opFail(name, "stat"), 1,
+        "dot-one over-cap stat failure is TYPED, not silently ignored")
+      W5EvidenceWriter.resetInjectedFailures()
+      try? FileManager.default.removeItem(at: url(name))
+      try? FileManager.default.removeItem(at: url("ewtest_statacct.1.jsonl"))
+    }
+
     func testManyAppendsPreserveOrderAndEveryLine() throws {
       let name = "ewtest_a.jsonl"
       try? FileManager.default.removeItem(at: url(name))

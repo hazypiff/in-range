@@ -1,6 +1,7 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:in_range/features/beacon/background_beacon_channel.dart';
+import 'package:in_range/features/beacon/beacon_service.dart';
 
 /// B2/B3: the COMMITTED Dart control paths for the diagnostic layer — arming the
 /// Case-1 pending-dial fault and provisioning the fleet run secret. Verifies the
@@ -151,5 +152,34 @@ void main() {
         .setMockMethodCallHandler(channel, (call) async => true);
     expect(await bb.setW5Links(false), isTrue,
         reason: 'caller sees the un-honored OFF and can fail closed (R5)');
+  });
+
+  // A3 (codex re-review): the CALLER decision, not just the channel primitive.
+  // Before the fix `_startAdvertisingLocked` logged an unconfirmed OFF and then
+  // started native managers anyway — under a prior run's stale `bb.w5links=true`
+  // + provisioned key, W5 could run unattested. The pure start-gate predicate
+  // now fails closed whenever W5 was requested OFF but not CONFIRMED off.
+  group('w5StartGateAllows (A3 fail-closed start gate)', () {
+    test('requested OFF + native did NOT confirm (channel down) ⇒ BLOCK', () {
+      expect(BeaconService.w5StartGateAllows(want: false, confirmed: null),
+          isFalse,
+          reason: 'null confirm = dead channel; stale flag may persist → block');
+    });
+    test('requested OFF + native still reports ON ⇒ BLOCK', () {
+      expect(BeaconService.w5StartGateAllows(want: false, confirmed: true),
+          isFalse,
+          reason: 'native did not honor OFF → block start (fail closed)');
+    });
+    test('requested OFF + native CONFIRMED off ⇒ ALLOW', () {
+      expect(BeaconService.w5StartGateAllows(want: false, confirmed: false),
+          isTrue,
+          reason: 'confirmed OFF is safe to start');
+    });
+    test('requested ON ⇒ ALLOW regardless of confirm (W5 fails closed natively)',
+        () {
+      expect(BeaconService.w5StartGateAllows(want: true, confirmed: true), isTrue);
+      expect(BeaconService.w5StartGateAllows(want: true, confirmed: null), isTrue);
+      expect(BeaconService.w5StartGateAllows(want: true, confirmed: false), isTrue);
+    });
   });
 }

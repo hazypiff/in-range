@@ -878,6 +878,18 @@ class BeaconService {
     return e.runtimeType.toString();
   }
 
+  /// A3 W5 start gate (codex re-review). After the key-ready sequence sets the
+  /// W5-links flag to [want] and native returns [confirmed], decide whether it
+  /// is safe to start the native managers. Fail closed: when W5 was requested
+  /// OFF (`want == false`, because W5 is disabled OR the fleet key is not ready)
+  /// but native did NOT confirm OFF — `confirmed` is null on a dead channel, or
+  /// true if native still reports it on — a prior run's persisted `bb.w5links`
+  /// flag + provisioned key could let W5 run unattested. We cannot prove W5 will
+  /// stay inert, so we refuse to start. Extracted as a pure predicate so the
+  /// decision is testable without the compile-time diag gate.
+  static bool w5StartGateAllows({required bool want, required bool? confirmed}) =>
+      want || confirmed == false;
+
   /// Bounded BLE burst for the subtle-wake path
   /// (docs/SUBTLE_TRACKING_ARCHITECTURE.md): restarts the scan session so a
   /// fresh discovery window opens. Restarting the session is the only way
@@ -1033,10 +1045,20 @@ class BeaconService {
         // not acknowledged — never assume a swallowed disable succeeded.
         final want = AppConfig.w5LinksEnabled && keyReady;
         final confirmed = await _bgBeacon.setW5Links(want);
-        if (!want && confirmed != false) {
+        if (!w5StartGateAllows(want: want, confirmed: confirmed)) {
+          // Requested W5 OFF but native did NOT confirm OFF (confirmed is null
+          // when the platform channel is unavailable, or true if native reports
+          // it still on). A prior run may have persisted `bb.w5links=true` plus a
+          // provisioned fleet key, so starting now could run W5 under stale,
+          // unattested state. We cannot prove W5 will stay inert, so fail closed:
+          // do NOT start native managers until an OFF is confirmed (A3, codex
+          // re-review — the native provision-failure gate only covers a call that
+          // REACHED native, not a dead channel). Production takes the else branch.
           debugPrint(
               'W5 links: requested OFF but native did not confirm OFF '
-              '(confirmed=$confirmed) — native gate still requires a fleet key');
+              '(confirmed=$confirmed) — aborting native start (fail-closed)');
+          _applyAdvertisingVerdict(false, 'W5 unconfirmed-off gate');
+          return;
         }
         if (AppConfig.w5LinksEnabled && !keyReady) {
           debugPrint('W5 links held OFF: fleet key not provisioned (fail-closed)');

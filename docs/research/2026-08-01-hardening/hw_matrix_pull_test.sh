@@ -65,6 +65,15 @@ case " ${TRANSPORT_FAIL:-} " in
     echo "error: operation not permitted (transport)" >&2
     exit 1 ;;
 esac
+# CONTAINER_FAIL: an app-data-container lookup failure. Its message CONTAINS the
+# word "not found", so a naive not-found classifier would wrongly call it an
+# absent optional file and publish a case that actually lost a real artifact.
+# This is a FATAL uncertain failure, never an acceptable absence (codex A4).
+case " ${CONTAINER_FAIL:-} " in
+  *" $base "*)
+    echo "error: appDataContainer not found for io.inrange.inRange.diag" >&2
+    exit 1 ;;
+esac
 if [ -f "${FIXTURES:?}/$base" ]; then cp "${FIXTURES}/$base" "$dst"; exit 0; fi
 # A MISSING fixture models a VERIFIED not-found on the device.
 echo "error: no such file: Documents/$base (FileNotFound)" >&2
@@ -560,6 +569,21 @@ tf_rc=$?
 [ "$tf_rc" -eq 8 ] && [ ! -e "$SB_TF/work/hardware_evidence/caseTF" ] \
   && ok "transport failure on an optional artifact aborts (exit 8)" \
   || bad "transport failure not distinguished from absence (rc=$tf_rc)"
+
+# 34b. CONTAINER-NOT-FOUND is FATAL, not an absence (codex A4). The devicectl
+# error contains the words "not found", but names the app data CONTAINER, not the
+# source file — a naive substring classifier published under it, silently dropping
+# a real artifact. It must abort (exit 8) exactly like a transport failure.
+setup_container() { valid_fixtures "$1"; }
+SB_CF="$(make_sandbox)"; setup_container "$SB_CF"
+( cd "$SB_CF/work" && HW_MATRIX_XCRUN="$SB_CF/bin/xcrun" FIXTURES="$SB_CF/fixtures" \
+  XCRUN_MARKER="$SB_CF/m" CONTAINER_FAIL="w5_rssi_log.jsonl" \
+  INRANGE_DIAG_RUN_SECRET="$SECRET" \
+  bash ./hw_matrix_pull.sh test-udid iphone14 caseCF ) >/dev/null 2>&1
+cf_rc=$?
+[ "$cf_rc" -eq 8 ] && [ ! -e "$SB_CF/work/hardware_evidence/caseCF" ] \
+  && ok "container-not-found aborts as fatal (exit 8), not classified absent" \
+  || bad "container-not-found wrongly treated as absence (rc=$cf_rc)"
 
 # 35. VERIFIED-ABSENT optional artifact publishes normally (exit 0): missing on
 # device is fine, only the primary is mandatory.

@@ -103,9 +103,20 @@ pull() {
   fi
   if [ "$rc" -eq 0 ]; then echo "  pulled $1"; return 0; fi
   rm -f "$RAW/$1"   # discard any partial bytes a failed copy left behind
+  # A not-found is only an ACCEPTABLE ABSENCE when it names the SOURCE FILE. A
+  # not-found that names the app data CONTAINER, the application, the domain or
+  # the device is a FATAL lookup failure — a bare 'not found' substring wrongly
+  # passed such failures as absent optional files and published a case that had
+  # actually dropped a real artifact (codex A4). Container/app markers override
+  # to fatal FIRST; only then does a file-specific not-found count as absent.
   if printf '%s' "$err" | grep -Eqi \
-    'not.?found|no such file|does not exist|nosuchfile|filenotfound|no matching'; then
-    echo "  (absent $1)"; return 0   # verified not-found — an acceptable absence
+      'container|appdatacontainer|application|not installed|no such (app|application|domain|device|user)|domain-identifier'; then
+    :   # container/app/domain/device lookup failure — fall through to FATAL
+  elif printf '%s' "$err" | grep -Eqi \
+        '(no such file|does not exist|file ?not ?found|filenotfound|no matching)' \
+     && { printf '%s' "$err" | grep -qiF "$1" \
+          || printf '%s' "$err" | grep -qiF "Documents/$1"; }; then
+    echo "  (absent $1)"; return 0   # verified not-found of the SOURCE FILE
   fi
   echo "ERROR: pull of '$1' failed (transport/permission/container) — not a" >&2
   echo "       verified absence; refusing to publish an uncertain case:" >&2
