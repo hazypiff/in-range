@@ -63,10 +63,21 @@ OUT_ROOT="$(cd "$(dirname "$0")" && pwd)/hardware_evidence"
 OUT="$OUT_ROOT/${CASE}"
 
 pull() {
-  "$XCRUN" devicectl device copy from --device "$UDID" --user mobile \
-    --domain-type appDataContainer --domain-identifier "$BUNDLE" \
-    --source "Documents/$1" --destination "$RAW/$1" >/dev/null 2>&1 \
-    && echo "  pulled $1" || echo "  (no $1)"
+  # Remove any stale/partial destination first, and DELETE the destination on a
+  # failed copy — devicectl can write several complete records and then exit
+  # nonzero, and a partial-but-valid-prefix file would otherwise pass schema +
+  # sequence validation and be published as complete evidence. A failed copy
+  # therefore leaves the file ABSENT, so the mandatory-primary check aborts the
+  # run rather than shipping a truncated event stream.
+  rm -f "$RAW/$1"
+  if "$XCRUN" devicectl device copy from --device "$UDID" --user mobile \
+      --domain-type appDataContainer --domain-identifier "$BUNDLE" \
+      --source "Documents/$1" --destination "$RAW/$1" >/dev/null 2>&1; then
+    echo "  pulled $1"
+  else
+    rm -f "$RAW/$1"   # discard any partial bytes a failed copy left behind
+    echo "  (no $1)"
+  fi
 }
 for f in bb_wake_log.txt bb_wake_log.1.txt \
          w5_events.jsonl w5_events.1.jsonl \

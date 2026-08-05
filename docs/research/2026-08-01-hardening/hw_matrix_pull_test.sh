@@ -51,6 +51,13 @@ while [ $# -gt 0 ]; do
   esac
 done
 base="$(basename "$src")"
+# PARTIAL_FAIL simulates devicectl writing some complete records then failing:
+# write one valid line to the destination and exit nonzero.
+case " ${PARTIAL_FAIL:-} " in
+  *" $base "*)
+    [ -f "${FIXTURES:?}/$base" ] && head -n 1 "${FIXTURES}/$base" > "$dst"
+    exit 1 ;;
+esac
 if [ -f "${FIXTURES:?}/$base" ]; then cp "${FIXTURES}/$base" "$dst"; exit 0; fi
 exit 1   # "no such file on device"
 FAKE
@@ -281,6 +288,22 @@ run_case empty_rssi 0 setup_empty_rssi
 [ -f "$SB/work/hardware_evidence/empty_rssi/iphone14_w5_events.jsonl" ] \
   && ok "empty non-primary tolerated; primary still published" \
   || bad "empty non-primary broke the publish"
+
+# 16. PARTIAL PRIMARY COPY: devicectl writes valid records then exits nonzero —
+# the partial file must be discarded so the run ABORTS (mandatory primary), never
+# published as complete evidence from a truncated pull.
+SB_PP="$(make_sandbox)"; valid_fixtures "$SB_PP"
+( cd "$SB_PP/work" && HW_MATRIX_XCRUN="$SB_PP/bin/xcrun" \
+  FIXTURES="$SB_PP/fixtures" XCRUN_MARKER="$SB_PP/m" \
+  PARTIAL_FAIL="w5_events.jsonl" \
+  INRANGE_DIAG_RUN_SECRET="$SECRET" \
+  bash ./hw_matrix_pull.sh test-udid iphone14 casePP ) >/dev/null 2>&1
+pp_rc=$?
+if [ "$pp_rc" -eq 2 ] && [ ! -e "$SB_PP/work/hardware_evidence/casePP" ]; then
+  ok "partial primary copy discarded → run aborts, nothing published"
+else
+  bad "partial primary mishandled (rc=$pp_rc published=$([ -e "$SB_PP/work/hardware_evidence/casePP" ] && echo YES || echo no))"
+fi
 
 echo "== $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]
