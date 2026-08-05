@@ -150,9 +150,13 @@ for i, line in enumerate(open(src, 'r', errors='replace'), start=1):
             fatal(18, "rssi line %d must be {token:str, rssi:int, ts:int}" % i)
     out.append(json.dumps(san(obj)))
     n += 1
-if n == 0:
-    fatal(19, "no JSON records after parse")
-open(dst, 'w').write('\n'.join(out) + '\n')
+if n == 0 and mode == "events":
+    # The primary event stream MUST carry records (a zero-record events file is
+    # indistinguishable from a lost/tampered pull). A non-primary family (e.g.
+    # RSSI on a case with no drains) may legitimately be empty — publish it empty
+    # rather than conflating "empty" with "corrupt".
+    fatal(19, "no JSON records after parse in the primary event stream")
+open(dst, 'w').write('\n'.join(out) + ('\n' if out else ''))
 print("  sanitized(%s) -> %s (%d records)" % (mode, os.path.basename(dst), n))
 PY
 }
@@ -191,6 +195,37 @@ sanitize_jsonl w5_rssi_log.1.jsonl rssi
 sanitize_text  bb_wake_log.txt
 sanitize_text  bb_wake_log.1.txt
 
+# Cross-file CHAIN validation for the event stream: a `.dotOne` rotation happens
+# WITHIN one case (a case reset wipes both files), so the rotated `.1` records
+# must share the SAME caseEpoch as the current file AND have strictly LOWER seq
+# than every current record. Validating each file in isolation would let a
+# conflicting epoch or an overlapping/decreasing seq across the boundary slip
+# through — so the chain is checked end to end here.
+if [ -f "$SAN/${LABEL}_w5_events.1.jsonl" ]; then
+  python3 - "$SAN/${LABEL}_w5_events.1.jsonl" "$SAN/${LABEL}_w5_events.jsonl" <<'PY'
+import sys, json
+def bounds(p):
+    seqs, epochs = [], set()
+    for line in open(p):
+        line = line.strip()
+        if not line:
+            continue
+        o = json.loads(line)
+        seqs.append(o["seq"]); epochs.add(o["caseEpoch"])
+    return min(seqs), max(seqs), epochs
+o_min, o_max, o_ep = bounds(sys.argv[1])   # rotated (older)
+c_min, c_max, c_ep = bounds(sys.argv[2])   # current (newer)
+if o_ep != c_ep:
+    sys.stderr.write("FATAL(21): caseEpoch differs across rotation %r vs %r\n"
+                     % (o_ep, c_ep)); sys.exit(21)
+if not (o_max < c_min):
+    sys.stderr.write("FATAL(22): rotated max seq %d not < current min seq %d\n"
+                     % (o_max, c_min)); sys.exit(22)
+PY
+  rc=$?
+  [ "$rc" -ne 0 ] && exit "$rc"
+fi
+
 # --- 5. RAW-ID POST-SCAN (defence in depth) ---------------------------------
 # A sanitized handle is `id:<14hex>`. Any UUID or >= 32-hex run in the output is
 # an un-sanitized id — abort the publish rather than commit a leak.
@@ -213,7 +248,19 @@ fi
 # evidence, never nothing. The prior data dir is removed only AFTER the swap.
 mkdir -p "$OUT_ROOT"
 REV="$(mktemp -d "${OUT}.rev.XXXXXX")"   # fresh versioned data dir for this run
-cp "$SAN"/* "$REV"/ 2>/dev/null || true
+# Fail closed on a staging-copy error (disk full, permission, transient I/O) —
+# never publish a partial revision, and re-assert the mandatory primary is
+# actually present in the staged rev before it can be swapped into place.
+if ! cp "$SAN"/* "$REV"/; then
+  rm -rf "$REV"
+  echo "ERROR: staging copy failed — refusing to publish partial evidence." >&2
+  exit 5
+fi
+if [ ! -s "$REV/${LABEL}_w5_events.jsonl" ]; then
+  rm -rf "$REV"
+  echo "ERROR: primary artifact missing from the staged revision." >&2
+  exit 5
+fi
 PREV_REV=""
 [ -L "$OUT" ] && PREV_REV="$(readlink "$OUT")"
 # One-time migration: an older puller may have left `<case>` as a REAL dir. A
@@ -231,8 +278,16 @@ ln -s "$(basename "$REV")" "$LINKTMP"
 # `<case>` symlink in place with no absent/half-written interval.
 if python3 -c 'import os,sys; os.replace(sys.argv[1], sys.argv[2])' \
     "$LINKTMP" "$OUT"; then
-  if [ -n "$PREV_REV" ] && [ "$PREV_REV" != "$(basename "$REV")" ]; then
-    rm -rf "${OUT_ROOT}/${PREV_REV}"     # drop the superseded rev after the swap
+  # Remove the superseded rev — but ONLY if its name is a bare, expected local
+  # basename (`<case>.rev.*`, no slash, no `..`). A tampered/relative symlink
+  # target must never let this `rm -rf` escape OUT_ROOT.
+  if [ -n "$PREV_REV" ] && [ "$PREV_REV" != "$(basename "$REV")" ] \
+     && [ "$PREV_REV" = "$(basename "$PREV_REV")" ]; then
+    case "$PREV_REV" in
+      *..*) : ;;                                   # reject any '..'
+      "$(basename "$OUT").rev."*)
+        [ -d "${OUT_ROOT}/${PREV_REV}" ] && rm -rf "${OUT_ROOT}/${PREV_REV}" ;;
+    esac
   fi
 else
   rm -rf "$LINKTMP" "$REV"

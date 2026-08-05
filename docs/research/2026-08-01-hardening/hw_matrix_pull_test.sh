@@ -233,5 +233,54 @@ else
   bad "republish broken (re1=$re1 re2=$re2 rev1=$rev1 rev2=$rev2 revs=$n_revs dangle=$([ -f "$RCASE/iphone14_w5_events.jsonl" ] && echo no || echo YES))"
 fi
 
+# 11-13. CROSS-FILE EVENT CHAIN (rotated .1 → current) --------------------
+chain_fx() {  # $1 sandbox, $2 rotated-epoch:minseq:maxseq, $3 current-epoch:minseq:maxseq
+  local fx="$1/fixtures"
+  local oe="${2%%:*}"; local orest="${2#*:}"; local omin="${orest%%:*}"; local omax="${orest#*:}"
+  local ce="${3%%:*}"; local crest="${3#*:}"; local cmin="${crest%%:*}"; local cmax="${crest#*:}"
+  : > "$fx/w5_events.1.jsonl"
+  for s in $(seq "$omin" "$omax"); do
+    printf '{"seq":%d,"event":"a","caseEpoch":%d,"keyEpoch":1,"runEpoch":5,"ts":%d}\n' \
+      "$s" "$oe" "$s" >> "$fx/w5_events.1.jsonl"; done
+  : > "$fx/w5_events.jsonl"
+  for s in $(seq "$cmin" "$cmax"); do
+    printf '{"seq":%d,"event":"b","caseEpoch":%d,"keyEpoch":1,"runEpoch":5,"ts":%d}\n' \
+      "$s" "$ce" "$s" >> "$fx/w5_events.jsonl"; done
+  printf '{"token":"aabbccddeeff00112233445566778899","rssi":-60,"ts":1}\n' \
+    > "$fx/w5_rssi_log.jsonl"
+}
+setup_chain_ok()     { chain_fx "$1" "2:1:3" "2:4:6"; }   # same epoch, .1 seq < current
+setup_chain_overlap(){ chain_fx "$1" "2:1:5" "2:3:6"; }   # current min 3 <= rotated max 5
+setup_chain_epoch()  { chain_fx "$1" "2:1:3" "3:4:6"; }   # caseEpoch differs
+run_case chain_ok      0  setup_chain_ok
+run_case chain_overlap 22 setup_chain_overlap
+run_case chain_epoch   21 setup_chain_epoch
+
+# 14. PATH-TRAVERSAL SAFETY: a tampered `<case>` symlink whose target escapes
+# OUT_ROOT must NOT let the superseded-rev cleanup `rm -rf` outside OUT_ROOT.
+SB_PT="$(make_sandbox)"; valid_fixtures "$SB_PT"
+mkdir -p "$SB_PT/work/hardware_evidence" "$SB_PT/work/victim"
+: > "$SB_PT/work/victim/keepme"
+( cd "$SB_PT/work/hardware_evidence" && ln -s ../victim caseT )  # escaping target
+( cd "$SB_PT/work" && HW_MATRIX_XCRUN="$SB_PT/bin/xcrun" \
+  FIXTURES="$SB_PT/fixtures" XCRUN_MARKER="$SB_PT/m" \
+  INRANGE_DIAG_RUN_SECRET="$SECRET" \
+  bash ./hw_matrix_pull.sh test-udid iphone14 caseT ) >/dev/null 2>&1
+pt_rc=$?
+if [ "$pt_rc" -eq 0 ] && [ -f "$SB_PT/work/victim/keepme" ] \
+   && [ -L "$SB_PT/work/hardware_evidence/caseT" ]; then
+  ok "path traversal: escaping prior symlink did NOT delete outside OUT_ROOT"
+else
+  bad "path traversal guard failed (rc=$pt_rc victim=$([ -f "$SB_PT/work/victim/keepme" ] && echo kept || echo DELETED))"
+fi
+
+# 15. EMPTY NON-PRIMARY family is TOLERATED (not conflated with corruption): a
+# case with no RSSI drains has an empty w5_rssi_log.jsonl but still publishes.
+setup_empty_rssi() { valid_fixtures "$1"; : > "$1/fixtures/w5_rssi_log.jsonl"; }
+run_case empty_rssi 0 setup_empty_rssi
+[ -f "$SB/work/hardware_evidence/empty_rssi/iphone14_w5_events.jsonl" ] \
+  && ok "empty non-primary tolerated; primary still published" \
+  || bad "empty non-primary broke the publish"
+
 echo "== $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]
