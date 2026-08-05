@@ -201,11 +201,11 @@ for i, line in enumerate(open(src, 'r', errors='replace'), start=1):
             fatal(18, "rssi line %d must be {token:str, rssi:int, ts:int}" % i)
     out.append(json.dumps(san(obj)))
     n += 1
-if n == 0 and mode == "events":
-    # The primary event stream MUST carry records (a zero-record events file is
-    # indistinguishable from a lost/tampered pull). A non-primary family (e.g.
-    # RSSI on a case with no drains) may legitimately be empty — publish it empty
-    # rather than conflating "empty" with "corrupt".
+if n == 0 and mode == "events" and os.path.basename(src) == "w5_events.jsonl":
+    # ONLY the PRIMARY event stream must carry records (a zero-record primary is
+    # indistinguishable from a lost/tampered pull). The rotated `.1` sibling, and
+    # any non-primary family (e.g. RSSI on a case with no drains), may legitimately
+    # be empty — publish it empty rather than conflating "empty" with "corrupt".
     fatal(19, "no JSON records after parse in the primary event stream")
 open(dst, 'w').write('\n'.join(out) + ('\n' if out else ''))
 print("  sanitized(%s) -> %s (%d records)" % (mode, os.path.basename(dst), n))
@@ -252,7 +252,9 @@ sanitize_text  bb_wake_log.1.txt
 # than every current record. Validating each file in isolation would let a
 # conflicting epoch or an overlapping/decreasing seq across the boundary slip
 # through — so the chain is checked end to end here.
-if [ -f "$SAN/${LABEL}_w5_events.1.jsonl" ]; then
+# Only chain a NON-EMPTY rotated file — an empty (legit) rotation has no records
+# to chain against the current stream.
+if [ -s "$SAN/${LABEL}_w5_events.1.jsonl" ]; then
   python3 - "$SAN/${LABEL}_w5_events.1.jsonl" "$SAN/${LABEL}_w5_events.jsonl" <<'PY'
 import sys, json
 def bounds(p):

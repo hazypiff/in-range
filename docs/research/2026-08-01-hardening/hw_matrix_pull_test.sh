@@ -390,5 +390,13 @@ else
   bad "all-dots CASE guard failed (rc=$dot_rc root=$([ -d "$SB_DOT/work/hardware_evidence" ] && echo intact || echo MOVED))"
 fi
 
+# 24. EMPTY ROTATED .1: an existing but zero-length w5_events.1.jsonl is a legit
+# empty rotation, NOT corruption — a valid primary must still publish.
+setup_empty_rot() { valid_fixtures "$1"; : > "$1/fixtures/w5_events.1.jsonl"; }
+run_case empty_rot 0 setup_empty_rot
+[ -f "$SB/work/hardware_evidence/empty_rot/iphone14_w5_events.jsonl" ] \
+  && ok "empty rotated .1 tolerated; primary published" \
+  || bad "empty rotated .1 blocked the publish"
+
 echo "== $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]
