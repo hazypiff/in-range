@@ -1015,33 +1015,31 @@ class BeaconService {
         currentFrom: _currentToken!.issuedAt,
         currentUntil: _currentToken!.expiresAt,
       );
-      final ok = await _bgBeacon.start(payload);
-      // A3 KEY-READY GATE. The fleet run secret is provisioned FIRST and its
-      // native ack is AWAITED, so W5 persistent links are enabled only after the
-      // key is confirmed in place — fail closed, so no native manager can emit a
-      // W5 event under a random or absent key. Gated on the compile-time diag
-      // flag so the whole call — and the run-secret key literal — tree-shakes out
-      // of production (B5). Precedence: the build-time `diagRunSecret` dart-
-      // define is the single provisioned key; a failed or empty provision holds
-      // W5 OFF regardless of `w5LinksEnabled`.
+      // A3 KEY-READY GATE — runs BEFORE native `start`, so no native manager can
+      // begin W5 activity (including a restore-triggered link) under a random or
+      // absent key. The fleet run secret is provisioned first and its native ack
+      // is AWAITED; the W5-links flag is then set to its final value, and ONLY
+      // then are the managers started. Gated on the compile-time diag flag so the
+      // whole call — and the run-secret key literal — tree-shakes out of
+      // production (B5). Precedence: the build-time `diagRunSecret` dart-define is
+      // the single provisioned key; a failed or empty provision holds W5 OFF
+      // regardless of `w5LinksEnabled` (fail closed).
       if (AppConfig.kDiagBuild) {
         final ack = await _bgBeacon.setDiagRunSecret(AppConfig.diagRunSecret);
         final keyReady = ack != null && ack['ok'] == true;
-        if (AppConfig.w5LinksEnabled && keyReady) {
-          await _bgBeacon.setW5Links(true);
-        } else {
-          // Assert OFF (idempotent) so a stale native flag from a prior install
-          // cannot leave W5 enabled under an unprovisioned key.
-          await _bgBeacon.setW5Links(false);
-          if (AppConfig.w5LinksEnabled && !keyReady) {
-            debugPrint(
-                'W5 links held OFF: fleet key not provisioned (fail-closed)');
-          }
+        // Assert the flag explicitly either way (idempotent) so a stale native
+        // flag from a prior install cannot leave W5 enabled under an
+        // unprovisioned key.
+        await _bgBeacon.setW5Links(AppConfig.w5LinksEnabled && keyReady);
+        if (AppConfig.w5LinksEnabled && !keyReady) {
+          debugPrint('W5 links held OFF: fleet key not provisioned (fail-closed)');
         }
       } else {
         // Production: W5 is compile-inert natively; assert OFF regardless.
-        unawaited(_bgBeacon.setW5Links(false));
+        await _bgBeacon.setW5Links(false);
       }
+      // Managers start only AFTER the key-ready gate has settled the W5 flag.
+      final ok = await _bgBeacon.start(payload);
       // Crack #1: refresh the native wake-ping endpoint + JWT on every
       // (re)start — rotation re-enters here every ~15 min, keeping the
       // stored token fresh. Endpoint is null until the server half (issue

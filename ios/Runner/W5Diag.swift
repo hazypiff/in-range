@@ -86,7 +86,7 @@ enum W5Diag {
         guard let data = try? JSONSerialization.data(withJSONObject: obj),
           let s = String(data: data, encoding: .utf8)
         else {
-          eventWriter.droppedLocked()
+          eventWriter.droppedLocked("encode")
           return
         }
         _ = eventWriter.appendLocked(s + "\n")
@@ -202,8 +202,13 @@ enum W5Diag {
         _cachedRunSecret = nil
         runSecretLock.unlock()
         diagDefaults?.set(keyEpoch + 1, forKey: keyEpochKey)
+        // `ok` reflects the WHOLE operation: the secret is gone AND every
+        // evidence artifact was wiped. A partial wipe (r["ok"] == false) must
+        // NOT be masked as a clean success — the caller sees a false `ok` with
+        // the per-file `wiped` map so a stranded artifact is visible.
+        let fullyWiped = (r["ok"] as? Bool) ?? false
         return [
-          "ok": true, "secretDestroyed": true, "keyEpoch": keyEpoch,
+          "ok": fullyWiped, "secretDestroyed": true, "keyEpoch": keyEpoch,
           "caseEpoch": caseEpoch, "wiped": r["wiped"] ?? [:],
         ]
       }

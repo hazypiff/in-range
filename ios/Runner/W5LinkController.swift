@@ -83,6 +83,7 @@ final class W5LinkController {
     outLinks.isEmpty && inLinks.isEmpty && leaseByHandle.isEmpty
       && retryTimers.isEmpty && graceTimers.isEmpty && prevAliasTimers.isEmpty
       && pendingControl.isEmpty && myPrevTokenTimer == nil
+      && persistTimer == nil  // a pending persist write is still live W5 work
   }
 
   /// Control notifies refused by the queue; flushed from isReady.
@@ -783,6 +784,9 @@ final class W5LinkController {
   }
 
   private func persistNow() {
+    // The scheduling timer is one-shot; clear the reference so a completed
+    // persist no longer counts as pending W5 work (isQuiescent, A1).
+    persistTimer = nil
     let snapshot = ownership.snapshot()
     var linkMeta: [String: [String: Any]] = [:]
     for (id, link) in outLinks {

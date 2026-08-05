@@ -28,7 +28,7 @@ import Foundation
     private let cap: Int
     private let rotation: Rotation
     private let fileName: String
-    private let droppedKey: String
+    private let droppedKeyBase: String
     private let lock: NSRecursiveLock
     private static let diagDefaults = UserDefaults(suiteName: "io.inrange.diag")
     static let opFailPrefix = "bb.evwrite.opfail."
@@ -58,7 +58,7 @@ import Foundation
         .appendingPathComponent(fileName)
       self.cap = cap
       self.rotation = rotation
-      self.droppedKey = "\(Self.droppedPrefix)\(fileName)"
+      self.droppedKeyBase = "\(Self.droppedPrefix)\(fileName)"
       self.lock = lock
     }
 
@@ -86,7 +86,7 @@ import Foundation
     @discardableResult
     func appendLocked(_ text: String) -> Bool {
       guard let bytes = text.data(using: .utf8) else {
-        droppedLocked()
+        droppedLocked("encode")
         return false
       }
       let fm = FileManager.default
@@ -100,7 +100,7 @@ import Foundation
       if !fm.fileExists(atPath: url.path) {
         do { try bytes.write(to: url, options: .completeFileProtectionUntilFirstUserAuthentication) }
         catch {
-          droppedLocked()
+          droppedLocked("create")
           return false
         }
         applyProtection(url)
@@ -108,7 +108,7 @@ import Foundation
       }
 
       guard let h = try? FileHandle(forWritingTo: url) else {
-        droppedLocked()  // inaccessible existing file — never overwrite
+        droppedLocked("open")  // inaccessible existing file — never overwrite
         return false
       }
       var ok = true
@@ -133,7 +133,7 @@ import Foundation
         }
       }
       if !ok {
-        droppedLocked()
+        droppedLocked("write")
         return false
       }
       applyProtection(url)
@@ -219,17 +219,21 @@ import Foundation
       return body()
     }
 
-    /// Account a drop; the CALLER MUST hold the lock.
-    func droppedLocked() {
+    /// Account a LOST LINE, TYPED by the operation that lost it
+    /// (`bb.evwrite.dropped.<file>.<op>`) — so a soak's line losses are
+    /// attributable to encode/create/open/write, not merged into one bucket.
+    /// The CALLER MUST hold the lock. `dropped` (in-memory) is the total.
+    func droppedLocked(_ op: String = "write") {
       dropped += 1
-      let n = (Self.diagDefaults?.integer(forKey: droppedKey) ?? 0) + 1
-      Self.diagDefaults?.set(n, forKey: droppedKey)
+      let k = "\(droppedKeyBase).\(op)"
+      let n = (Self.diagDefaults?.integer(forKey: k) ?? 0) + 1
+      Self.diagDefaults?.set(n, forKey: k)
     }
 
     /// A pre-append drop (takes the lock).
     func noteExternalDrop() {
       lock.lock(); defer { lock.unlock() }
-      droppedLocked()
+      droppedLocked("external")
     }
 
     /// Typed-by-operation failure counter: `bb.evwrite.opfail.<file>.<op>`.

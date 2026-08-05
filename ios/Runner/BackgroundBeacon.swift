@@ -131,10 +131,14 @@ final class BackgroundBeacon: NSObject {
 
   /// REAL W5 quiescence (A1): not the persisted feature flag, but proof that no
   /// live W5 work exists — no sessions, no in-flight connects, and the
-  /// controller holds no links/leases/timers. Used to gate secret destruction.
+  /// controller holds no links/leases/timers. Deliberately does NOT short-circuit
+  /// on `w5LinksEnabled`: disabling the flag does not tear down links/timers that
+  /// were already live, so a stale session or a pending persist could survive a
+  /// flag flip; quiescence must be judged from real state alone. (In a prod build
+  /// the flag is compile-false and these collections are always empty, so this
+  /// still returns true without any W5 work.)
   var isW5Quiescent: Bool {
-    if !w5LinksEnabled { return true }  // disabled → nothing W5 is running
-    return w5.isEmpty && inflight.isEmpty && w5Link.isQuiescent
+    w5.isEmpty && inflight.isEmpty && w5Link.isQuiescent
   }
 
   // Callback-primed cadence: after a write CONFIRMS (didWriteValueFor), the

@@ -189,7 +189,16 @@ final class W5DiagTests: XCTestCase {
         // Tear the lease down through the REAL channel boundary Dart calls.
         let d = bb.dropPeerByToken("aliasQ")
         XCTAssertEqual(d["leaseEnded"] as? Bool, true, "real teardown ended lease")
-        XCTAssertTrue(bb.isW5Quiescent, "after real teardown ⇒ quiescent")
+        // A pending persist write scheduled by the seed is STILL live W5 work
+        // (persistTimer != nil ⇒ not quiescent). Destruction must remain refused
+        // until it flushes — spin the run loop until the controller is truly
+        // quiescent, proving the gate accounts for in-flight persistence.
+        let deadline = Date().addingTimeInterval(2)
+        while !bb.isW5Quiescent && Date() < deadline {
+          RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        XCTAssertTrue(
+          bb.isW5Quiescent, "after real teardown + persist flush ⇒ quiescent")
         W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))
         let ok = W5Diag.destroySessionSecret(w5Quiescent: bb.isW5Quiescent)
         XCTAssertEqual(ok["ok"] as? Bool, true, "destruction ALLOWED once quiescent")

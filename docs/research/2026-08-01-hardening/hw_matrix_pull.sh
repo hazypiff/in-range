@@ -205,12 +205,27 @@ if grep -rEln \
 fi
 
 # --- 6. ATOMIC PUBLISH ------------------------------------------------------
-# Replace the case dir's contents atomically: stage a sibling dir, then rename.
+# Build the full new dir in a sibling staging dir, then swap it into place with
+# renames only. The prior published dir is moved aside FIRST and kept until the
+# new dir is confirmed in place; if the final rename fails, the prior dir is
+# restored — so a failed publish never leaves NO evidence.
 mkdir -p "$OUT_ROOT"
 PUB_TMP="$(mktemp -d "$OUT_ROOT/.pub.${CASE}.XXXXXX")"
 cp "$SAN"/* "$PUB_TMP"/ 2>/dev/null || true
-rm -rf "$OUT"
-mv "$PUB_TMP" "$OUT"
+PREV=""
+if [ -d "$OUT" ]; then
+  PREV="${OUT}.prev.$$"
+  mv "$OUT" "$PREV"           # keep the prior evidence aside, do not delete yet
+fi
+if mv "$PUB_TMP" "$OUT"; then  # atomic rename on the same filesystem
+  [ -n "$PREV" ] && rm -rf "$PREV"
+else
+  # Restore the prior evidence rather than leaving the case unpublished.
+  [ -n "$PREV" ] && mv "$PREV" "$OUT"
+  rm -rf "$PUB_TMP"
+  echo "ERROR: publish rename failed; prior evidence restored." >&2
+  exit 4
+fi
 
 echo "Raw (uncommitted, wiped on exit): $RAW"
 echo "Sanitized + validated (commit-safe): $OUT"
