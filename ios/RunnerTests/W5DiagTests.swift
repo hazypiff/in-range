@@ -318,6 +318,80 @@ final class W5DiagTests: XCTestCase {
       try? FileManager.default.removeItem(at: events)
     }
 
+    // A1: secret DESTRUCTION aborts on a failed wipe — the secret is RETAINED and
+    // the key epoch is NOT advanced, so a stranded old-key artifact can never
+    // later accrue new/fallback-key events (mixed-key evidence). Fail closed.
+    func testDestroyAbortsAndRetainsSecretWhenWipeFails() {
+      W5EvidenceWriter.resetInjectedFailures()
+      let sec = String(repeating: "ab", count: 32)
+      W5Diag.provisionRunSecret(sec)
+      let want = Self.expectedHandle(domain: "peer", raw: "z", secretHex: sec)
+      let e0 = W5Diag.keyEpoch
+      let events = FileManager.default.urls(
+        for: .documentDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("w5_events.jsonl")
+      try? "x\n".write(to: events, atomically: true, encoding: .utf8)
+      W5EvidenceWriter.injectedFailures["w5_events.jsonl.wipe"] = 1
+      let r = W5Diag.destroySessionSecret(w5Quiescent: true)
+      XCTAssertEqual(r["ok"] as? Bool, false)
+      XCTAssertEqual(r["rejected"] as? String, "wipe-failed")
+      XCTAssertEqual(W5Diag.keyEpoch, e0, "key epoch NOT advanced on failed wipe")
+      XCTAssertEqual(
+        W5Diag.handle("peer", "z"), want, "secret RETAINED on failed wipe")
+      W5EvidenceWriter.resetInjectedFailures()
+      try? FileManager.default.removeItem(at: events)
+    }
+
+    // A3: a changed-key provision aborts the ROTATION on a failed old-key wipe —
+    // the OLD key is retained, the key epoch is NOT advanced, and ok:false so the
+    // Dart gate will not enable W5 on a half-rotated key (no mixed-key evidence).
+    func testKeyRotationAbortsAndRetainsOldKeyWhenWipeFails() {
+      W5EvidenceWriter.resetInjectedFailures()
+      let old = String(repeating: "ab", count: 32)
+      W5Diag.provisionRunSecret(old)
+      let wantOld = Self.expectedHandle(domain: "peer", raw: "z", secretHex: old)
+      let e0 = W5Diag.keyEpoch
+      let events = FileManager.default.urls(
+        for: .documentDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("w5_events.jsonl")
+      try? "x\n".write(to: events, atomically: true, encoding: .utf8)
+      W5EvidenceWriter.injectedFailures["w5_events.jsonl.wipe"] = 1
+      let r = W5Diag.provisionRunSecret(String(repeating: "cd", count: 32))
+      XCTAssertEqual(r["ok"] as? Bool, false)
+      XCTAssertEqual(r["rejected"] as? String, "rotate-wipe-failed")
+      XCTAssertEqual(
+        W5Diag.keyEpoch, e0, "key epoch NOT advanced on a failed rotation wipe")
+      XCTAssertEqual(
+        W5Diag.handle("peer", "z"), wantOld, "OLD key retained on failed rotation")
+      W5EvidenceWriter.resetInjectedFailures()
+      try? FileManager.default.removeItem(at: events)
+    }
+
+    // A2: a pending RSSI drain-ack is DISCARDED after a case reset — the reset
+    // bumps caseEpoch and wipes the RSSI file, so applying the stale in-memory
+    // offsets to the fresh file (skipping/deleting new-case samples) must not
+    // happen. The ack is epoch-guarded on the same serialized boundary.
+    func testRssiAckDiscardedAfterCaseReset() {
+      let bb = BackgroundBeacon()
+      withExtendedLifetime(bb) {
+        let diag = UserDefaults(suiteName: "io.inrange.diag")
+        diag?.removeObject(forKey: "bb.w5rssi.off")
+        let url = FileManager.default.urls(
+          for: .documentDirectory, in: .userDomainMask)[0]
+          .appendingPathComponent("w5_rssi_log.jsonl")
+        try? "{\"token\":\"t\",\"rssi\":-60,\"ts\":1}\n{\"token\":\"t\",\"rssi\":-61,\"ts\":2}\n"
+          .write(to: url, atomically: true, encoding: .utf8)
+        let drained = bb.w5Link.drainFileSamples()
+        XCTAssertEqual(drained.count, 2, "drained both samples")
+        _ = W5Diag.resetCase()  // bumps caseEpoch, wipes RSSI file, clears offset
+        bb.w5Link.ackFileSamples(2)  // stale ack across the reset boundary
+        XCTAssertEqual(
+          diag?.integer(forKey: "bb.w5rssi.off") ?? 0, 0,
+          "stale ack discarded; no offset applied to the new-case file")
+        try? FileManager.default.removeItem(at: url)
+      }
+    }
+
     // B3: a short/odd/non-hex secret must NOT mutate state.
     func testInvalidSecretDoesNotMutateState() {
       W5Diag.provisionRunSecret(String(repeating: "cd", count: 32))

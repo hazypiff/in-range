@@ -116,13 +116,30 @@ enum W5Diag {
       return eventWriter.withLock {
         let prior = persistedSecretLocked()
         let changed = prior != nil && prior != d
-        runSecretLock.lock()
-        diagDefaults?.set(hex, forKey: provisionedSecretKey)
-        _cachedRunSecret = d
-        runSecretLock.unlock()
         if changed {
-          resetCaseLocked(reason: "keyRotate")
+          // Wipe the OLD-key evidence BEFORE committing the new key. If the wipe
+          // fails, an old-key artifact is stranded; rotating anyway would append
+          // NEW-key events into it → mixed-key evidence. So DO NOT rotate: keep
+          // the old key, fail closed, and surface the failure so the operator
+          // can resolve the stranded artifact and retry.
+          let r = resetCaseLocked(reason: "keyRotate")
+          if (r["ok"] as? Bool) != true {
+            return [
+              "ok": false, "rejected": "rotate-wipe-failed",
+              "wiped": r["wiped"] ?? [:],
+            ]
+          }
+          runSecretLock.lock()
+          diagDefaults?.set(hex, forKey: provisionedSecretKey)
+          _cachedRunSecret = d
+          runSecretLock.unlock()
           diagDefaults?.set(keyEpoch + 1, forKey: keyEpochKey)
+        } else {
+          // First provision or an unchanged key — no old-key evidence to wipe.
+          runSecretLock.lock()
+          diagDefaults?.set(hex, forKey: provisionedSecretKey)
+          _cachedRunSecret = d
+          runSecretLock.unlock()
         }
         return ["ok": true, "keyEpoch": keyEpoch, "rotated": changed]
       }
@@ -201,19 +218,26 @@ enum W5Diag {
       return eventWriter.withLock {
         if !w5Quiescent { return ["ok": false, "rejected": "w5-active"] }
         let r = resetCaseLocked(reason: "destroy")  // wipe/clear/reset atomically
+        // If the evidence could not be FULLY wiped, do NOT destroy the secret or
+        // advance the key epoch: a stranded old-key artifact plus a destroyed
+        // secret would later (on W5 restart under a fresh key) accrue mixed-key
+        // evidence. Keep the secret, fail closed, and surface the stranded files
+        // so the operator can resolve them and retry — the secret + evidence stay
+        // mutually consistent (old key) in the meantime.
+        let fullyWiped = (r["ok"] as? Bool) ?? false
+        if !fullyWiped {
+          return [
+            "ok": false, "rejected": "wipe-failed", "wiped": r["wiped"] ?? [:],
+          ]
+        }
         runSecretLock.lock()
         diagDefaults?.removeObject(forKey: runSecretKey)
         diagDefaults?.removeObject(forKey: provisionedSecretKey)
         _cachedRunSecret = nil
         runSecretLock.unlock()
         diagDefaults?.set(keyEpoch + 1, forKey: keyEpochKey)
-        // `ok` reflects the WHOLE operation: the secret is gone AND every
-        // evidence artifact was wiped. A partial wipe (r["ok"] == false) must
-        // NOT be masked as a clean success — the caller sees a false `ok` with
-        // the per-file `wiped` map so a stranded artifact is visible.
-        let fullyWiped = (r["ok"] as? Bool) ?? false
         return [
-          "ok": fullyWiped, "secretDestroyed": true, "keyEpoch": keyEpoch,
+          "ok": true, "secretDestroyed": true, "keyEpoch": keyEpoch,
           "caseEpoch": caseEpoch, "wiped": r["wiped"] ?? [:],
         ]
       }

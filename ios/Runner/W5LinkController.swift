@@ -977,6 +977,12 @@ final class W5LinkController {
   }
   /// Byte offsets (end of each line) of the last drain, for exact acking.
   private var lastDrainLineEnds: [UInt64] = []
+  /// caseEpoch captured at drain time. A case reset / destroy / key-rotation
+  /// bumps caseEpoch AND wipes the RSSI file, so if the epoch changed between a
+  /// drain and its ack, the pending offsets refer to the OLD (now-gone) file and
+  /// MUST be discarded — applying them to the fresh file would skip or delete
+  /// new-case samples (A2).
+  private var lastDrainCaseEpoch: Int = -1
 
   /// Live push when Dart can hear it; file-append otherwise. The 500-entry
   /// UserDefaults sighting buffer truncated the 07-29 soak to its last ~35
@@ -1037,6 +1043,9 @@ final class W5LinkController {
       guard start < all.count else { return [] }
       var out: [[String: Any]] = []
       lastDrainLineEnds = []
+      #if INRANGE_DIAG
+        lastDrainCaseEpoch = W5Diag.caseEpoch
+      #endif
       var idx = Int(start)
       while idx < all.count, out.count < maxCount {
         guard let nl = all[idx...].firstIndex(of: 0x0A) else { break }
@@ -1054,6 +1063,15 @@ final class W5LinkController {
   /// append/trim/drain (shared writer lock).
   func ackFileSamples(_ count: Int) {
     rssiSerialized {
+      #if INRANGE_DIAG
+        // A reset/destroy/key-rotation since the drain bumped caseEpoch and wiped
+        // the RSSI file; these offsets are stale — discard rather than apply them
+        // to the fresh file (A2). Serialized on the same lock as reset's wipe.
+        if W5Diag.caseEpoch != lastDrainCaseEpoch {
+          lastDrainLineEnds = []
+          return
+        }
+      #endif
       guard count > 0, !lastDrainLineEnds.isEmpty else { return }
       let n = min(count, lastDrainLineEnds.count)
       bb.defaults.set(Int(lastDrainLineEnds[n - 1]), forKey: Self.keyRssiOffset)
