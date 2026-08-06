@@ -332,6 +332,40 @@ else
   bad "hostile prior symlink guard failed (rc=$pt_rc victim=$([ -f "$SB_PT/work/victim/keepme" ] && echo kept || echo DELETED))"
 fi
 
+# 14b. SECOND-HOP REVISION SYMLINK ESCAPE (C1): `<case>` is a bare, pattern-valid
+# revision symlink, but the revision it names is ITSELF a symlink pointing outside
+# OUT_ROOT. A `-d` existence check follows that second symlink and the carry-over
+# glob would import arbitrary external files. Must be REFUSED (exit 9): the outside
+# target is never read/copied, no revision is published, and it stays intact.
+SB_PN="$(make_sandbox)"; valid_fixtures "$SB_PN"
+mkdir -p "$SB_PN/work/hardware_evidence" "$SB_PN/outside"
+: > "$SB_PN/outside/keepme"                       # outside sentinel — must survive
+printf 'x\n' > "$SB_PN/outside/slotZ_w5_events.jsonl"   # sanctioned-looking payload
+printf 'x\n' > "$SB_PN/outside/evil_payload.txt"        # arbitrary payload
+( cd "$SB_PN/work/hardware_evidence" \
+  && ln -s ../../outside caseN.rev.evil \
+  && ln -s caseN.rev.evil caseN )                 # two-hop: caseN -> rev -> outside
+( cd "$SB_PN/work" && HW_MATRIX_XCRUN="$SB_PN/bin/xcrun" \
+  FIXTURES="$SB_PN/fixtures" XCRUN_MARKER="$SB_PN/m" \
+  INRANGE_DIAG_RUN_SECRET="$SECRET" \
+  bash ./hw_matrix_pull.sh test-udid iphone14 caseN ) >/dev/null 2>&1
+pn_rc=$?
+# Detect a GENUINE import: a real regular file the script copied into a real
+# revision dir. `find -type f` does NOT traverse the planted `caseN.rev.evil`
+# symlink, so it never false-positives on the (correctly untouched) fixture.
+imported=no
+if find "$SB_PN/work/hardware_evidence" -type f \
+     \( -name evil_payload.txt -o -name slotZ_w5_events.jsonl \) 2>/dev/null \
+   | grep -q .; then
+  imported=yes
+fi
+if [ "$pn_rc" -eq 9 ] && [ "$imported" = no ] \
+   && [ -f "$SB_PN/outside/keepme" ] && [ -f "$SB_PN/outside/evil_payload.txt" ]; then
+  ok "second-hop revision symlink refused (exit 9); no outside import, target intact"
+else
+  bad "second-hop symlink escape (rc=$pn_rc imported=$imported outside=$([ -f "$SB_PN/outside/keepme" ] && echo kept || echo GONE))"
+fi
+
 # 15. EMPTY NON-PRIMARY family is TOLERATED (not conflated with corruption): a
 # case with no RSSI drains has an empty w5_rssi_log.jsonl but still publishes.
 setup_empty_rssi() { valid_fixtures "$1"; : > "$1/fixtures/w5_rssi_log.jsonl"; }
