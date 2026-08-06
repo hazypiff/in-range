@@ -660,5 +660,68 @@ EOF
 }
 run_case nan 25 setup_nan
 
+# 37. A.1-3 SAFE-COPY PRIMITIVE (deterministic; no device). The carry-over copy
+# opens with O_NOFOLLOW + fstat(st_nlink==1): a symlink swapped in after the
+# [ ! -L ] pre-filter is REFUSED (never followed — closes the TOCTOU window) and
+# a hardlink to outside content is REFUSED, while a genuine regular file copies.
+SB_SC="$(make_sandbox)"; scd="$SB_SC/work"
+printf 'REG\n' > "$scd/reg"                              # standalone regular (nlink 1)
+printf 'TGT\n' > "$scd/htgt"; ln "$scd/htgt" "$scd/hardlink"   # nlink 2
+ln -s "$scd/reg" "$scd/symlink"                          # symlink to a regular file
+bash "$scd/hw_matrix_pull.sh" __safe_copy_test "$scd/reg"      "$scd/o_reg"  >/dev/null 2>&1; sc_reg=$?
+bash "$scd/hw_matrix_pull.sh" __safe_copy_test "$scd/symlink"  "$scd/o_sym"  >/dev/null 2>&1; sc_sym=$?
+bash "$scd/hw_matrix_pull.sh" __safe_copy_test "$scd/hardlink" "$scd/o_hard" >/dev/null 2>&1; sc_hard=$?
+if [ "$sc_reg" -eq 0 ] && [ -f "$scd/o_reg" ] && [ "$(cat "$scd/o_reg")" = REG ] \
+   && [ "$sc_sym" -eq 8 ] && [ ! -e "$scd/o_sym" ] \
+   && [ "$sc_hard" -eq 8 ] && [ ! -e "$scd/o_hard" ]; then
+  ok "safe copy: regular ok, symlink refused (O_NOFOLLOW), hardlink refused (nlink)"
+else
+  bad "safe copy primitive (reg=$sc_reg sym=$sc_sym hard=$sc_hard)"
+fi
+
+# 38. A.1-1 HARDLINK CARRY-OVER: a prior revision holds ANOTHER label's sanctioned
+# file that is a HARDLINK to content OUTSIDE OUT_ROOT. Carry-over must REFUSE
+# (exit 9) — never publishing the outside bytes; no new rev; outside intact.
+SB_HL="$(make_sandbox)"; valid_fixtures "$SB_HL"
+mkdir -p "$SB_HL/work/hardware_evidence" "$SB_HL/outside"
+printf 'OUTSIDE-SECRET\n' > "$SB_HL/outside/secret"; : > "$SB_HL/outside/keepme"
+hlrev="$SB_HL/work/hardware_evidence/caseHL.rev.seed01"; mkdir "$hlrev"
+ln "$SB_HL/outside/secret" "$hlrev/slotB_w5_events.jsonl"    # sanctioned name, OTHER label, hardlink
+( cd "$SB_HL/work/hardware_evidence" && ln -s caseHL.rev.seed01 caseHL )
+( cd "$SB_HL/work" && HW_MATRIX_XCRUN="$SB_HL/bin/xcrun" \
+  FIXTURES="$SB_HL/fixtures" XCRUN_MARKER="$SB_HL/m" \
+  INRANGE_DIAG_RUN_SECRET="$SECRET" \
+  bash ./hw_matrix_pull.sh test-udid iphone14 caseHL ) >/dev/null 2>&1
+hl_rc=$?
+hl_newrev=no
+for d in "$SB_HL"/work/hardware_evidence/caseHL.rev.*; do
+  [ "$d" = "$hlrev" ] && continue
+  [ -e "$d" ] && hl_newrev=yes
+done
+if [ "$hl_rc" -eq 9 ] && [ "$hl_newrev" = no ] \
+   && [ "$(cat "$SB_HL/outside/secret")" = "OUTSIDE-SECRET" ] && [ -f "$SB_HL/outside/keepme" ]; then
+  ok "hardlink carry-over refused (exit 9); outside content not published, intact"
+else
+  bad "hardlink carry-over guard failed (rc=$hl_rc newrev=$hl_newrev)"
+fi
+
+# 39. A.1-2 SYMLINKED OUT_ROOT: `hardware_evidence` itself is a symlink pointing
+# outside the worktree. The puller must REFUSE (exit 9) before any mkdir/publish,
+# so no evidence lands outside; the outside target gains no case dir.
+SB_OR="$(make_sandbox)"; valid_fixtures "$SB_OR"
+mkdir -p "$SB_OR/outside_root"
+( cd "$SB_OR/work" && ln -s ../outside_root hardware_evidence )   # OUT_ROOT is a symlink
+( cd "$SB_OR/work" && HW_MATRIX_XCRUN="$SB_OR/bin/xcrun" \
+  FIXTURES="$SB_OR/fixtures" XCRUN_MARKER="$SB_OR/m" \
+  INRANGE_DIAG_RUN_SECRET="$SECRET" \
+  bash ./hw_matrix_pull.sh test-udid iphone14 caseOR ) >/dev/null 2>&1
+or_rc=$?
+or_out=no; [ -e "$SB_OR/outside_root/caseOR" ] && or_out=yes
+if [ "$or_rc" -eq 9 ] && [ "$or_out" = no ]; then
+  ok "symlinked OUT_ROOT refused (exit 9); nothing published outside the worktree"
+else
+  bad "symlinked OUT_ROOT guard failed (rc=$or_rc published_outside=$or_out)"
+fi
+
 echo "== $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]

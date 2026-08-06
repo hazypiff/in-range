@@ -39,6 +39,52 @@
 BUNDLE="io.inrange.inRange.diag"
 set -euo pipefail
 
+# A.1-1 & A.1-3: TOCTOU- and hardlink-safe copy of a SINGLE regular file.
+# `cp src dst` FOLLOWS a symlink source and re-`stat`s the path, so a `[ ! -L ]`
+# check before it is racy (an attacker can swap `src` for a symlink in between)
+# and a carried HARDLINK to outside content is copied in wholesale. This helper
+# instead opens `src` with O_NOFOLLOW (the open ATOMICALLY refuses a symlink — no
+# check-then-use window) and `fstat`s the OPENED descriptor to require a regular
+# file with st_nlink == 1, then streams bytes FROM THAT SAME DESCRIPTOR. Nothing
+# the path points to can be swapped in after validation. Exit codes:
+#   0 ok | 8 refused (symlink / hardlink / non-regular) | 5 I/O error.
+safe_copy_regular() {  # src dst
+  python3 - "$1" "$2" <<'PY'
+import os, sys, stat, errno
+src, dst = sys.argv[1], sys.argv[2]
+try:
+    fd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW)
+except OSError as e:
+    sys.exit(8 if e.errno in (errno.ELOOP, errno.EMLINK) else 5)
+try:
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+        os.close(fd)
+        sys.exit(8)
+    with os.fdopen(fd, 'rb') as f, open(dst, 'wb') as o:
+        while True:
+            chunk = f.read(1 << 16)
+            if not chunk:
+                break
+            o.write(chunk)
+except OSError:
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    sys.exit(5)
+sys.exit(0)
+PY
+}
+
+# Deterministic test hook for the TOCTOU-safe primitive (no device, no secret):
+#   hw_matrix_pull.sh __safe_copy_test <src> <dst>   -> exits with safe_copy_regular's code
+# Kept above arg/secret validation so a unit test never touches a device.
+if [ "${1:-}" = "__safe_copy_test" ]; then
+  safe_copy_regular "${2:?src}" "${3:?dst}"
+  exit $?
+fi
+
 UDID="${1:?UDID required}"; LABEL="${2:?label required}"; CASE="${3:?case required}"
 
 # LABEL and CASE are interpolated into filesystem paths (OUT dir, rev dirs,
@@ -77,7 +123,25 @@ STAGE="$(mktemp -d "${TMPDIR:-/tmp}/hw_matrix.XXXXXX")"
 RAW="$STAGE/raw"; SAN="$STAGE/san"
 mkdir -p "$RAW" "$SAN"
 trap 'rm -rf "$STAGE"' EXIT
-OUT_ROOT="$(cd "$(dirname "$0")" && pwd)/hardware_evidence"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+OUT_ROOT="$SCRIPT_DIR/hardware_evidence"
+# A.1-2: a symlinked OUT_ROOT would land every published revision OUTSIDE the
+# worktree. Refuse if `hardware_evidence` (or an intermediate component of its
+# canonical path) is a symlink: OUT_ROOT must be a real directory directly under
+# the script dir. Checked BEFORE any mkdir/copy so nothing can be published out.
+if [ -L "$OUT_ROOT" ]; then
+  echo "ERROR: OUT_ROOT ($OUT_ROOT) is a symlink — refusing to publish outside the worktree." >&2
+  exit 9
+fi
+if [ -e "$OUT_ROOT" ]; then
+  _out_root_canon="$(cd "$OUT_ROOT" 2>/dev/null && pwd -P || printf '')"
+  if [ -z "$_out_root_canon" ] || [ "$(dirname "$_out_root_canon")" != "$SCRIPT_DIR" ] \
+     || [ "$(basename "$_out_root_canon")" != "hardware_evidence" ]; then
+    echo "ERROR: OUT_ROOT does not canonically resolve to $SCRIPT_DIR/hardware_evidence" >&2
+    echo "       (resolved: ${_out_root_canon:-<none>}) — refusing." >&2
+    exit 9
+  fi
+fi
 OUT="$OUT_ROOT/${CASE}"
 
 # C1: the ONLY filenames a revision may carry are the sanctioned per-device
@@ -469,22 +533,39 @@ if [ -e "$OUT" ] || [ -L "$OUT" ]; then
     is_sanctioned_artifact "$eb" || continue
     case "$eb" in
       "${LABEL}_"*) : ;;                    # this label's prior files → replaced
-      *) cp "$existing" "$REV"/ || {        # another device's files → preserve
+      *)                                    # another device's files → preserve
+         if safe_copy_regular "$existing" "$REV/$eb"; then _rc=0; else _rc=$?; fi
+         if [ "$_rc" -eq 8 ]; then
            rm -rf "$REV"
-           echo "ERROR: could not carry over an existing label's evidence." >&2
+           echo "ERROR: refused to carry over '$eb' — symlink, hardlink, or" >&2
+           echo "       non-regular file (possible carry-over tamper)." >&2
+           exit 9
+         elif [ "$_rc" -ne 0 ]; then
+           rm -rf "$REV"
+           echo "ERROR: I/O error carrying over an existing label's evidence." >&2
            exit 5
-         } ;;
+         fi ;;
     esac
   done
 fi
 # Fail closed on a staging-copy error (disk full, permission, transient I/O) —
 # never publish a partial revision, and re-assert the mandatory primary is
-# actually present in the staged rev before it can be swapped into place.
-if ! cp "$SAN"/* "$REV"/; then
-  rm -rf "$REV"
-  echo "ERROR: staging copy failed — refusing to publish partial evidence." >&2
-  exit 5
-fi
+# actually present in the staged rev before it can be swapped into place. Route
+# the staged sanitizer output through the SAME O_NOFOLLOW/fstat copy so a link
+# swapped into $SAN (also attacker-writable) cannot be published either.
+for _s in "$SAN"/*; do
+  [ -e "$_s" ] || { rm -rf "$REV"; echo "ERROR: no staged sanitizer output to publish." >&2; exit 5; }
+  if safe_copy_regular "$_s" "$REV/$(basename "$_s")"; then _rc=0; else _rc=$?; fi
+  if [ "$_rc" -eq 8 ]; then
+    rm -rf "$REV"
+    echo "ERROR: refused to publish staged '$(basename "$_s")' — symlink/hardlink/non-regular." >&2
+    exit 9
+  elif [ "$_rc" -ne 0 ]; then
+    rm -rf "$REV"
+    echo "ERROR: staging copy failed — refusing to publish partial evidence." >&2
+    exit 5
+  fi
+done
 if [ ! -s "$REV/${LABEL}_w5_events.jsonl" ]; then
   rm -rf "$REV"
   echo "ERROR: primary artifact missing from the staged revision." >&2

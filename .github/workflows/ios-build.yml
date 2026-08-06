@@ -67,9 +67,11 @@ jobs:
             -parallel-testing-enabled NO \
             -maximum-concurrent-test-simulator-destinations 1 \
             CODE_SIGNING_ALLOWED=NO | tee xcodebuild-runner.log | grep -E "Test [Cc]ase|Executed|TEST" || true
-          # Floor PINNED to the authoritative discovered count (was 40) so a large
-          # discovery regression can't slip under a low floor (panel supplemental).
-          bash ../scripts/assert_native_tests.sh xcodebuild-runner.log 55
+          # A.1-4: PIN THE EXACT discovered set (=55), not just a lower bound, and
+          # anchor a production-side named test so the Runner scheme can never pass
+          # by silently dropping or skipping tests. A dropped OR an added test fails.
+          bash ../scripts/assert_native_tests.sh xcodebuild-runner.log =55 \
+            testBuildFlavorMatchesScheme
 
       - name: RunnerTests — diag scheme (diagnostic side, #if INRANGE_DIAG)
         run: |
@@ -85,9 +87,10 @@ jobs:
             -parallel-testing-enabled NO \
             -maximum-concurrent-test-simulator-destinations 1 \
             CODE_SIGNING_ALLOWED=NO | tee xcodebuild-diag.log | grep -E "Test [Cc]ase|Executed|TEST" || true
-          # The diag scheme must run the named A5 test (no environment skip).
-          # Floor PINNED to the authoritative discovered count (was 70).
-          bash ../scripts/assert_native_tests.sh xcodebuild-diag.log 103 \
+          # A.1-4: PIN THE EXACT discovered set (=103), not just a lower bound; the
+          # diag scheme must run the named A5 test (no environment skip). A dropped
+          # OR an added test fails the pinned gate.
+          bash ../scripts/assert_native_tests.sh xcodebuild-diag.log =103 \
             testHandleUsesProvisionedRunSecret
 
       - name: Record authoritative native test counts + log hashes

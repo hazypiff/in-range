@@ -1,21 +1,46 @@
 #!/usr/bin/env bash
 # Assert an xcodebuild native-test log meets the Wave A gate: TEST SUCCEEDED,
-# ZERO controlling skips, discovered==passed (0 failures), a minimum passed
-# count, and (optionally) that a NAMED test actually ran and passed. A bare
+# ZERO controlling skips, discovered==passed (0 failures), the passed count, and
+# (optionally) that a NAMED test actually ran and passed. A bare
 # `grep TEST SUCCEEDED` proves none of these (R6).
 #
-#   assert_native_tests.sh <log> <min-passed> [named-test]
+#   assert_native_tests.sh <log> <count> [named-test] [expected-source-sha]
+#
+# <count> forms (A.1-4 — pin the discovered SET, not only a lower bound):
+#   N     minimum: discovered/passed must be >= N   (lower bound; legacy)
+#   =N    EXACT:   discovered/passed must EQUAL N    (pinned set — a silently
+#                  dropped OR an unexpectedly added test both fail the gate)
+#
+# expected-source-sha (A.1-5 — panel intake provenance): when given, the log MUST
+# carry a `# source_sha: <sha>` header (as stamped by sanitize_native_log.sh) that
+# EQUALS it. A sanitized evidence file with no/other source SHA fails intake.
 #
 # Supports both xcodebuild output formats:
 #   old: "Test Case '-[Suite testX]' passed" + "Executed N tests, with M failures"
 #   new: "Test case 'Suite.testX()' passed on 'Clone ...'"
 set -uo pipefail
-LOG="${1:?log path required}"; MIN="${2:?min passed count required}"
-NAMED="${3:-}"
+LOG="${1:?log path required}"; COUNT_SPEC="${2:?count (N or =N) required}"
+NAMED="${3:-}"; EXPECT_SHA="${4:-}"
 fail() { echo "ASSERT FAIL: $1" >&2; exit 1; }
+
+EXACT=0
+case "$COUNT_SPEC" in
+  =*) EXACT=1; MIN="${COUNT_SPEC#=}" ;;
+  *)  MIN="$COUNT_SPEC" ;;
+esac
+printf '%s' "$MIN" | grep -Eq '^[0-9]+$' || fail "count must be N or =N (got '$COUNT_SPEC')"
 
 [ -f "$LOG" ] || fail "log missing: $LOG"
 grep -q '\*\* TEST SUCCEEDED \*\*' "$LOG" || fail "no '** TEST SUCCEEDED **' in $LOG"
+
+# A.1-5: panel-intake provenance — the sanitized evidence must be stamped with the
+# expected source SHA in its header.
+if [ -n "$EXPECT_SHA" ]; then
+  hdr_sha="$(grep -m1 -E '^# source_sha:' "$LOG" | awk '{print $3}')"
+  [ -n "$hdr_sha" ] || fail "no '# source_sha:' header in $LOG (unstamped evidence)"
+  [ "$hdr_sha" = "$EXPECT_SHA" ] \
+    || fail "source_sha header ($hdr_sha) != expected ($EXPECT_SHA) in $LOG"
+fi
 
 # ZERO controlling skips (either output format).
 if grep -Eq "Test [Cc]ase '.*' skipped" "$LOG"; then
@@ -57,7 +82,12 @@ if [ "$HAVE_SUMMARY" -eq 1 ]; then
 else
   N="$PASSED_LINES"
 fi
-[ "${N:-0}" -ge "$MIN" ] || fail "passed $N < expected minimum $MIN in $LOG"
+if [ "$EXACT" -eq 1 ]; then
+  [ "${N:-0}" -eq "$MIN" ] \
+    || fail "discovered/passed $N != pinned exact set $MIN in $LOG (a test was dropped or added)"
+else
+  [ "${N:-0}" -ge "$MIN" ] || fail "passed $N < expected minimum $MIN in $LOG"
+fi
 
 # The named test actually ran AND passed (not absent-because-skipped).
 if [ -n "$NAMED" ]; then
@@ -65,4 +95,4 @@ if [ -n "$NAMED" ]; then
     || fail "named test '$NAMED' did not run and pass"
 fi
 
-echo "OK: $LOG — passed $N, 0 failures, 0 controlling skips${NAMED:+, '$NAMED' ran+passed}"
+echo "OK: $LOG — passed $N ($([ "$EXACT" -eq 1 ] && echo "exact ==$MIN" || echo ">= $MIN")), 0 failures, 0 controlling skips${NAMED:+, '$NAMED' ran+passed}${EXPECT_SHA:+, source_sha verified}"
