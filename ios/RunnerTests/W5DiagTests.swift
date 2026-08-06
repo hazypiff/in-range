@@ -507,6 +507,57 @@ final class W5DiagTests: XCTestCase {
         W5Diag.hasFleetKey, "env key remains authoritative after a 'destroy'")
     }
 
+    // C3/A1: after an explicit destroy with no re-provision, keyed emits FAIL
+    // CLOSED and NO per-install fallback secret is regenerated (the panel's
+    // beacon-on/W5-off producer path previously destroyed the secret, then the
+    // next token-read emit silently minted a new unattested key). A forced
+    // post-destroy emit must not create the runsecret key, must be accounted as a
+    // typed loss, and handle() must be nil — until a real fleet key re-provisions.
+    func testDestroyedSessionFailsClosedAndNeverRegeneratesFallback() {
+      W5Diag.testEnvSecretOverride = nil
+      W5EvidenceWriter.resetInjectedFailures()
+      let d = UserDefaults(suiteName: "io.inrange.diag")
+      for k in ["bb.w5diag.provisionedsecret", "bb.w5diag.runsecret",
+                "bb.w5diag.destroyed"] { d?.removeObject(forKey: k) }
+      // Provision a real key, quiesce evidence, then destroy it.
+      XCTAssertEqual(
+        W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))["ok"]
+          as? Bool, true)
+      _ = W5Diag.resetCase()
+      XCTAssertEqual(
+        W5Diag.destroySessionSecret(w5Quiescent: true)["secretDestroyed"]
+          as? Bool, true, "destroy succeeded")
+      XCTAssertTrue(
+        W5Diag.isDestroyedUnprovisioned, "session is destroyed/unprovisioned")
+      XCTAssertFalse(W5Diag.hasFleetKey, "no fleet key after destroy")
+      XCTAssertNil(
+        d?.string(forKey: "bb.w5diag.runsecret"), "no persisted key after destroy")
+
+      let dropKey = "bb.evwrite.dropped.w5_events.jsonl.nokey"
+      d?.removeObject(forKey: dropKey)
+      // FORCE a keyed emit — the locked-iPhone token-read path.
+      W5Diag.emit(
+        .dialStart, role: .outbound, peer: "aabbccddeeff00112233445566778899")
+      XCTAssertNil(
+        d?.string(forKey: "bb.w5diag.runsecret"),
+        "destroyed session must NOT regenerate/persist a fallback secret")
+      XCTAssertEqual(
+        d?.integer(forKey: dropKey), 1,
+        "the fail-closed emit is accounted as a typed 'nokey' loss")
+      XCTAssertNil(W5Diag.handle("peer", "z"), "no keyed handle while destroyed")
+
+      // A real fleet key REVIVES the session — emits resume.
+      XCTAssertEqual(
+        W5Diag.provisionRunSecret(String(repeating: "cd", count: 32))["ok"]
+          as? Bool, true)
+      XCTAssertFalse(
+        W5Diag.isDestroyedUnprovisioned, "provision cleared the tombstone")
+      XCTAssertNotNil(
+        W5Diag.handle("peer", "z"), "keyed handle works after re-provision")
+      d?.removeObject(forKey: "bb.w5diag.destroyed")
+      d?.removeObject(forKey: "bb.w5diag.provisionedsecret")
+    }
+
     // R5: armFault's state mutation and its acknowledgment event are ONE locked
     // transaction — concurrent arm/disarm/reset never crash or tear an event
     // line, and the final control state is coherent with the last operation.

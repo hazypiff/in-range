@@ -60,6 +60,13 @@ enum W5Diag {
       let rResult = result(), rReason = reason(), rCount = count()
       let rRole = role
       eventWriter.withLock {
+        // C3: after an explicit destroy with no re-provisioned key, keyed emits
+        // FAIL CLOSED with typed loss accounting — never regenerate a fallback
+        // secret to write under. Cleared the moment a real fleet key provisions.
+        if isDestroyedUnprovisioned {
+          eventWriter.droppedLocked("nokey")
+          return
+        }
         let snap = sessionSnapshotLocked()
         var obj: [String: Any] = [
           "v": 1,
@@ -124,6 +131,7 @@ enum W5Diag {
           if env == d {
             runSecretLock.lock()
             diagDefaults?.set(hex, forKey: provisionedSecretKey)
+            diagDefaults?.removeObject(forKey: destroyedTombstoneKey)  // C3: a real provision revives the session
             _cachedRunSecret = env
             runSecretLock.unlock()
             return [
@@ -150,6 +158,7 @@ enum W5Diag {
           }
           runSecretLock.lock()
           diagDefaults?.set(hex, forKey: provisionedSecretKey)
+            diagDefaults?.removeObject(forKey: destroyedTombstoneKey)  // C3: a real provision revives the session
           _cachedRunSecret = d
           runSecretLock.unlock()
           diagDefaults?.set(keyEpoch + 1, forKey: keyEpochKey)
@@ -157,6 +166,7 @@ enum W5Diag {
           // First provision or an unchanged key — no old-key evidence to wipe.
           runSecretLock.lock()
           diagDefaults?.set(hex, forKey: provisionedSecretKey)
+            diagDefaults?.removeObject(forKey: destroyedTombstoneKey)  // C3: a real provision revives the session
           _cachedRunSecret = d
           runSecretLock.unlock()
         }
@@ -275,6 +285,10 @@ enum W5Diag {
         diagDefaults?.removeObject(forKey: provisionedSecretKey)
         _cachedRunSecret = nil
         runSecretLock.unlock()
+        // C3: mark the session EXPLICITLY destroyed so the next emit does not
+        // regenerate a fallback key — keyed emits fail closed until a real fleet
+        // key re-provisions (which clears this tombstone).
+        diagDefaults?.set(true, forKey: destroyedTombstoneKey)
         diagDefaults?.set(keyEpoch + 1, forKey: keyEpochKey)
         return [
           "ok": true, "secretDestroyed": true, "keyEpoch": keyEpoch,
@@ -399,6 +413,24 @@ enum W5Diag {
 
     private static let runSecretKey = "bb.w5diag.runsecret"
     private static let provisionedSecretKey = "bb.w5diag.provisionedsecret"
+    /// C3: set by a successful `destroySessionSecret`, cleared by a successful
+    /// `provisionRunSecret`. While it is set AND no authoritative key exists, the
+    /// diagnostic session is EXPLICITLY unprovisioned: keyed emits fail closed and
+    /// `resolveRunSecret` must NOT regenerate/persist a per-install fallback (which
+    /// would silently re-key the evidence chain after a destroy).
+    private static let destroyedTombstoneKey = "bb.w5diag.destroyed"
+
+    /// True iff the session is in the destroyed/unprovisioned state — the tombstone
+    /// is set and there is no env/provisioned/persisted key. Keyed emits must fail
+    /// closed here until a real fleet key is provisioned.
+    static var isDestroyedUnprovisioned: Bool {
+      #if INRANGE_DIAG
+        return (diagDefaults?.bool(forKey: destroyedTombstoneKey) ?? false)
+          && persistedSecretLocked() == nil
+      #else
+        return false
+      #endif
+    }
 
     private static let runSecretLock = NSLock()
     private static var _cachedRunSecret: Data?
@@ -470,6 +502,14 @@ enum W5Diag {
 
     private static func resolveRunSecret() -> Data {
       if let d = persistedSecretLocked() { return d }
+      // C3: after an explicit destroy (tombstone set), DO NOT generate+persist a
+      // per-install fallback — that would silently re-key the evidence chain with
+      // a new unattested secret. Return a TRANSIENT zero key that is never
+      // persisted; keyed emits are gated off (isDestroyedUnprovisioned) so this
+      // value is never used to derive an emitted handle.
+      if diagDefaults?.bool(forKey: destroyedTombstoneKey) == true {
+        return Data(count: 32)
+      }
       var b = [UInt8](repeating: 0, count: 32)
       _ = SecRandomCopyBytes(kSecRandomDefault, 32, &b)
       let d = Data(b)
@@ -496,7 +536,11 @@ enum W5Diag {
     /// Truncated HMAC-SHA256 handle for a domain-separated raw id (14 hex),
     /// keyed by the CURRENT run secret.
     static func handle(_ domain: String, _ raw: String?) -> String? {
-      handle(with: runSecret, domain, raw)
+      // C3: no keyed handle while destroyed/unprovisioned — control paths
+      // (armFault etc.) that derive a handle through the live run secret fail
+      // closed instead of minting one under a fabricated fallback key.
+      if isDestroyedUnprovisioned { return nil }
+      return handle(with: runSecret, domain, raw)
     }
 
     /// Handle keyed by a SPECIFIC secret — so one emit derives every field from
