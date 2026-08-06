@@ -92,11 +92,33 @@ git -C "$FN" add -A -f >/dev/null
 if ( cd "$FN" && bash scripts/privacy_scan.sh >/tmp/ps_fn.out 2>&1 ); then
   bad "FILENAME: scanner passed but a UUID filename should fail"
 else
-  grep -qF "UUID/UDID identifier in filename" /tmp/ps_fn.out \
-    && ok "FILENAME: UUID in a tracked filename flagged (content was clean)" \
-    || bad "FILENAME: wrong finding: $(cat /tmp/ps_fn.out)"
+  # the finding is reported AND the sensitive value is REDACTED from the location.
+  if grep -qF "UUID/UDID identifier in filename" /tmp/ps_fn.out \
+     && ! grep -qF "DEADBEEF-1234-5678-9ABC-DEF012345678" /tmp/ps_fn.out \
+     && grep -qF "<uuid>" /tmp/ps_fn.out; then
+    ok "FILENAME: UUID in a filename flagged AND redacted in the report"
+  else
+    bad "FILENAME: not flagged or value not redacted: $(cat /tmp/ps_fn.out)"
+  fi
 fi
 rm -rf "$FN"
+
+# --- DANGLING SYMLINK (panel P4 round-4): a tracked symlink whose git BLOB is a
+#     /Users home path must be flagged via the committed-blob scan, even though the
+#     working-tree `[ -f ]` test rejects a dangling symlink. -----------------------
+SL="$(mktemp -d)"; git -C "$SL" init -q; git -C "$SL" config user.email t@t; git -C "$SL" config user.name t
+mkdir -p "$SL/scripts"; cp "$SCAN" "$SL/scripts/privacy_scan.sh"
+Us="/Users/"
+( cd "$SL" && ln -s "${Us}realperson/x" link_to_home )   # dangling symlink; blob == target
+git -C "$SL" add -A -f >/dev/null
+if ( cd "$SL" && bash scripts/privacy_scan.sh >/tmp/ps_sl.out 2>&1 ); then
+  bad "SYMLINK: scanner passed but a symlink to a /Users path should fail"
+else
+  grep -qF "home path" /tmp/ps_sl.out && ! grep -qF "realperson" /tmp/ps_sl.out \
+    && ok "SYMLINK: dangling symlink to a /Users path flagged via blob (value not printed)" \
+    || bad "SYMLINK: missed or leaky: $(cat /tmp/ps_sl.out)"
+fi
+rm -rf "$SL"
 
 echo "----"
 if [ "$fails" -eq 0 ]; then echo "ALL PRIVACY-SCANNER TESTS PASSED"; else echo "$fails TEST(S) FAILED"; exit 1; fi

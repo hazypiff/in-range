@@ -38,8 +38,13 @@ set -uo pipefail
 
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
-FINDINGS="$(mktemp)"; trap 'rm -f "$FINDINGS"' EXIT
+FINDINGS="$(mktemp)"; BLOBF="$(mktemp)"; trap 'rm -f "$FINDINGS" "$BLOBF"' EXIT
 report() { printf '%s\t%s\n' "$1" "$2" >> "$FINDINGS"; }
+# Redact any matched leak token from a path before it is reported, so a finding
+# for a leak-bearing FILENAME never re-prints the sensitive value (panel P4).
+redact_path() { # path
+  printf '%s' "$1" | sed -E "s#$UUID_RE#<uuid>#g; s#$MAC_RE#<mac>#g; s#$USERPATH_RE#/Users/<redacted>#g"
+}
 
 UUID_RE='[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}'
 MAC_RE='([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}'
@@ -97,9 +102,11 @@ shape_trusted_file() {
   return 1
 }
 
-# Report file:line for any line containing an UNAPPROVED token of a given form.
-scan_form() { # file, class, regex
-  local f="$1" cls="$2" re="$3" ln rest tok bad
+# Report <reportname>:line for any line of <scanfile> containing an UNAPPROVED
+# token of a given form. reportname is the tracked path; scanfile is the extracted
+# committed blob (so symlinks/dangling/binaries are all handled uniformly).
+scan_form() { # reportname, class, regex, scanfile
+  local rn="$1" cls="$2" re="$3" sf="$4" ln rest tok bad
   while IFS=: read -r ln rest; do
     [ -n "$ln" ] || continue
     bad=0
@@ -107,55 +114,57 @@ scan_form() { # file, class, regex
       approved_token "$tok" && continue
       bad=1
     done
-    [ "$bad" -eq 1 ] && report "$f:$ln" "$cls"
-  done < <(grep -nE "$re" "$f" 2>/dev/null)
+    [ "$bad" -eq 1 ] && report "$rn:$ln" "$cls"
+  done < <(grep -a -nE "$re" "$sf" 2>/dev/null)
 }
 
 while IFS= read -r f; do
-  # FILENAME check first — applies to EVERY tracked path, even binaries and
-  # shape-trusted files (panel P4: a leak in a tracked filename was unscanned).
+  # FILENAME check — EVERY tracked path (binaries + shape-trusted included). The
+  # reported location is REDACTED so a leak-bearing filename is never re-printed
+  # (panel P4).
   for tok in $(printf '%s' "$f" | grep -oE "$UUID_RE"); do
-    approved_token "$tok" || report "$f" "UUID/UDID identifier in filename"
+    approved_token "$tok" || report "$(redact_path "$f")" "UUID/UDID identifier in filename"
   done
   for tok in $(printf '%s' "$f" | grep -oE "$MAC_RE"); do
-    approved_token "$tok" || report "$f" "Bluetooth/MAC identifier in filename"
+    approved_token "$tok" || report "$(redact_path "$f")" "Bluetooth/MAC identifier in filename"
   done
-  printf '%s' "$f" | grep -Eq "$USERPATH_RE" && report "$f" "/Users/<name> in tracked path"
+  printf '%s' "$f" | grep -Eq "$USERPATH_RE" && report "$(redact_path "$f")" "/Users/<name> in tracked path"
 
-  [ -f "$f" ] || continue
-  is_text=1; LC_ALL=C grep -qI . "$f" 2>/dev/null || is_text=0
+  # Extract the COMMITTED BLOB and scan THAT — this covers regular files, symlinks
+  # (blob == the link target text), DANGLING symlinks, and binaries uniformly, so
+  # nothing is skipped by a working-tree `[ -f ]` test (panel P4 round-4). A
+  # deleted/unreadable blob yields an empty scan file.
+  git show ":$f" > "$BLOBF" 2>/dev/null || git cat-file blob "HEAD:$f" > "$BLOBF" 2>/dev/null || : > "$BLOBF"
+  is_text=1; LC_ALL=C grep -qI . "$BLOBF" 2>/dev/null || is_text=0
 
-  # raw xcodebuild log detector (applies even to shape-trusted files).
   case "$f" in
     *native_*.log)
-      head -1 "$f" | grep -q '^# sanitized native-test evidence$' \
+      head -1 "$BLOBF" | grep -q '^# sanitized native-test evidence$' \
         || report "$f" "raw xcodebuild log (missing sanitizer header)"
       ;;
   esac
 
-  # Machine-local IDENTIFIER content checks run on EVERY tracked file INCLUDING
-  # BINARIES (grep -a): a /Users home path or an env-dump identifier baked into a
-  # committed binary must be caught too (panel P4 — binaries were previously
-  # skipped for content). The scanner source avoids a literal env assignment, and
-  # the test files build their leak fixtures from concatenated parts, so nothing
-  # self-matches here.
+  # Machine-local IDENTIFIER content checks — EVERY tracked file, TEXT or BINARY
+  # (grep -a over the blob): a /Users home path or env-dump id baked into a binary
+  # or named by a symlink target is caught. (The fleet-secret binary scan is the
+  # separate git grep below.)
   while IFS=: read -r ln _; do
     [ -n "$ln" ] && report "$f:$ln" "machine-local env identifier"
-  done < <(grep -a -nE "$ENVDUMP_RE" "$f" 2>/dev/null)
+  done < <(grep -a -nE "$ENVDUMP_RE" "$BLOBF" 2>/dev/null)
   while IFS=: read -r ln _; do
     [ -n "$ln" ] && report "$f:$ln" "absolute /Users/<name> home path"
-  done < <(grep -a -nE "$USERPATH_RE" "$f" 2>/dev/null)
+  done < <(grep -a -nE "$USERPATH_RE" "$BLOBF" 2>/dev/null)
 
-  # UUID/MAC *shape* checks — TEXT files only (a binary is full of random hex that
-  # would match the UUID/MAC shape and drown the scan in noise; a real device id
-  # baked into a binary is instead caught by the /Users, env-dump, and secret
-  # checks above, which DO scan binaries). Relaxed ONLY for the synthetic-fixture
-  # trees and the shape-fixture files. Documented residual: a real UDID is shape-
-  # indistinguishable from a synthetic one, so one committed into such a tree/file
-  # passes the shape check; those are fixture-only by policy (code review backstop).
+  # UUID/MAC *shape* checks — TEXT blobs only. A binary is full of random hex that
+  # matches the UUID/MAC shape, so scanning binaries for shape would drown the scan
+  # in noise. DOCUMENTED RESIDUAL (accepted): a BARE device UUID/MAC embedded in a
+  # tracked BINARY, with no accompanying /Users path, env-dump id, or fleet secret,
+  # is NOT flagged — it is indistinguishable from random binary hex. This is out of
+  # scope for a text scanner; a committed binary blob is itself reviewed. Shape is
+  # further relaxed for the synthetic-fixture trees/files (also fixture-only).
   if [ "$is_text" -eq 1 ] && ! shape_trusted_path "$f" && ! shape_trusted_file "$f"; then
-    scan_form "$f" "UUID/UDID identifier"      "$UUID_RE"
-    scan_form "$f" "Bluetooth/MAC identifier"  "$MAC_RE"
+    scan_form "$f" "UUID/UDID identifier"      "$UUID_RE" "$BLOBF"
+    scan_form "$f" "Bluetooth/MAC identifier"  "$MAC_RE"  "$BLOBF"
   fi
 done < <(git ls-files)
 
