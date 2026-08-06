@@ -420,6 +420,54 @@ class BackgroundBeaconChannel {
     }
   }
 
+  /// E-B2 diagnostic-only: the eligible peers for the selected-peer control, as
+  /// run-scoped handles ONLY (raw aliases stay native). Empty in a release binary.
+  Future<List<Map<String, dynamic>>> listW5Peers() async {
+    try {
+      final res = await _channel.invokeMethod<dynamic>('listW5Peers');
+      if (res is List) {
+        return res
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+      }
+      return const [];
+    } catch (e) {
+      debugPrint('BackgroundBeacon listW5Peers failed: $e');
+      return const [];
+    }
+  }
+
+  /// E-B2 diagnostic-only: arm a one-shot pre-ACK fault (+ optional delay) for the
+  /// peer chosen by its run-scoped [handle]. Returns the native structured ack, or
+  /// null on a channel error. Fails closed natively on a nil/empty/ineligible peer.
+  Future<Map<String, dynamic>?> armW5FaultForPeer({
+    required String handle,
+    double delaySeconds = 0,
+  }) async {
+    try {
+      final res = await _channel.invokeMethod<dynamic>(
+        'armW5FaultForPeer',
+        {'handle': handle, 'delaySeconds': delaySeconds},
+      );
+      return res is Map ? Map<String, dynamic>.from(res) : null;
+    } catch (e) {
+      debugPrint('BackgroundBeacon armW5FaultForPeer failed: $e');
+      return null;
+    }
+  }
+
+  /// E-B2 diagnostic-only: current control status ({armed, eligibleCount}).
+  Future<Map<String, dynamic>?> w5DiagStatus() async {
+    try {
+      final res = await _channel.invokeMethod<dynamic>('w5DiagStatus');
+      return res is Map ? Map<String, dynamic>.from(res) : null;
+    } catch (e) {
+      debugPrint('BackgroundBeacon w5DiagStatus failed: $e');
+      return null;
+    }
+  }
+
   /// Diagnostic-only: record a pass teardown OUTCOME summary (already sanitized:
   /// role names + counts, no raw ids) in the native evidence layer. No-op in a
   /// release binary.

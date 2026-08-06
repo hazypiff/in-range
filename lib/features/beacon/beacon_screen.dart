@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:in_range/core/navigation/home_tab.dart';
+import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/core/permissions/permission_service.dart';
 import 'package:in_range/core/privacy/safety_store.dart';
 import 'package:in_range/features/beacon/beacon_provider.dart';
 import 'package:in_range/features/beacon/lighthouse_beacon.dart';
+import 'package:in_range/features/beacon/w5_diag_panel.dart';
 import 'package:in_range/features/encounters/local_encounter_store.dart';
 import 'package:in_range/features/widgets/ad_banner.dart';
 
@@ -212,6 +214,14 @@ class _StatusCard extends StatelessWidget {
                 ),
               ],
             ),
+            // E-B2: the installed diag selected-peer control. `kDiagBuild` is a
+            // const-false in release, so this branch — and W5DiagPanel — dead-code
+            // eliminates out of the production AOT bundle (E-B5 isolation gate).
+            if (AppConfig.kDiagBuild) ...[
+              const SizedBox(height: 12),
+              const W5DiagPanel(),
+              const Divider(height: 24),
+            ],
             if (state.isOn && expiry != null) ...[
               const SizedBox(height: 8),
               Text(
