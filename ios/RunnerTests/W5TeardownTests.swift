@@ -368,6 +368,15 @@ final class W5TeardownTests: XCTestCase {
         ]
         $0["linkMeta"] = lm
       }
+      // An UNKNOWN handle kind (neither out: nor in:, e.g. "garbage") is a shape
+      // this build never writes → corrupt, even with three string values (codex).
+      rejectsAndWipes("garbage-handle") {
+        var lm = ($0["linkMeta"] as? [String: [String: Any]]) ?? [:]
+        lm["garbage"] = [
+          "linkIdHex": "x", "myCandidateHex": "y", "peerAliasHex": "z",
+        ]
+        $0["linkMeta"] = lm
+      }
 
       // Positive control: an UNMUTATED valid snapshot restores the live lease.
       seedValidSnapshot()

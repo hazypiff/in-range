@@ -594,6 +594,23 @@ final class W5DiagTests: XCTestCase {
     // restoration emits BEFORE Dart provisions; those emits buffer behind the
     // launch key gate and flush under B once Dart provisions — so the events file
     // ends up with the markers under B's key epoch and nothing under A.
+    // C4 (codex): a full pre-key buffer must NEVER drop a restoration/boot MARKER
+    // — those are Case 3's continuity proof. Ordinary (dial-class) events cap at
+    // maxPendingEmits; a marker is always buffered even when the cap is reached.
+    func testRestorationMarkerSurvivesBufferOverflow() {
+      W5Diag.testEnvSecretOverride = nil
+      W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))  // confirm+flush
+      W5Diag.beginLaunchKeyGate()  // arm the gate → handled emits now buffer
+      for _ in 0..<1050 { W5Diag.emit(.beat, role: .app) }  // > cap of 1000
+      XCTAssertEqual(
+        W5Diag.testPendingEmitCount, 1000, "ordinary events cap at maxPendingEmits")
+      W5Diag.emit(.snapshotLoad, role: .app, result: "loaded")  // a marker
+      XCTAssertEqual(
+        W5Diag.testPendingEmitCount, 1001,
+        "a restoration marker is exempt from the cap — never dropped on overflow")
+      W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))  // flush + confirm
+    }
+
     func testChangedKeyRelaunchBuffersUnderAAndFlushesUnderB() throws {
       W5Diag.testEnvSecretOverride = nil  // no authoritative env key for this test
       W5EvidenceWriter.resetInjectedFailures()

@@ -75,7 +75,12 @@ enum W5Diag {
         // the confirmed key, so nothing lands under A and no marker is lost. An
         // authoritative env key keeps emits immediate (the matrix path).
         if !isKeyConfirmedForLaunch {
-          if pendingEmits.count < maxPendingEmits {
+          // Restoration/boot MARKERS are the proof Case 3 depends on — they must
+          // NEVER be dropped on overflow; only ordinary (dial-class) buffered
+          // events are capped. So a full buffer can never lose a restoration
+          // marker before the confirmed-key flush (codex C4).
+          let isMarker = Self.restorationMarkerEvents.contains(event)
+          if isMarker || pendingEmits.count < maxPendingEmits {
             pendingEmits.append(PendingEmit(
               event: event, role: rRole, peer: rPeer, lease: rLease, link: rLink,
               peripheral: rPeriph, result: rResult, reason: rReason, count: rCount))
@@ -101,6 +106,12 @@ enum W5Diag {
     }
     private static var pendingEmits: [PendingEmit] = []  // guarded by eventWriter lock
     private static let maxPendingEmits = 1000
+    /// Restoration/boot markers are NEVER dropped on buffer overflow (C4) — they
+    /// are Case 3's proof of continuity.
+    private static let restorationMarkerEvents: Set<Event> = [
+      .coldLaunch, .restoreCentral, .restorePeriph, .restoreRebind,
+      .snapshotLoad, .boot,
+    ]
     /// Per-launch gate. Defaults TRUE (tests + normal foreground emit immediately);
     /// the real boot path arms it via `beginLaunchKeyGate()` so pre-Dart restoration
     /// emits are held until a key is confirmed for this launch.

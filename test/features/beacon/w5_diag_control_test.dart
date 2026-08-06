@@ -28,18 +28,17 @@ void main() {
 
   final bb = BackgroundBeaconChannel();
 
-  test('armW5Fault(peer) invokes the native hook with the raw token', () async {
-    await bb.armW5Fault(peerAlias: 'peer-token-xyz');
-    expect(calls, hasLength(1));
-    expect(calls.single.method, 'armW5Fault');
-    expect(calls.single.arguments, 'peer-token-xyz');
-  });
-
-  test('armW5Fault() with no peer sends null (native fails it closed)',
+  // E-B2 (codex): the raw-alias armW5Fault Dart control was REMOVED (no raw peer
+  // token crosses the channel). Fault arming is handle-based via
+  // armW5FaultForPeer; the native fail-closed behaviour is covered by the native
+  // testDiagSelectedPeerControlArmsByHandleAndFailsClosed test.
+  test('armW5FaultForPeer sends the selected handle + delay (handles only)',
       () async {
-    await bb.armW5Fault();
-    expect(calls.single.method, 'armW5Fault');
-    expect(calls.single.arguments, isNull);
+    await bb.armW5FaultForPeer(handle: 'id:abcabcabcabcab', delaySeconds: 1.5);
+    expect(calls.single.method, 'armW5FaultForPeer');
+    final args = Map<String, dynamic>.from(calls.single.arguments as Map);
+    expect(args['handle'], 'id:abcabcabcabcab');
+    expect(args['delaySeconds'], 1.5);
   });
 
   test('disarmW5Fault invokes the native disarm control', () async {

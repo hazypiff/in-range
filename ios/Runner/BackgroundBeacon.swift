@@ -455,10 +455,10 @@ final class BackgroundBeacon: NSObject {
           self.w5EffectiveOff()
         }
         result(provAck)
-      case "armW5Fault":
-        // Diag-only: arm a one-shot, PEER-SCOPED pre-HELLO_ACK drop. No wildcard
-        // — nil/empty fails closed. Returns a structured ack. Release no-op.
-        result(W5Diag.armFault(peerRaw: call.arguments as? String))
+      // E-B2 (codex): the raw-alias "armW5Fault" channel case was REMOVED so a raw
+      // peer token can never cross the channel. Fault arming is handle-based only
+      // ("armW5FaultForPeer"); W5Diag.armFault(peerRaw:) is now called ONLY
+      // internally, after native resolves an eligible handle→raw.
       case "disarmW5Fault":
         // Diag-only: clear any pending fault. No-op in a release binary.
         W5Diag.disarmFault()

@@ -930,10 +930,14 @@ final class W5LinkController {
           let mc = meta["myCandidateHex"] as? String, !mc.isEmpty,
           let pa = meta["peerAliasHex"] as? String, !pa.isEmpty
         else { return rejectSnapshot("corrupt-linkmeta") }
-      } else {
+      } else if handle.hasPrefix("in:") {
         guard meta["linkIdHex"] is String, meta["myCandidateHex"] is String,
           meta["peerAliasHex"] is String
         else { return rejectSnapshot("corrupt-linkmeta") }
+      } else {
+        // A handle that is neither `out:` nor `in:` is not a shape this build
+        // ever writes — an unknown/garbage key means the snapshot is corrupt.
+        return rejectSnapshot("corrupt-linkmeta")
       }
     }
     candidateByAlias = restoredCandidates

@@ -384,21 +384,10 @@ class BackgroundBeaconChannel {
     }
   }
 
-  /// Diagnostic-only: arm a ONE-SHOT, PEER-SCOPED pre-HELLO_ACK drop for the
-  /// next outbound dial to [peerAlias]. NO WILDCARD (frozen contract): a
-  /// null/empty alias is REJECTED natively (fails closed) and arms nothing. This
-  /// is the Dart control path for the Case-1 pending-dial reclamation fault. In
-  /// a release binary the native side compiles the fault out, so this is a
-  /// guaranteed no-op there — safe to leave wired.
-  Future<void> armW5Fault({String? peerAlias}) async {
-    try {
-      // Pass the raw token as the bare argument (native reads `arguments as
-      // String?`); a null/empty alias fails closed natively — no wildcard.
-      await _channel.invokeMethod<void>('armW5Fault', peerAlias);
-    } catch (e) {
-      debugPrint('BackgroundBeacon armW5Fault failed: $e');
-    }
-  }
+  // E-B2 (codex): the old raw-alias armW5Fault Dart control was REMOVED — a raw
+  // peer token must never cross the platform channel. The only fault-arming path
+  // is now `armW5FaultForPeer(handle:)`, which selects an eligible peer by its
+  // run-scoped handle; native resolves the handle→raw mapping it already holds.
 
   /// Diagnostic-only: clear any pending pre-HELLO_ACK fault (peer-scoped control
   /// cleanup). No-op in a release binary.

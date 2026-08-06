@@ -2237,15 +2237,9 @@ class BeaconService {
     return null;
   }
 
-  /// Diagnostic control path for Case-1 pending-dial reclamation: arm a
-  /// one-shot pre-HELLO_ACK fault for the next outbound dial to [peerAlias]
-  /// (null = any next dial). No-op off-iOS and in any release binary (the
-  /// native fault is compiled out outside the diag flavor).
-  Future<void> armW5Fault({String? peerAlias}) async {
-    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
-      await _bgBeacon.armW5Fault(peerAlias: peerAlias);
-    }
-  }
+  // E-B2 (codex): the raw-alias armW5Fault wrapper was REMOVED so no raw peer
+  // token can cross the platform channel. Fault arming is handle-based only
+  // (BackgroundBeaconChannel.armW5FaultForPeer, used by W5DiagPanel).
 
   /// Clear any pending diagnostic fault (peer-scoped control cleanup).
   Future<void> disarmW5Fault() async {
