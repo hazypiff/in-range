@@ -80,6 +80,19 @@ trap 'rm -rf "$STAGE"' EXIT
 OUT_ROOT="$(cd "$(dirname "$0")" && pwd)/hardware_evidence"
 OUT="$OUT_ROOT/${CASE}"
 
+# C1: the ONLY filenames a revision may carry are the sanctioned per-device
+# `<label>_<artifact>` products the sanitizer emits — never an arbitrary regular
+# file that happened to be reachable. Used to fence carry-over from a prior rev.
+is_sanctioned_artifact() {
+  case "$1" in
+    *_bb_wake_log.txt|*_bb_wake_log.1.txt|\
+    *_w5_events.jsonl|*_w5_events.1.jsonl|\
+    *_w5_rssi_log.jsonl|*_w5_rssi_log.1.jsonl|\
+    *_in_range_local.db) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # Pull ONE artifact. Distinguishes three outcomes (R2):
 #   0  = pulled OK  |  0 + "(absent ...)" = VERIFIED not-found on the device
 #   3  = transport / permission / container / partial-copy FAILURE (uncertain)
@@ -426,10 +439,23 @@ if [ -e "$OUT" ] || [ -L "$OUT" ]; then
   prev_target="$(readlink "$OUT")"
   prev_base="$(basename "$prev_target")"
   prev_resolved="$OUT_ROOT/$prev_base"
+  # C1: `<case>` must be a bare, pattern-valid revision symlink AND the revision
+  # it names must be a REAL directory whose CANONICAL parent is OUT_ROOT — never
+  # itself a symlink. A `-d` test alone FOLLOWS a symlink, so a second hop
+  # (`<case> -> <case>.rev.evil -> /outside`) previously passed and the carry-over
+  # glob imported arbitrary external files. Reject `-L "$prev_resolved"` and pin
+  # the canonical parent so no second hop can escape OUT_ROOT.
+  OUT_ROOT_CANON="$(cd "$OUT_ROOT" 2>/dev/null && pwd -P || printf '%s' "$OUT_ROOT")"
+  prev_parent_canon=""
+  if [ -d "$prev_resolved" ] && [ ! -L "$prev_resolved" ]; then
+    prev_parent_canon="$(cd "$prev_resolved/.." 2>/dev/null && pwd -P)"
+  fi
   if [ "$prev_target" != "$prev_base" ] \
      || printf '%s' "$prev_target" | grep -q '\.\.' \
      || case "$prev_base" in "$(basename "$OUT").rev."*) false;; *) true;; esac \
-     || [ ! -d "$prev_resolved" ]; then
+     || [ -L "$prev_resolved" ] \
+     || [ ! -d "$prev_resolved" ] \
+     || [ "$prev_parent_canon" != "$OUT_ROOT_CANON" ]; then
     rm -rf "$REV"
     echo "ERROR: '$CASE' points outside OUT_ROOT or is not a local revision" >&2
     echo "       (target: $prev_target) — refusing to carry over foreign files." >&2
@@ -438,6 +464,9 @@ if [ -e "$OUT" ] || [ -L "$OUT" ]; then
   for existing in "$prev_resolved"/*; do
     [ -f "$existing" ] && [ ! -L "$existing" ] || continue   # regular files only
     eb="$(basename "$existing")"
+    # C1: carry ONLY the sanctioned `<label>_<artifact>` set — an unknown name
+    # (arbitrary imported file) is skipped, never published.
+    is_sanctioned_artifact "$eb" || continue
     case "$eb" in
       "${LABEL}_"*) : ;;                    # this label's prior files → replaced
       *) cp "$existing" "$REV"/ || {        # another device's files → preserve
