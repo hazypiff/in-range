@@ -1,0 +1,34 @@
+EXACT-SHA ATTESTATION — kimi-code/k3 (kimi CLI) — blinded non-author review
+=======================================================================
+Implementation SHA : b5939cd  (fix/w5-convergence-2026-08-04)
+Repair-delta base  : 1d0b6c5    |  PR #11 draft head: c816f09 (untouched)
+Tool / backend     : kimi -m kimi-code/k3  (self-reported kimi-code/k3)
+Inspected          : full exact-SHA source of the controlling files embedded in
+                     the review prompt (native W5 core, puller, assert, pass-teardown,
+                     panel); reasoned over source only, no filesystem/tools.
+Method             : adversarial — asked to REFUTE each predicate; other reviewer's
+                     verdict not seen. (Headless run re-issued once under a strict
+                     output contract to emit a clean verdict block.)
+Commands + exits   : kimi -m kimi-code/k3 -p "$(cat kimi_sc_b5939cd_strict.txt)" → exit 0
+Decisive fixtures reasoned (incl. D1): D1 provisionDiagRunSecret → redriveRestoreIfDeferred
+  restores the in-grace lease; C1 carry-over fence; C2 effective-OFF ack fields;
+  C3 tombstone/nokey/nil-handle; C4 gate + buffer + prior-loss defer + D1 re-drive;
+  C5 wipe-first transactional; SCHEMA reject classes; E-B1 alias-only; E-B2 handle-only.
+Strongest falsification attempted: tombstone cleared early, handled event under
+  stale key A on changed provision, partial wipe stranding old-key evidence,
+  raw token crossing the channel, bad snapshot accepted — each traced to refuted.
+Artifact hashes (raw xcodebuild logs @ b5939cd, reviewed for secrets, assert-validated):
+  native_diag_b5939cd.log   sha256=1eaa8f565d3387b69afa2fec96c02bed46fc3c58c9027d43156c7faefc7c1d4b   (diag  103 / 0 fail / 0 skip)
+  native_runner_b5939cd.log sha256=e2f4e4577df9091d0f6c53e09ad5a459de43bc5c9de316350032af13edc26d1a   (Runner 55 / 0 fail / 0 skip)
+
+Per-predicate verdicts (CLI word-wrapped the raw output; reconstructed verbatim
+from the strict-contract run, raw preserved in the review transcript):
+  C1     VERDICT = PASS — puller carry-over fence rejects escaped revisions.
+  C2     VERDICT = PASS — effective-OFF ack requires effectiveEnabled==false AND quiescent.
+  C3     VERDICT = PASS — destroy tombstone; nokey emit + nil handle; no fallback regen.
+  C4     VERDICT = PASS — launch-key gate + buffer + prior-loss defer + D1 re-drive on provision.
+  C5     VERDICT = PASS — reconcileStateStamp wipes first; keys/stamp advance only on full wipe.
+  SCHEMA VERDICT = PASS — version/flavor/generation + corrupt/garbage-handle reject+wipe; unconfirmed-key refuse-without-wipe.
+  E-B1   VERDICT = PASS — pass teardown routes only card.radioAlias to native.
+  E-B2   VERDICT = PASS — diagListW5Peers handle-only; armW5FaultForPeer fails closed; panel const-gated.
+  OVERALL = APPROVE b5939cd

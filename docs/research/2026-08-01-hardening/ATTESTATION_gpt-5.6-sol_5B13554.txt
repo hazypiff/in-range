@@ -1,3 +1,7 @@
+*** WITHDRAWN / SUPERSEDED — do not rely on this attestation. ***
+*** Superseded by the b5939cd attestations (dual APPROVE b5939cd, 2026-08-06). ***
+*** Original content follows for the record. ***
+
 EXACT-SHA ATTESTATION — gpt-5.6-sol (codex CLI), blinded non-author review
 Implementation SHA: 5b13554  |  branch fix/w5-convergence-2026-08-04
 Tool: codex exec (self-reported gpt-5.6-sol). Method: clean read of the exact

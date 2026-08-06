@@ -1,0 +1,35 @@
+EXACT-SHA ATTESTATION — gpt-5.6-sol (codex CLI) — blinded non-author review
+=======================================================================
+Implementation SHA : b5939cd  (fix/w5-convergence-2026-08-04)
+Repair-delta base  : 1d0b6c5    |  PR #11 draft head: c816f09 (untouched)
+Tool / backend     : codex exec --skip-git-repo-check  (self-reported gpt-5.6-sol)
+Inspected          : full checkout at b5939cd; delta 1d0b6c5..b5939cd (17 files)
+Method             : adversarial — asked to REFUTE each predicate with a concrete
+                     input/state transition; the other reviewer's verdict not seen.
+Commands + exits   : codex exec --skip-git-repo-check - < review_b5939cd.txt  → exit 0
+Decisive fixtures executed/traced (incl. the D1 restoration repro):
+  - D1  same-key relaunch through provisionDiagRunSecret re-drives the deferred
+        restore (in-grace leases 0 → 1); boot refusal alone does not lose them.
+  - C1  committed second-hop revision symlink fixture (exit 9, no import).
+  - C2  w5EffectiveOff reap + {effectiveEnabled,quiescent} ack.
+  - C3  destroy tombstone → nokey emit + nil handle, no fallback regen.
+  - C5  wipe-first transactional foreign-flavor reconcile.
+  - SCHEMA every reject/wipe class; E-B1 alias-only to native; E-B2 handle-only
+        arming + production diag-syms=0.
+Strongest falsification attempted: sought a production caller that re-enters
+  restore after refusal (none but the added re-drive), a raw token crossing the
+  channel (removed), and a bad-snapshot accept (all reject+wipe). None succeeded.
+Artifact hashes (raw xcodebuild logs @ b5939cd, reviewed for secrets, assert-validated):
+  native_diag_b5939cd.log   sha256=1eaa8f565d3387b69afa2fec96c02bed46fc3c58c9027d43156c7faefc7c1d4b   (diag  103 / 0 fail / 0 skip)
+  native_runner_b5939cd.log sha256=e2f4e4577df9091d0f6c53e09ad5a459de43bc5c9de316350032af13edc26d1a   (Runner 55 / 0 fail / 0 skip)
+
+Per-predicate verdicts:
+C1 VERDICT = PASS — Canonical-parent and second-hop symlink checks reject escaped revisions, while carry-over admits only sanctioned regular artifact names (docs/research/2026-08-01-hardening/hw_matrix_pull.sh:442).
+C2 VERDICT = PASS — Effective-OFF clears controller state, leases, links, timers, sessions, inflight connections, and snapshots, while Dart requires both disabled and quiescent acknowledgments (ios/Runner/BackgroundBeacon.swift:489).
+C3 VERDICT = PASS — Destroy sets a tombstone; subsequent emits record “nokey,” handle resolution returns nil, and fallback generation remains disabled until provisioning (ios/Runner/W5Diag.swift:63).
+C4 VERDICT = PASS — Boot arms the launch-key gate before restoration, confirmed provisioning flushes buffered events and re-drives deferred restoration through the production path (ios/Runner/BackgroundBeacon.swift:279).
+C5 VERDICT = PASS — Foreign-flavor reconciliation wipes evidence first and preserves the old keys and stamp whenever the typed wipe result is incomplete (ios/Runner/BackgroundBeacon.swift:220).
+SCHEMA VERDICT = PASS — Snapshots carry version, flavor, and key epoch; restoration refuses unconfirmed keys without wiping and rejects-and-wipes invalid schema, flavor, generation, or fields (ios/Runner/W5LinkController.swift:894).
+E-B1 VERDICT = PASS — The widget pass reaches native teardown using only `card.radioAlias`, and its production-path widget test asserts the alias rather than the dismissal ID crosses (test/features/encounters/swipe_feed_pass_widget_test.dart:98).
+E-B2 VERDICT = PASS — Peer listing exposes handles only, arming resolves only an eligible handle natively, the panel is const-gated, and bundle isolation enforces zero production diagnostic symbols (ios/Runner/BackgroundBeacon.swift:549).
+OVERALL = APPROVE b5939cd

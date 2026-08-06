@@ -1,3 +1,7 @@
+*** WITHDRAWN / SUPERSEDED — do not rely on this attestation. ***
+*** Superseded by the b5939cd attestations (dual APPROVE b5939cd, 2026-08-06). ***
+*** Original content follows for the record. ***
+
 A1 VERDICT = PASS  
 A2 VERDICT = PASS  
 A3 VERDICT = PASS  

@@ -1,3 +1,7 @@
+*** WITHDRAWN / SUPERSEDED — do not rely on this attestation. ***
+*** Superseded by the b5939cd attestations (dual APPROVE b5939cd, 2026-08-06). ***
+*** Original content follows for the record. ***
+
 EXACT-SHA ATTESTATION — kimi-code/k3 (kimi CLI), blinded non-author review
 Implementation SHA: 5b13554  |  branch fix/w5-convergence-2026-08-04
 Tool: kimi -m kimi-code/k3. Method: reasoned over the embedded exact-SHA source;

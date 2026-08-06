@@ -1,3 +1,7 @@
+*** WITHDRAWN / SUPERSEDED — do not rely on this attestation. ***
+*** Superseded by the b5939cd attestations (dual APPROVE b5939cd, 2026-08-06). ***
+*** Original content follows for the record. ***
+
 • Independent Review — Wave A (b1a292b..0af42a1)
 ══════════════════════════════════════════════
 
