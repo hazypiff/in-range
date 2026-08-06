@@ -1,0 +1,24 @@
+EXACT-SHA ATTESTATION — gpt-5.6-sol (codex CLI), blinded non-author review
+Implementation SHA: 5b13554  |  branch fix/w5-convergence-2026-08-04
+Tool: codex exec (self-reported gpt-5.6-sol). Method: clean read of the exact
+checkout; adversarial (asked to REFUTE each predicate); no other verdict seen.
+Decisive fixtures: puller harness 51/51; native diag 101 / Runner 55 (0 skips);
+final-binary isolation (prod diag-syms=0). Command: codex exec --skip-git-repo-check.
+
+C1 VERDICT = PASS — Two-hop revision symlinks and noncanonical parents are rejected, while carry-over admits only regular sanctioned artifacts (docs/research/2026-08-01-hardening/hw_matrix_pull.sh:442).
+
+C2 VERDICT = PASS — Effective OFF reaps controller state, sessions, connections, timers, and snapshots, and Dart requires both disabled and quiescent acknowledgments (ios/Runner/BackgroundBeacon.swift:500).
+
+C3 VERDICT = PASS — Destroyed sessions are tombstoned; emit records “nokey” and handle returns nil without generating a replacement secret (ios/Runner/W5Diag.swift:63).
+
+C4 VERDICT = PASS — Boot arms the launch-key gate before restoration, buffering markers and handled events until confirmed-key flush (ios/Runner/BackgroundBeacon.swift:279).
+
+C5 VERDICT = PASS — Foreign-flavor evidence is wiped first, with keys and stamp changed only after complete typed wipe success (ios/Runner/BackgroundBeacon.swift:220).
+
+SCHEMA VERDICT = PASS — Snapshots include version, flavor, and key epoch; restore rejects and wipes invalid schemas while unconfirmed-key refusal preserves the snapshot (ios/Runner/W5LinkController.swift:878).
+
+E-B1 VERDICT = PASS — Pass teardown calls native exclusively with card.radioAlias after refusing unavailable aliases, never with the dismissal identifier (lib/features/encounters/pass_teardown.dart:122).
+
+E-B2 VERDICT = PASS — Native lists handles only, resolves eligible handle-to-raw mappings internally, rejects invalid selections, and production isolation requires zero diagnostic symbols (ios/Runner/BackgroundBeacon.swift:546).
+
+OVERALL = APPROVE 5b13554

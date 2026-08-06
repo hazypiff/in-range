@@ -1,0 +1,16 @@
+EXACT-SHA ATTESTATION — kimi-code/k3 (kimi CLI), blinded non-author review
+Implementation SHA: 5b13554  |  branch fix/w5-convergence-2026-08-04
+Tool: kimi -m kimi-code/k3. Method: reasoned over the embedded exact-SHA source;
+adversarial (asked to REFUTE each predicate); no other verdict seen.
+
+Format required: "<id> VERDICT = PASS|FAIL" + one evidence/refutation sentence
+citing file:line. Final line "OVERALL = APPROVE 5b13554".
+C1 VERDICT = PASS — hw_matrix_pull.sh (~L380-400, "CANONICAL prior target only
+C2 VERDICT = PASS — BackgroundBeacon.swift setW5Links case (~L560) runs w5Effe
+live state. C3 VERDICT = PASS — W5Diag.swift destroySessionSecret sets destroy
+-destroy emit mints an unattested key. C4 VERDICT = PASS — BackgroundBeacon.sw
+e key A and no restoration marker is lost. C5 VERDICT = PASS — BackgroundBeaco
+partial wipe, retrying next launch. SCHEMA VERDICT = PASS — W5LinkController.s
+ore failure. E-B1 VERDICT = PASS — pass_teardown.dart resolvePassTeardown atte
+r passing the encounter/dismissal id. E-B2 VERDICT = PASS — BackgroundBeacon.s
+OVERALL = APPROVE 5b13554

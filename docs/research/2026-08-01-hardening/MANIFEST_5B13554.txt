@@ -1,0 +1,37 @@
+# Value-free changed-file manifest — 1d0b6c5 (HOLD) .. 5b13554 (final)
+
+ .github/workflows/ios-build.yml                    |   7 +-
+ .../2026-08-01-hardening/hw_matrix_pull.sh         |  31 ++-
+ .../2026-08-01-hardening/hw_matrix_pull_test.sh    |  34 +++
+ ios/Runner/BackgroundBeacon.swift                  | 160 ++++++++++--
+ ios/Runner/W5Diag.swift                            | 272 +++++++++++++++++---
+ ios/Runner/W5EvidenceWriter.swift                  |  11 +
+ ios/Runner/W5LinkController.swift                  | 112 ++++++++-
+ ios/RunnerTests/W5DiagTests.swift                  | 208 +++++++++++++++
+ ios/RunnerTests/W5TeardownTests.swift              | 280 +++++++++++++++++++++
+ lib/features/beacon/background_beacon_channel.dart |  78 ++++--
+ lib/features/beacon/beacon_screen.dart             |  10 +
+ lib/features/beacon/beacon_service.dart            |  64 ++---
+ lib/features/beacon/w5_diag_panel.dart             | 160 ++++++++++++
+ test/features/beacon/w5_diag_control_test.dart     | 106 ++++----
+ test/features/beacon/w5_diag_panel_test.dart       | 103 ++++++++
+ .../encounters/swipe_feed_pass_widget_test.dart    | 164 ++++++++++++
+ 16 files changed, 1640 insertions(+), 160 deletions(-)
+
+## Commits
+5b13554 fix(w5): C4 (codex) — recordPriorLoss defers under an unconfirmed launch key
+0bad8d3 fix(w5): C2 (kimi) — effective-OFF must invalidate myPrevTokenTimer to reach quiescence
+8ebff6e fix(w5): blinded-review r2 — schema garbage-handle, C4 marker overflow, E-B2 raw-token removal
+99acbe6 fix(w5): §3 schema — reject+wipe a corrupt inner linkMeta entry (fail closed)
+0bf9db3 ci(ios): pin native-count floors to the authoritative discovered set (55 / 98)
+3128e33 feat(w5): E-B2 Dart — installed diag selected-peer panel (production-invisible)
+e691813 feat(w5): E-B2 native — selected-peer control (list handles, arm-by-handle, fail closed)
+1e17773 test(e-b1): SwipeFeed widget pass drives the real alias→native dropPeer path
+4f4520c feat(w5): §3 persisted-restoration schema — version/flavor/generation boundary, fail-closed load
+67dd266 fix(w5): supplemental — protection-class verify on every op; export loss before ack
+4b89b17 fix(w5): C5/B3-B4 — transactional foreign-flavor wipe (inspect before deleting keys)
+39cde72 fix(w5): C4/B3 — native key-ready gate holds handled emits until launch key confirmed
+90da193 fix(w5): C3/A1 — destroyed session fails closed, never regenerates a fallback key
+0b28ede fix(w5): C2/A3 — atomic native effective-OFF transaction, not a Boolean echo
+f21b1b8 fix(puller): C1 green — reject second-hop revision symlink; canonical parent; sanctioned carry-over
+e58bbb0 test(puller): C1 red — committed second-hop revision symlink escape fixture
