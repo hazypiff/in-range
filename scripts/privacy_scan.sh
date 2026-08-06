@@ -8,11 +8,13 @@
 #
 # FAILS on (each finding prints file:line + CLASS only — never the value, so the
 # scanner itself cannot leak a real identifier into a log or transcript):
-#   * /Users/<name>            real home dir  (placeholder /Users/<redacted> is fine)
-#   * UUID / UDID forms        8-4-4-4-12 hex, unless APPROVED (see allow-model)
-#   * Bluetooth / MAC ids      XX:XX:XX:XX:XX:XX, unless APPROVED
-#   * machine-local env dumps  RUN_DESTINATION_DEVICE_UDID / *SESSION_ID / LaunchInstanceID assignments
+#   * /Users/<name>            real home dir  (placeholder /Users/<redacted> is fine) — binaries too
+#   * machine-local env dumps  RUN_DESTINATION_DEVICE_UDID / *SESSION_ID / LaunchInstanceID assignments — binaries too
 #   * the fleet run secret     exact value (binaries included), if $INRANGE_DIAG_RUN_SECRET set (never printed)
+#   * UUID / UDID forms        8-4-4-4-12 hex, unless APPROVED (TEXT files only — binary hex is noise; a real
+#                              device id baked into a binary is caught by the home-path / env / secret binary scans above)
+#   * Bluetooth / MAC ids      XX:XX:XX:XX:XX:XX in TEXT files, unless APPROVED
+#   * leak in a FILENAME       UUID/MAC/`/Users` in any tracked path name (every file, binaries included)
 #   * raw xcodebuild logs      native_*_*.log lacking the sanitizer derivation header
 #
 # Git commit SHAs (40-hex) and content hashes (64-hex) are NOT flagged — they are
@@ -121,7 +123,7 @@ while IFS= read -r f; do
   printf '%s' "$f" | grep -Eq "$USERPATH_RE" && report "$f" "/Users/<name> in tracked path"
 
   [ -f "$f" ] || continue
-  LC_ALL=C grep -qI . "$f" 2>/dev/null || continue   # skip binary content
+  is_text=1; LC_ALL=C grep -qI . "$f" 2>/dev/null || is_text=0
 
   # raw xcodebuild log detector (applies even to shape-trusted files).
   case "$f" in
@@ -131,23 +133,27 @@ while IFS= read -r f; do
       ;;
   esac
 
-  # These content checks run on EVERY tracked file, with NO exception (panel P4:
-  # no file bypasses the /Users or env-dump scans). The scanner source avoids a
-  # literal env assignment in its own text, and the test files build their leak
-  # fixtures from concatenated parts, so neither self-matches here.
+  # Machine-local IDENTIFIER content checks run on EVERY tracked file INCLUDING
+  # BINARIES (grep -a): a /Users home path or an env-dump identifier baked into a
+  # committed binary must be caught too (panel P4 — binaries were previously
+  # skipped for content). The scanner source avoids a literal env assignment, and
+  # the test files build their leak fixtures from concatenated parts, so nothing
+  # self-matches here.
   while IFS=: read -r ln _; do
     [ -n "$ln" ] && report "$f:$ln" "machine-local env identifier"
-  done < <(grep -nE "$ENVDUMP_RE" "$f" 2>/dev/null)
+  done < <(grep -a -nE "$ENVDUMP_RE" "$f" 2>/dev/null)
   while IFS=: read -r ln _; do
     [ -n "$ln" ] && report "$f:$ln" "absolute /Users/<name> home path"
-  done < <(grep -nE "$USERPATH_RE" "$f" 2>/dev/null)
+  done < <(grep -a -nE "$USERPATH_RE" "$f" 2>/dev/null)
 
-  # UUID/MAC *shape* checks — relaxed ONLY for the synthetic-fixture trees and the
-  # shape-fixture files (which hold invented UUID/MAC-shaped values). Documented
-  # residual: a real UDID is shape-indistinguishable from a synthetic one, so one
-  # committed into such a tree/file passes the shape check; those are fixture-only
-  # by policy and code review is the backstop.
-  if ! shape_trusted_path "$f" && ! shape_trusted_file "$f"; then
+  # UUID/MAC *shape* checks — TEXT files only (a binary is full of random hex that
+  # would match the UUID/MAC shape and drown the scan in noise; a real device id
+  # baked into a binary is instead caught by the /Users, env-dump, and secret
+  # checks above, which DO scan binaries). Relaxed ONLY for the synthetic-fixture
+  # trees and the shape-fixture files. Documented residual: a real UDID is shape-
+  # indistinguishable from a synthetic one, so one committed into such a tree/file
+  # passes the shape check; those are fixture-only by policy (code review backstop).
+  if [ "$is_text" -eq 1 ] && ! shape_trusted_path "$f" && ! shape_trusted_file "$f"; then
     scan_form "$f" "UUID/UDID identifier"      "$UUID_RE"
     scan_form "$f" "Bluetooth/MAC identifier"  "$MAC_RE"
   fi

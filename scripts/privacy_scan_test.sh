@@ -65,15 +65,21 @@ fi
 BN="$(mktemp -d)"; git -C "$BN" init -q; git -C "$BN" config user.email t@t; git -C "$BN" config user.name t
 mkdir -p "$BN/scripts"; cp "$SCAN" "$BN/scripts/privacy_scan.sh"
 FAKE_SECRET="cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe"
-printf 'ELF\000\000binary\000%s\000tail' "$FAKE_SECRET" > "$BN/app.bin"   # NUL bytes => binary
+Ub="/Users/"; Vb="RUN_DESTINATION_DEVICE""_UDID"
+# One binary (NUL bytes) carrying the secret, a /Users home path, AND an env-dump id.
+printf 'ELF\000\000%srealuser/x\000%s=X\000%s\000tail' "$Ub" "$Vb" "$FAKE_SECRET" > "$BN/app.bin"
 git -C "$BN" add -A -f >/dev/null
 if ( cd "$BN" && INRANGE_DIAG_RUN_SECRET="$FAKE_SECRET" bash scripts/privacy_scan.sh >/tmp/ps_bin.out 2>&1 ); then
-  bad "SECRET-BIN: scanner passed but the secret is in a tracked binary"
+  bad "SECRET-BIN: scanner passed but the secret/path/env are in a tracked binary"
 else
-  grep -qF "fleet run secret value present" /tmp/ps_bin.out \
-    && ! grep -qF "$FAKE_SECRET" /tmp/ps_bin.out \
-    && ok "SECRET-BIN: secret in a binary flagged (filename only, value not printed)" \
-    || bad "SECRET-BIN: wrong/leaky finding: $(cat /tmp/ps_bin.out)"
+  if grep -qF "fleet run secret value present" /tmp/ps_bin.out \
+     && grep -qF "home path" /tmp/ps_bin.out \
+     && grep -qF "machine-local env identifier" /tmp/ps_bin.out \
+     && ! grep -qF "$FAKE_SECRET" /tmp/ps_bin.out && ! grep -qF "realuser" /tmp/ps_bin.out; then
+    ok "BINARY: secret + /Users path + env id in a binary all flagged (values not printed)"
+  else
+    bad "BINARY: missed a binary-embedded leak or printed a value: $(cat /tmp/ps_bin.out)"
+  fi
 fi
 rm -rf "$BN"
 
