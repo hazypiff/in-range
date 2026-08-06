@@ -358,6 +358,16 @@ final class W5TeardownTests: XCTestCase {
       rejectsAndWipes("stale-generation") { $0["keyEpoch"] = 999_999 }
       rejectsAndWipes("corrupt-snapshot") { $0["snapshot"] = "@@@not-base64@@@" }
       rejectsAndWipes("missing-linkMeta") { $0.removeValue(forKey: "linkMeta") }
+      // A well-formed top-level snapshot with a CORRUPT inner link entry (an
+      // `out:` link missing its linkId) is internally inconsistent → reject+wipe,
+      // never silently skipped and reported loaded (codex).
+      rejectsAndWipes("corrupt-linkmeta") {
+        var lm = ($0["linkMeta"] as? [String: [String: Any]]) ?? [:]
+        lm["out:00000000-0000-0000-0000-000000000000"] = [
+          "linkIdHex": "", "myCandidateHex": "x", "peerAliasHex": "y",
+        ]
+        $0["linkMeta"] = lm
+      }
 
       // Positive control: an UNMUTATED valid snapshot restores the live lease.
       seedValidSnapshot()

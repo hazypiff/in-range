@@ -918,6 +918,24 @@ final class W5LinkController {
     else {
       return rejectSnapshot("corrupt-fields")
     }
+    // Every persisted link entry must be WELL-FORMED for its handle kind — a
+    // corrupt/partial inner entry means the snapshot is internally inconsistent
+    // and must fail CLOSED (reject + wipe), not be silently skipped at rebind
+    // time and reported "loaded" (codex). An `out:` link needs a non-empty
+    // linkId + my-candidate + peer-alias; an `in:` link keeps its (possibly
+    // empty) fields but they must be present strings.
+    for (handle, meta) in linkMeta {
+      if handle.hasPrefix("out:") {
+        guard let lid = meta["linkIdHex"] as? String, !lid.isEmpty,
+          let mc = meta["myCandidateHex"] as? String, !mc.isEmpty,
+          let pa = meta["peerAliasHex"] as? String, !pa.isEmpty
+        else { return rejectSnapshot("corrupt-linkmeta") }
+      } else {
+        guard meta["linkIdHex"] is String, meta["myCandidateHex"] is String,
+          meta["peerAliasHex"] is String
+        else { return rejectSnapshot("corrupt-linkmeta") }
+      }
+    }
     candidateByAlias = restoredCandidates
 
     let restored = ownership.restore(
