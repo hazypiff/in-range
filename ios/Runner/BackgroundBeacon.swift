@@ -233,7 +233,8 @@ final class BackgroundBeacon: NSObject {
                 "bb.evwrite.dropped.w5_events.jsonl",
                 "bb.evwrite.dropped.bb_wake_log.txt",
                 "bb.evwrite.dropped.w5_rssi_log.jsonl",
-                "bb.w5diag.runsecret", "bb.w5diag.provisionedsecret"] {
+                "bb.w5diag.runsecret", "bb.w5diag.provisionedsecret",
+                "bb.w5diag.destroyed", "bb.w5diag.lifetimeloss"] {
       defaults.removeObject(forKey: key)
     }
     defaults.set(Self.stateSchemaStamp, forKey: Self.keySchema)

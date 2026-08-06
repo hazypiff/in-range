@@ -314,7 +314,18 @@ enum W5Diag {
       faultPeerHandle = nil
       helloDelayPending = nil
       seqCounter = 0
-      W5EvidenceWriter.ackPriorLoss()
+      // Supplemental (panel): a reset must not silently erase the fact that loss
+      // occurred. EXPORT the loss to a durable, monotonic lifetime ledger key
+      // (which ackPriorLoss never touches) BEFORE acking the per-op counters — so
+      // the total is preserved without polluting the wiped event stream, then the
+      // exact snapshot is acked (any loss generated after the snapshot survives, A4).
+      let lossSnapshot = W5EvidenceWriter.peekPriorLossDetailed()
+      let lossTotal = lossSnapshot.values.reduce(0, +)
+      if lossTotal > 0 {
+        let prior = diagDefaults?.integer(forKey: lifetimeLossKey) ?? 0
+        diagDefaults?.set(prior + lossTotal, forKey: lifetimeLossKey)
+      }
+      W5EvidenceWriter.ackPriorLoss(lossSnapshot)
       let newCase = caseEpoch + 1
       diagDefaults?.set(newCase, forKey: caseEpochKey)
       diagDefaults?.set(runEpoch + 1, forKey: runEpochKey)  // reset run state
@@ -322,7 +333,8 @@ enum W5Diag {
       return [
         "ok": true, "caseEpoch": newCase, "runEpoch": runEpoch,
         "keyEpoch": keyEpoch, "secretRetained": true, "reason": reason,
-        "wiped": wiped,
+        "wiped": wiped, "lossRecorded": lossTotal,
+        "lifetimeLoss": diagDefaults?.integer(forKey: lifetimeLossKey) ?? 0,
       ]
     }
   #endif
@@ -499,6 +511,11 @@ enum W5Diag {
     /// `resolveRunSecret` must NOT regenerate/persist a per-install fallback (which
     /// would silently re-key the evidence chain after a destroy).
     private static let destroyedTombstoneKey = "bb.w5diag.destroyed"
+    /// Durable, monotonic lifetime loss ledger (supplemental). resetCase EXPORTS
+    /// the acked prior-loss total here before clearing the per-op counters, so a
+    /// reset never erases the fact that evidence loss occurred. Never cleared by
+    /// ackPriorLoss; cleared only by a foreign-flavor wipe.
+    static let lifetimeLossKey = "bb.w5diag.lifetimeloss"
 
     /// True iff the session is in the destroyed/unprovisioned state — the tombstone
     /// is set and there is no env/provisioned/persisted key. Keyed emits must fail

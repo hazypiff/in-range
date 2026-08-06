@@ -179,6 +179,17 @@ import Foundation
           try FileManager.default.setAttributes(
             [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
             ofItemAtPath: u.path)
+          // Supplemental (panel): read-back-verify the protection CLASS on EVERY
+          // reported op (create/append/rotation), not only on replaceLocked. An
+          // unreadable attribute (nil) cannot confirm the class, so it is a typed
+          // verify failure too. The injection seam models an unreadable read.
+          let prot: FileProtectionType? = consumeInjected("protect-verify")
+            ? nil
+            : (try? FileManager.default.attributesOfItem(atPath: u.path)[.protectionKey])
+                as? FileProtectionType
+          if prot != .completeUntilFirstUserAuthentication {
+            noteOpFailure("protect-verify")
+          }
         } catch { noteOpFailure("protect") }
       }
       if consumeInjected("backup") {

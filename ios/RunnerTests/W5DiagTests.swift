@@ -270,6 +270,37 @@ final class W5DiagTests: XCTestCase {
     // serialized boundary — events, wake, AND RSSI, including each ".1" sibling —
     // and clears controls. A wipe that missed a rotation (or a family) would
     // leave a file behind; the inventory-based wipe must catch all six.
+    // Supplemental (panel): a reset EXPORTS the prior-loss total to a durable,
+    // monotonic lifetime ledger BEFORE the blanket ack — so it never silently
+    // erases the fact that evidence loss occurred, and does so without polluting
+    // the just-wiped event stream.
+    func testResetExportsPriorLossToLifetimeLedgerBeforeAck() {
+      W5Diag.testEnvSecretOverride = nil
+      W5EvidenceWriter.resetInjectedFailures()
+      let d = UserDefaults(suiteName: "io.inrange.diag")
+      for k in d?.dictionaryRepresentation().keys ?? [:].keys
+      where k.hasPrefix("bb.evwrite.opfail.") || k.hasPrefix("bb.evwrite.dropped.") {
+        d?.removeObject(forKey: k)
+      }
+      d?.removeObject(forKey: W5Diag.lifetimeLossKey)
+      d?.removeObject(forKey: "bb.w5diag.destroyed")
+      W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))
+      _ = W5Diag.resetCase()  // clean baseline (loss 0 ⇒ no export)
+      // Seed a durable prior loss, then reset.
+      d?.set(5, forKey: "bb.evwrite.dropped.w5_events.jsonl.write")
+      let ack = W5Diag.resetCase()
+      XCTAssertEqual(
+        ack["lossRecorded"] as? Int, 5, "reset recorded the prior-loss total")
+      XCTAssertEqual(
+        d?.integer(forKey: W5Diag.lifetimeLossKey), 5,
+        "loss EXPORTED to the durable lifetime ledger before ack")
+      XCTAssertEqual(
+        d?.integer(forKey: "bb.evwrite.dropped.w5_events.jsonl.write"), 0,
+        "the per-op loss counter was acked (cleared) after the durable export")
+      d?.removeObject(forKey: W5Diag.lifetimeLossKey)
+      W5EvidenceWriter.resetInjectedFailures()
+    }
+
     func testResetCaseWipesEveryFamilyIncludingRotations() {
       let fm = FileManager.default
       let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -894,6 +925,27 @@ final class W5DiagTests: XCTestCase {
     // and `if let prot …, != x` both swallowed a nil (unreadable) read. Inject an
     // unreadable backup-exclusion and protection-class read and assert each typed
     // counter increments (the write still succeeds either way).
+    // Supplemental (panel): the protection-CLASS read-back verify now runs on
+    // EVERY reported op (create/append/rotation via applyProtection), not only on
+    // replaceLocked. An unreadable class read (nil) is a typed verify failure.
+    func testProtectionClassVerifyIsTypedOnAppend() {
+      W5EvidenceWriter.resetInjectedFailures()
+      let name = "ewtest_protverify.jsonl"
+      try? FileManager.default.removeItem(at: url(name))
+      UserDefaults(suiteName: "io.inrange.diag")?
+        .removeObject(forKey: "bb.evwrite.opfail.\(name).protect-verify")
+      let w = W5EvidenceWriter(
+        fileName: name, cap: 1_000_000, rotation: .external, lock: NSRecursiveLock())
+      // Force the create's applyProtection class read-back to be unreadable.
+      W5EvidenceWriter.injectedFailures["\(name).protect-verify"] = 1
+      XCTAssertTrue(w.append("x\n"), "append still succeeds; verify accounted")
+      XCTAssertEqual(
+        opFail(name, "protect-verify"), 1,
+        "unreadable protection-class verify is typed on append (not only replace)")
+      W5EvidenceWriter.resetInjectedFailures()
+      try? FileManager.default.removeItem(at: url(name))
+    }
+
     func testVerifyReadFailuresAreTypedAndAccounted() throws {
       W5EvidenceWriter.resetInjectedFailures()
       let name = "ewtest_verify.jsonl"
