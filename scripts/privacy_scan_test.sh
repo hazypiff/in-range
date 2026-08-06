@@ -65,23 +65,43 @@ fi
 BN="$(mktemp -d)"; git -C "$BN" init -q; git -C "$BN" config user.email t@t; git -C "$BN" config user.name t
 mkdir -p "$BN/scripts"; cp "$SCAN" "$BN/scripts/privacy_scan.sh"
 FAKE_SECRET="cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe"
-Ub="/Users/"; Vb="RUN_DESTINATION_DEVICE""_UDID"
-# One binary (NUL bytes) carrying the secret, a /Users home path, AND an env-dump id.
-printf 'ELF\000\000%srealuser/x\000%s=X\000%s\000tail' "$Ub" "$Vb" "$FAKE_SECRET" > "$BN/app.bin"
+Ub="/Users/"; Vb="RUN_DESTINATION_DEVICE""_UDID"; BARE_UUID="7C9E6F41-2A3B-4D5E-8F10-A1B2C3D4E5F6"
+# One binary (NUL bytes) carrying the secret, a /Users home path, an env-dump id,
+# AND a BARE device UUID (no accompanying id) — all must be flagged.
+printf 'ELF\000\000%srealuser/x\000%s=X\000%s\000dev=%s\000tail' "$Ub" "$Vb" "$FAKE_SECRET" "$BARE_UUID" > "$BN/app.bin"
 git -C "$BN" add -A -f >/dev/null
 if ( cd "$BN" && INRANGE_DIAG_RUN_SECRET="$FAKE_SECRET" bash scripts/privacy_scan.sh >/tmp/ps_bin.out 2>&1 ); then
-  bad "SECRET-BIN: scanner passed but the secret/path/env are in a tracked binary"
+  bad "SECRET-BIN: scanner passed but the secret/path/env/uuid are in a tracked binary"
 else
   if grep -qF "fleet run secret value present" /tmp/ps_bin.out \
      && grep -qF "home path" /tmp/ps_bin.out \
      && grep -qF "machine-local env identifier" /tmp/ps_bin.out \
-     && ! grep -qF "$FAKE_SECRET" /tmp/ps_bin.out && ! grep -qF "realuser" /tmp/ps_bin.out; then
-    ok "BINARY: secret + /Users path + env id in a binary all flagged (values not printed)"
+     && grep -qF "UUID/UDID identifier" /tmp/ps_bin.out \
+     && ! grep -qF "$FAKE_SECRET" /tmp/ps_bin.out && ! grep -qF "realuser" /tmp/ps_bin.out \
+     && ! grep -qF "$BARE_UUID" /tmp/ps_bin.out; then
+    ok "BINARY: secret + /Users + env + bare UUID in a binary all flagged (values not printed)"
   else
     bad "BINARY: missed a binary-embedded leak or printed a value: $(cat /tmp/ps_bin.out)"
   fi
 fi
 rm -rf "$BN"
+
+# --- NEWLINE FILENAME (panel P4 round-5): a tracked file whose NAME contains a
+#     newline, carrying a /Users blob, must still be enumerated (git ls-files -z)
+#     and scanned — a newline-split enumeration would drop it. ---------------------
+NL="$(mktemp -d)"; git -C "$NL" init -q; git -C "$NL" config user.email t@t; git -C "$NL" config user.name t
+mkdir -p "$NL/scripts"; cp "$SCAN" "$NL/scripts/privacy_scan.sh"
+Un="/Users/"; weird="$(printf 'weird\nname.txt')"
+printf 'home = %srealperson/x\n' "$Un" > "$NL/$weird"
+git -C "$NL" add -A -f >/dev/null
+if ( cd "$NL" && bash scripts/privacy_scan.sh >/tmp/ps_nl.out 2>&1 ); then
+  bad "NEWLINE-FN: scanner passed but a newline-named file holds a /Users path"
+else
+  grep -qF "home path" /tmp/ps_nl.out && ! grep -qF "realperson" /tmp/ps_nl.out \
+    && ok "NEWLINE-FN: newline-in-filename enumerated + /Users blob flagged (value not printed)" \
+    || bad "NEWLINE-FN: missed or leaky: $(cat /tmp/ps_nl.out)"
+fi
+rm -rf "$NL"
 
 # --- FILENAME leak (panel P4): a UUID in a tracked filename is flagged even when
 #     the file content is clean. Isolated scenario in a fresh repo. --------------

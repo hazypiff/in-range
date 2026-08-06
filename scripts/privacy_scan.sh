@@ -8,31 +8,37 @@
 #
 # FAILS on (each finding prints file:line + CLASS only — never the value, so the
 # scanner itself cannot leak a real identifier into a log or transcript):
-#   * /Users/<name>            real home dir  (placeholder /Users/<redacted> is fine) — binaries too
-#   * machine-local env dumps  RUN_DESTINATION_DEVICE_UDID / *SESSION_ID / LaunchInstanceID assignments — binaries too
-#   * the fleet run secret     exact value (binaries included), if $INRANGE_DIAG_RUN_SECRET set (never printed)
-#   * UUID / UDID forms        8-4-4-4-12 hex, unless APPROVED (TEXT files only — binary hex is noise; a real
-#                              device id baked into a binary is caught by the home-path / env / secret binary scans above)
-#   * Bluetooth / MAC ids      XX:XX:XX:XX:XX:XX in TEXT files, unless APPROVED
-#   * leak in a FILENAME       UUID/MAC/`/Users` in any tracked path name (every file, binaries included)
+# Every check below scans the COMMITTED GIT BLOB of every tracked path (enumerated
+# with `git ls-files -z`, so filenames with newlines/special chars are handled), so
+# regular files, symlinks (blob == target), dangling symlinks, AND binaries are all
+# covered. Findings print file:line + CLASS only — never the matched value; a
+# leak-bearing FILENAME is redacted before it is reported.
+#   * /Users/<name>            real home dir (placeholder /Users/<redacted> is fine) — text + binary
+#   * machine-local env dumps  RUN_DESTINATION_DEVICE_UDID / *SESSION_ID / LaunchInstanceID assignments — text + binary
+#   * the fleet run secret     exact value, if $INRANGE_DIAG_RUN_SECRET is set (never printed) — text + binary
+#   * UUID / UDID forms        8-4-4-4-12 hex — text + binary (the dashed form is specific
+#                              enough that random binary bytes essentially never match), unless APPROVED
+#   * Bluetooth / MAC ids      XX:XX:XX:XX:XX:XX — text + binary, unless APPROVED
+#   * leak in a FILENAME       UUID/MAC/`/Users` in any tracked path name (every file)
 #   * raw xcodebuild logs      native_*_*.log lacking the sanitizer derivation header
 #
 # Git commit SHAs (40-hex) and content hashes (64-hex) are NOT flagged — they are
 # legitimate, non-identifying provenance. This scanner targets identifiers.
 #
-# APPROVAL MODEL ("unapproved" per the directive), hardened after panel P4:
-#   * The FILENAME check and the fleet-SECRET check apply to EVERY tracked path,
-#     with NO exceptions (even shape-trusted files / binaries).
+# APPROVAL MODEL ("unapproved" per the directive), hardened across panel P4 rounds:
+#   * The FILENAME and fleet-SECRET checks apply to EVERY tracked path, no exception.
 #   * The /Users and env-dump CONTENT checks apply to every file EXCEPT the small,
 #     explicitly code-reviewed set of DEFINITIONAL files (this scanner + its test +
-#     the leak-fixture files), which contain the leak patterns by construction.
-#   * A UUID/MAC TOKEN is a finding unless approved_token() matches a public/standard
-#     constant (Bluetooth SIG base UUID, app iBeacon UUID, Herald UUID, nil UUID,
-#     placeholder MAC). This shape check is relaxed ONLY inside the synthetic-fixture
-#     TREES (supabase/seed, supabase/tests, test/), which hold many invented UUIDs.
-# DOCUMENTED RESIDUAL: a real device UDID is shape-indistinguishable from a synthetic
-# one, so one committed into a fixture tree / definitional file would pass the shape
-# check; those locations are fixture-only by policy and code review is the backstop.
+#     the leak-fixture files), which contain the leak patterns by construction; those
+#     files build any home-path or env fixture from concatenated parts so nothing real hides.
+#   * A UUID/MAC TOKEN (text OR binary) is a finding unless approved_token() matches a
+#     public/standard constant (Bluetooth SIG base UUID, app iBeacon UUID, Herald UUID,
+#     nil UUID, placeholder MAC). The shape check is relaxed ONLY inside the synthetic-
+#     fixture TREES (supabase/seed, supabase/tests, test/) and the shape-fixture files.
+# SOLE DOCUMENTED RELAXATION: a real device UDID is shape-indistinguishable from a
+# synthetic one, so one committed INTO a fixture tree/file would pass the shape check —
+# those locations are fixture-only by policy (code review is the backstop). This is an
+# in-scope-documented allowlist boundary, not a downgrade of a real defect elsewhere.
 # Real device UDIDs are deliberately NOT in approved_token().
 set -uo pipefail
 
@@ -102,23 +108,20 @@ shape_trusted_file() {
   return 1
 }
 
-# Report <reportname>:line for any line of <scanfile> containing an UNAPPROVED
-# token of a given form. reportname is the tracked path; scanfile is the extracted
-# committed blob (so symlinks/dangling/binaries are all handled uniformly).
+# Report <reportname>:line for any UNAPPROVED token of a given form in <scanfile>.
+# Uses `grep -oan` (only-matching + line number) so each matched token is extracted
+# CLEANLY as its own string — NUL-safe, because a binary line is never read into a
+# shell variable (which would truncate at the first NUL and drop a later token).
+# report writes to the $FINDINGS FILE, so the `grep | while` subshell is fine.
 scan_form() { # reportname, class, regex, scanfile
-  local rn="$1" cls="$2" re="$3" sf="$4" ln rest tok bad
-  while IFS=: read -r ln rest; do
+  local rn="$1" cls="$2" re="$3" sf="$4"
+  grep -oan -E "$re" "$sf" 2>/dev/null | while IFS=: read -r ln tok; do
     [ -n "$ln" ] || continue
-    bad=0
-    for tok in $(printf '%s\n' "$rest" | grep -oE "$re"); do
-      approved_token "$tok" && continue
-      bad=1
-    done
-    [ "$bad" -eq 1 ] && report "$rn:$ln" "$cls"
-  done < <(grep -a -nE "$re" "$sf" 2>/dev/null)
+    approved_token "$tok" || report "$rn:$ln" "$cls"
+  done
 }
 
-while IFS= read -r f; do
+while IFS= read -r -d '' f; do
   # FILENAME check — EVERY tracked path (binaries + shape-trusted included). The
   # reported location is REDACTED so a leak-bearing filename is never re-printed
   # (panel P4).
@@ -135,7 +138,6 @@ while IFS= read -r f; do
   # nothing is skipped by a working-tree `[ -f ]` test (panel P4 round-4). A
   # deleted/unreadable blob yields an empty scan file.
   git show ":$f" > "$BLOBF" 2>/dev/null || git cat-file blob "HEAD:$f" > "$BLOBF" 2>/dev/null || : > "$BLOBF"
-  is_text=1; LC_ALL=C grep -qI . "$BLOBF" 2>/dev/null || is_text=0
 
   case "$f" in
     *native_*.log)
@@ -155,18 +157,19 @@ while IFS= read -r f; do
     [ -n "$ln" ] && report "$f:$ln" "absolute /Users/<name> home path"
   done < <(grep -a -nE "$USERPATH_RE" "$BLOBF" 2>/dev/null)
 
-  # UUID/MAC *shape* checks — TEXT blobs only. A binary is full of random hex that
-  # matches the UUID/MAC shape, so scanning binaries for shape would drown the scan
-  # in noise. DOCUMENTED RESIDUAL (accepted): a BARE device UUID/MAC embedded in a
-  # tracked BINARY, with no accompanying /Users path, env-dump id, or fleet secret,
-  # is NOT flagged — it is indistinguishable from random binary hex. This is out of
-  # scope for a text scanner; a committed binary blob is itself reviewed. Shape is
-  # further relaxed for the synthetic-fixture trees/files (also fixture-only).
-  if [ "$is_text" -eq 1 ] && ! shape_trusted_path "$f" && ! shape_trusted_file "$f"; then
+  # UUID/MAC *shape* checks — TEXT and BINARY blobs (grep -a). The DASHED UUID form
+  # (32 hex + 4 dashes at exact 8-4-4-4-12 offsets) and the COLONed MAC form are
+  # specific enough that random binary bytes essentially never match, so a real
+  # device UUID/UDID baked into a tracked BINARY IS flagged (no residual here).
+  # Shape is relaxed ONLY for the synthetic-fixture trees/files (invented values,
+  # fixture-only by policy; code review is the backstop) — the sole remaining
+  # relaxation, and it is in-scope-documented, not a real-defect downgrade.
+  if ! shape_trusted_path "$f" && ! shape_trusted_file "$f"; then
     scan_form "$f" "UUID/UDID identifier"      "$UUID_RE" "$BLOBF"
     scan_form "$f" "Bluetooth/MAC identifier"  "$MAC_RE"  "$BLOBF"
   fi
-done < <(git ls-files)
+done < <(git ls-files -z)   # -z: NUL-delimited + UNquoted, so a filename containing a
+                            # newline or special chars is read whole (panel P4 round-5).
 
 # fleet run secret exact-value check — scans BINARIES too (panel P4: -I would skip
 # a secret baked into a tracked binary). Never printed; only the filename surfaces.
