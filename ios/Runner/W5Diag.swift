@@ -137,7 +137,6 @@ enum W5Diag {
     /// THE NOW-CONFIRMED KEY. Caller holds the events-writer lock.
     static func confirmLaunchKeyAndFlushLocked() {
       launchKeyConfirmed = true
-      guard !pendingEmits.isEmpty else { return }
       let pend = pendingEmits
       pendingEmits.removeAll()
       for p in pend {
@@ -146,6 +145,10 @@ enum W5Diag {
           link: p.link, peripheral: p.peripheral, result: p.result,
           reason: p.reason, count: p.count)
       }
+      // C4 (codex): a prior-loss boot record deferred while the key was
+      // unconfirmed is now written under the CONFIRMED key (never lost to a
+      // changed-key wipe). Runs even when nothing was buffered.
+      recordPriorLossLocked()
     }
 
     /// Build + append one event under the CURRENT session snapshot. Caller holds
@@ -729,12 +732,27 @@ enum W5Diag {
   /// prior loss. All under the session boundary. Release-safe no-op.
   static func recordPriorLoss() {
     #if INRANGE_DIAG
-      eventWriter.withLock {
+      eventWriter.withLock { recordPriorLossLocked() }
+    #endif
+  }
+
+  #if INRANGE_DIAG
+    /// The prior-loss boot record, assuming the events-writer lock is held.
+    static func recordPriorLossLocked() {
+        // C4 (codex): do NOT record+ack the prior-loss boot marker under an
+        // UNCONFIRMED launch key — it would land under a stale key A and be wiped
+        // when Dart provisions a changed key B, losing the record forever. Retain
+        // the counters; confirmLaunchKeyAndFlushLocked re-invokes this once the
+        // launch key is confirmed, so the marker is recorded under the real key.
+        guard isKeyConfirmedForLaunch else { return }
         // Snapshot the per-key loss BEFORE the append records it. Ack only these
         // exact amounts on success — a new failure the append itself generates
         // (e.g. an applyProtection failure on THIS write) is retained, not erased.
         let recorded = W5EvidenceWriter.peekPriorLossDetailed()
         let loss = recorded.values.reduce(0, +)
+        // Nothing to record when there was no prior loss — and appending a
+        // count-0 marker on every confirmed provision would add write noise.
+        guard loss > 0 else { return }
         let obj: [String: Any] = [
           "v": 1, "run": runLabel, "epoch": bootEpoch,
           "keyEpoch": keyEpoch, "caseEpoch": caseEpoch, "runEpoch": runEpoch,
@@ -748,9 +766,8 @@ enum W5Diag {
           eventWriter.appendLocked(s + "\n") {
           W5EvidenceWriter.ackPriorLoss(recorded)  // ack ONLY the recorded amounts
         }
-      }
-    #endif
-  }
+    }
+  #endif
 
   /// Shared writers for the non-W5Diag families — all on the SAME session lock.
   #if INRANGE_DIAG

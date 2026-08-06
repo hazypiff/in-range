@@ -611,6 +611,32 @@ final class W5DiagTests: XCTestCase {
       W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))  // flush + confirm
     }
 
+    // C4 (codex): recordPriorLoss must NOT append+ack the boot marker under an
+    // unconfirmed launch key (it would land under stale key A and be wiped by a
+    // changed-key provision). It defers — retaining the loss counters — and the
+    // confirmed-key flush records it.
+    func testRecordPriorLossDefersUntilKeyConfirmed() {
+      W5Diag.testEnvSecretOverride = nil
+      let d = UserDefaults(suiteName: "io.inrange.diag")
+      for k in d?.dictionaryRepresentation().keys ?? [:].keys
+      where k.hasPrefix("bb.evwrite.opfail.") || k.hasPrefix("bb.evwrite.dropped.") {
+        d?.removeObject(forKey: k)
+      }
+      W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))
+      _ = W5Diag.resetCase()
+      let lossKey = "bb.evwrite.dropped.w5_events.jsonl.write"
+      d?.set(4, forKey: lossKey)
+      // New launch: gate armed (unconfirmed) → recordPriorLoss must DEFER.
+      W5Diag.beginLaunchKeyGate()
+      W5Diag.recordPriorLoss()
+      XCTAssertEqual(
+        d?.integer(forKey: lossKey), 4, "loss retained under an unconfirmed key")
+      // Confirm the key → the flush re-invokes recordPriorLoss → recorded + acked.
+      W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))
+      XCTAssertEqual(
+        d?.integer(forKey: lossKey), 0, "loss recorded + acked once key confirmed")
+    }
+
     func testChangedKeyRelaunchBuffersUnderAAndFlushesUnderB() throws {
       W5Diag.testEnvSecretOverride = nil  // no authoritative env key for this test
       W5EvidenceWriter.resetInjectedFailures()

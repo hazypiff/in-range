@@ -87,7 +87,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO | tee xcodebuild-diag.log | grep -E "Test [Cc]ase|Executed|TEST" || true
           # The diag scheme must run the named A5 test (no environment skip).
           # Floor PINNED to the authoritative discovered count (was 70).
-          bash ../scripts/assert_native_tests.sh xcodebuild-diag.log 100 \
+          bash ../scripts/assert_native_tests.sh xcodebuild-diag.log 101 \
             testHandleUsesProvisionedRunSecret
 
       - name: Record authoritative native test counts + log hashes
