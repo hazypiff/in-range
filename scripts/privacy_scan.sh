@@ -11,8 +11,8 @@
 #   * /Users/<name>            real home dir  (placeholder /Users/<redacted> is fine)
 #   * UUID / UDID forms        8-4-4-4-12 hex, unless APPROVED (see allow-model)
 #   * Bluetooth / MAC ids      XX:XX:XX:XX:XX:XX, unless APPROVED
-#   * machine-local env dumps  RUN_DESTINATION_DEVICE_UDID=, *SESSION_ID=, LaunchInstanceID=
-#   * the fleet run secret     exact value, if $INRANGE_DIAG_RUN_SECRET is set (never printed)
+#   * machine-local env dumps  RUN_DESTINATION_DEVICE_UDID / *SESSION_ID / LaunchInstanceID assignments
+#   * the fleet run secret     exact value (binaries included), if $INRANGE_DIAG_RUN_SECRET set (never printed)
 #   * raw xcodebuild logs      native_*_*.log lacking the sanitizer derivation header
 #
 # Git commit SHAs (40-hex) and content hashes (64-hex) are NOT flagged — they are
@@ -81,12 +81,15 @@ shape_trusted_path() {
   esac
   return 1
 }
+# Files that hold a synthetic UUID/MAC-shaped fixture and get ONLY the UUID/MAC
+# SHAPE relaxed (never the /Users, env-dump, filename, or secret checks — those
+# still run). The test files build their /Users and env-dump fixture strings from
+# CONCATENATED parts so no real-looking assignment appears literally here (panel
+# P4): the only shape they carry is a synthetic UUID, which this list relaxes.
 shape_trusted_file() {
   case "$1" in
-    scripts/privacy_scan.sh|scripts/privacy_scan_test.sh) return 0 ;;
+    scripts/privacy_scan_test.sh) return 0 ;;
     docs/research/2026-08-01-hardening/sanitize_native_log_test.sh) return 0 ;;
-    # Puller harness: embeds a SYNTHETIC residual UUID on purpose, so the puller's
-    # own raw-id post-scan can be proven to reject it. Synthetic fixtures only.
     docs/research/2026-08-01-hardening/hw_matrix_pull_test.sh) return 0 ;;
   esac
   return 1
@@ -128,15 +131,10 @@ while IFS= read -r f; do
       ;;
   esac
 
-  # DEFINITIONAL files (this scanner + its test + the leak-fixture files) contain
-  # the leak PATTERNS and synthetic fixtures BY CONSTRUCTION, so their content
-  # checks are skipped — but the FILENAME check above and the global fleet-secret
-  # check below still apply to them. These are a small, explicitly code-reviewed
-  # set (not broad trees).
-  shape_trusted_file "$f" && continue
-
-  # These content checks run on every OTHER file — including the fixture TREES:
-  # env-dump identifiers and /Users home paths are never relaxed by shape trust.
+  # These content checks run on EVERY tracked file, with NO exception (panel P4:
+  # no file bypasses the /Users or env-dump scans). The scanner source avoids a
+  # literal env assignment in its own text, and the test files build their leak
+  # fixtures from concatenated parts, so neither self-matches here.
   while IFS=: read -r ln _; do
     [ -n "$ln" ] && report "$f:$ln" "machine-local env identifier"
   done < <(grep -nE "$ENVDUMP_RE" "$f" 2>/dev/null)
@@ -144,20 +142,23 @@ while IFS= read -r f; do
     [ -n "$ln" ] && report "$f:$ln" "absolute /Users/<name> home path"
   done < <(grep -nE "$USERPATH_RE" "$f" 2>/dev/null)
 
-  # UUID/MAC *shape* checks — relaxed ONLY for the synthetic-fixture trees (which
-  # hold many invented UUID/MAC-shaped values). Documented residual: a real UDID
-  # shape-hidden in such a tree passes; these trees are fixture-only by policy.
-  if ! shape_trusted_path "$f"; then
+  # UUID/MAC *shape* checks — relaxed ONLY for the synthetic-fixture trees and the
+  # shape-fixture files (which hold invented UUID/MAC-shaped values). Documented
+  # residual: a real UDID is shape-indistinguishable from a synthetic one, so one
+  # committed into such a tree/file passes the shape check; those are fixture-only
+  # by policy and code review is the backstop.
+  if ! shape_trusted_path "$f" && ! shape_trusted_file "$f"; then
     scan_form "$f" "UUID/UDID identifier"      "$UUID_RE"
     scan_form "$f" "Bluetooth/MAC identifier"  "$MAC_RE"
   fi
 done < <(git ls-files)
 
-# fleet run secret exact-value check (never printed; only filename can surface).
+# fleet run secret exact-value check — scans BINARIES too (panel P4: -I would skip
+# a secret baked into a tracked binary). Never printed; only the filename surfaces.
 if [ -n "${INRANGE_DIAG_RUN_SECRET:-}" ]; then
   while IFS= read -r hf; do
     [ -n "$hf" ] && report "$hf" "fleet run secret value present"
-  done < <(git grep -I -l -F -- "$INRANGE_DIAG_RUN_SECRET" 2>/dev/null || true)
+  done < <(git grep -l -F -- "$INRANGE_DIAG_RUN_SECRET" 2>/dev/null || true)
 fi
 
 n="$(wc -l < "$FINDINGS" | tr -d ' ')"

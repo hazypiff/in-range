@@ -17,11 +17,15 @@ mkdir -p "$TMP/scripts" "$TMP/docs/research/2026-08-01-hardening"
 cp "$SCAN" "$TMP/scripts/privacy_scan.sh"
 
 # --- RED: one file per leak class ---------------------------------------------
-printf 'home = /Users/realperson/secret\n'                              > "$TMP/docs/a.md"
+# /Users and the env-dump key are built from concatenated parts so this test's
+# own SOURCE carries no literal home-path or `<var>=` that the whole-tip scan
+# would (correctly) flag against this file (panel P4 — no bypass for content).
+U="/Users/"; V="RUN_DESTINATION_DEVICE""_UDID"
+printf 'home = %srealperson/secret\n' "$U"                              > "$TMP/docs/a.md"
 printf 'udid = DEADBEEF-1234-5678-9ABC-DEF012345678\n'                  > "$TMP/docs/b.md"
 printf 'bssid = 09:1A:2B:3C:4D:5E\n'                                    > "$TMP/docs/c.md"
-printf 'export RUN_DESTINATION_DEVICE_UDID=DEADBEEF-1234-5678-9ABC-DEF012345678\n' > "$TMP/docs/d.md"
-printf 'Test Case foo passed\nran on /Users/x\n'                        > "$TMP/docs/research/2026-08-01-hardening/native_diag_x.log"
+printf 'export %s=DEADBEEF-1234-5678-9ABC-DEF012345678\n' "$V"          > "$TMP/docs/d.md"
+printf 'Test Case foo passed\nran on %sx\n' "$U"                        > "$TMP/docs/research/2026-08-01-hardening/native_diag_x.log"
 git -C "$TMP" add -A -f >/dev/null
 
 if ( cd "$TMP" && bash scripts/privacy_scan.sh >/tmp/ps_red.out 2>&1 ); then
@@ -55,6 +59,23 @@ if ( cd "$TMP" && bash scripts/privacy_scan.sh >/tmp/ps_green.out 2>&1 ); then
 else
   bad "GREEN: scanner still failing:"; sed 's/^/     /' /tmp/ps_green.out
 fi
+
+# --- SECRET IN A BINARY (panel P4): the fleet secret baked into a tracked binary
+#     must be flagged — `git grep -I` would have skipped it. -----------------------
+BN="$(mktemp -d)"; git -C "$BN" init -q; git -C "$BN" config user.email t@t; git -C "$BN" config user.name t
+mkdir -p "$BN/scripts"; cp "$SCAN" "$BN/scripts/privacy_scan.sh"
+FAKE_SECRET="cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe"
+printf 'ELF\000\000binary\000%s\000tail' "$FAKE_SECRET" > "$BN/app.bin"   # NUL bytes => binary
+git -C "$BN" add -A -f >/dev/null
+if ( cd "$BN" && INRANGE_DIAG_RUN_SECRET="$FAKE_SECRET" bash scripts/privacy_scan.sh >/tmp/ps_bin.out 2>&1 ); then
+  bad "SECRET-BIN: scanner passed but the secret is in a tracked binary"
+else
+  grep -qF "fleet run secret value present" /tmp/ps_bin.out \
+    && ! grep -qF "$FAKE_SECRET" /tmp/ps_bin.out \
+    && ok "SECRET-BIN: secret in a binary flagged (filename only, value not printed)" \
+    || bad "SECRET-BIN: wrong/leaky finding: $(cat /tmp/ps_bin.out)"
+fi
+rm -rf "$BN"
 
 # --- FILENAME leak (panel P4): a UUID in a tracked filename is flagged even when
 #     the file content is clean. Isolated scenario in a fresh repo. --------------

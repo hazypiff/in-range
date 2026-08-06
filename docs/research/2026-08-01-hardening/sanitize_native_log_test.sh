@@ -17,13 +17,19 @@ ok()   { printf 'ok   %s\n' "$1"; }
 bad()  { printf 'FAIL %s\n' "$1"; fails=$((fails+1)); }
 
 RAW="$TMP/raw.log"
-cat > "$RAW" <<'EOF'
+# /Users and the env-dump KEY NAMES are built from concatenated parts so this
+# test's own SOURCE carries no literal home path or `<var>=` assignment that the
+# whole-tip privacy scan would (correctly) flag against it (panel P4 — this file
+# is shape-trusted for the synthetic UUIDs only, not for /Users or env-dumps).
+U="/Users/"; RDU="RUN_DESTINATION_DEVICE""_UDID"; TSI="TERM_SESSION""_ID"
+LII="LaunchInstance""ID"; CSK="CODE_SIGN""_KEYCHAIN"
+cat > "$RAW" <<EOF
 === BUILD TARGET Runner OF PROJECT Runner WITH CONFIGURATION Debug ===
-    cd /Users/someuser/in-range/ios
-    export CODE_SIGN_KEYCHAIN=/Users/someuser/Library/Keychains/login.keychain-db
-    export RUN_DESTINATION_DEVICE_UDID=11111111-2222-3333-4444-555555555555
-    export TERM_SESSION_ID=AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE
-    export LaunchInstanceID=99999999-8888-7777-6666-555544443333
+    cd ${U}someuser/in-range/ios
+    export ${CSK}=${U}someuser/Library/Keychains/login.keychain-db
+    export ${RDU}=11111111-2222-3333-4444-555555555555
+    export ${TSI}=AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE
+    export ${LII}=99999999-8888-7777-6666-555544443333
     builtin-copy /private/var/folders/xy/abc123/T/Runner.app
     peripheral 11:22:33:44:55:66 discovered
 Test Suite 'All tests' started at 2026-08-06 13:26:06.668.
@@ -42,7 +48,7 @@ OUT="$(bash "$SAN" "$RAW" deadbeefcafe0000deadbeefcafe0000deadbeef "Runner (Debu
 check_absent() { # label, pattern
   if printf '%s\n' "$OUT" | grep -Eq "$2"; then bad "leak survived: $1"; else ok "leak removed: $1"; fi
 }
-check_absent "/Users/<name> path"     '/Users/someuser'
+check_absent "/Users/<name> path"     "${U}someuser"
 check_absent "simulator UDID"         '11111111-2222-3333-4444-555555555555'
 check_absent "TERM_SESSION_ID uuid"   'AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE'
 check_absent "LaunchInstanceID uuid"  '99999999-8888-7777-6666-555544443333'
