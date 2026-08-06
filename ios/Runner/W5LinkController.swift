@@ -135,6 +135,28 @@ final class W5LinkController {
   }
   private func outHandle(_ id: UUID) -> String { "out:\(id.uuidString)" }
   private func inHandle(_ key: String) -> String { "in:\(key)" }
+
+  /// E-B2: the peers eligible for the diag selected-peer control — each as its
+  /// run-scoped `id:<14hex>` peer HANDLE mapped to its raw alias. The raw is
+  /// RETAINED NATIVELY (the installed UI only ever sees the handle). Diag-only:
+  /// in a release binary there are no W5 links, so this is empty.
+  var diagEligiblePeers: [(handle: String, raw: String)] {
+    #if INRANGE_DIAG
+      var seen = Set<String>()
+      var out: [(handle: String, raw: String)] = []
+      func add(_ raw: String?) {
+        guard let raw, !raw.isEmpty, let h = W5Diag.handle("peer", raw),
+          !seen.contains(h) else { return }
+        seen.insert(h)
+        out.append((handle: h, raw: raw))
+      }
+      for (_, link) in outLinks { add(link.peerAliasHex) }
+      for (_, link) in inLinks { add(link.peerAliasHex) }
+      return out
+    #else
+      return []
+    #endif
+  }
   /// CONTRACT (R8-F1, design §Adapter obligations): one fresh random 128-bit
   /// candidate per alias, NEVER shared across aliases/peers. Since the R7
   /// grace-rejoin fix, candidateId is the oracle's only rejoin key for an
@@ -856,7 +878,6 @@ final class W5LinkController {
       return
     }
     guard let payload = bb.defaults.dictionary(forKey: Self.keyW5Snapshot)
-      as? [String: Any]
     else {
       // No persisted lease to restore — Case 3 must be able to tell "cold, no
       // snapshot" from "restored".

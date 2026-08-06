@@ -413,6 +413,56 @@ final class W5TeardownTests: XCTestCase {
       }
       d.removeObject(forKey: "bb.w5.snapshot")
     }
+
+    // E-B2: the installed selected-peer control lists eligible peers as run-scoped
+    // HANDLES (never raw), arms a one-shot fault + delay by handle, and fails
+    // closed on a nil / empty / ineligible (wrong/stale/wildcard) selection.
+    func testDiagSelectedPeerControlArmsByHandleAndFailsClosed() {
+      W5Diag.testEnvSecretOverride = nil
+      W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))
+      W5Diag.disarmFault()
+      let bb = BackgroundBeacon()
+      withExtendedLifetime(bb) {
+        bb.testEnableW5Links()
+        bb.w5Link.testSeedOutboundLink(
+          peripheralID: UUID(), myCand: "a", peerCand: "b", alias: "peerAAA",
+          linkId: "L1")
+        bb.w5Link.testSeedOutboundLink(
+          peripheralID: UUID(), myCand: "c", peerCand: "d", alias: "peerBBB",
+          linkId: "L2")
+
+        let peers = bb.diagListW5Peers()
+        XCTAssertEqual(peers.count, 2, "two eligible peers listed")
+        let h0 = peers[0]["handle"] as! String
+        XCTAssertTrue(h0.hasPrefix("id:"), "handles only — no raw token crosses")
+
+        // Fail closed: nil / empty / ineligible selections never arm.
+        XCTAssertEqual(
+          bb.armW5FaultForPeer(handle: nil, delaySeconds: 0)["rejected"] as? String,
+          "no-peer")
+        XCTAssertEqual(
+          bb.armW5FaultForPeer(handle: "", delaySeconds: 0)["rejected"] as? String,
+          "no-peer")
+        XCTAssertEqual(
+          bb.armW5FaultForPeer(handle: "id:deadbeefdeadbe", delaySeconds: 0)[
+            "rejected"] as? String, "peer-not-eligible")
+        XCTAssertFalse(W5Diag.isFaultArmed, "no fault armed after fail-closed tries")
+
+        // Arm the intended peer by handle — one-shot fault + delay together.
+        let ack = bb.armW5FaultForPeer(handle: h0, delaySeconds: 2.0)
+        XCTAssertEqual(ack["ok"] as? Bool, true)
+        XCTAssertEqual(ack["peer"] as? String, h0, "armed the selected handle")
+        XCTAssertEqual(ack["delaySeconds"] as? Double, 2.0, "delay armed with fault")
+        XCTAssertTrue(W5Diag.isFaultArmed)
+
+        let st = bb.w5DiagStatus()
+        XCTAssertEqual(st["armed"] as? Bool, true)
+        XCTAssertEqual(st["eligibleCount"] as? Int, 2)
+
+        W5Diag.disarmFault()
+        XCTAssertFalse(W5Diag.isFaultArmed, "disarm clears the control")
+      }
+    }
   #endif
 
   // REAL CHANNEL ENTRY (B1): the platform-channel handler itself. A server

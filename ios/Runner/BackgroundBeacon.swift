@@ -467,6 +467,20 @@ final class BackgroundBeacon: NSObject {
         // Diag-only: arm a one-shot HELLO delay (seconds) for the next dial.
         W5Diag.armHelloDelay((call.arguments as? Double) ?? 0)
         result(nil)
+      case "listW5Peers":
+        // E-B2: the installed selected-peer UI's eligible list — run-scoped
+        // handles ONLY (raw aliases stay native). Empty in a release binary.
+        result(self.diagListW5Peers())
+      case "armW5FaultForPeer":
+        // E-B2: arm a one-shot pre-ACK fault (+ optional delay) for a peer chosen
+        // by its handle in the installed UI. Fails closed on nil/empty/ineligible.
+        let a = call.arguments as? [String: Any]
+        result(self.armW5FaultForPeer(
+          handle: a?["handle"] as? String,
+          delaySeconds: (a?["delaySeconds"] as? Double) ?? 0))
+      case "w5DiagStatus":
+        // E-B2: current armed handle / delay / eligible count for the UI.
+        result(self.w5DiagStatus())
       case "recordW5Teardown":
         // Diag-only: record a pass's teardown OUTCOME (already sanitized — role
         // names + counts, no raw ids) in the structured evidence layer, so all
@@ -526,6 +540,57 @@ final class BackgroundBeacon: NSObject {
   /// W5 dial — so afterward `isW5Quiescent` is true and no restored old-key state
   /// survives. It deliberately leaves the shared beacon advertiser/scanner alone;
   /// W5 links are a strict subset of the beacon's lifecycle.
+  /// E-B2: the eligible peers for the installed selected-peer control, as
+  /// run-scoped handles only (raw aliases are retained natively and never cross
+  /// the channel). Empty in a release binary (no W5 links exist).
+  func diagListW5Peers() -> [[String: Any]] {
+    #if INRANGE_DIAG
+      return w5Link.diagEligiblePeers.map { ["handle": $0.handle] }
+    #else
+      return []
+    #endif
+  }
+
+  /// E-B2: arm a one-shot pre-ACK fault (+ optional one-shot delay) for the peer
+  /// whose run-scoped HANDLE the UI selected. Fails closed on a nil/empty handle
+  /// or one not currently eligible (wrong-peer / stale / wildcard). The raw alias
+  /// is resolved natively so the installed UI never handles a raw token.
+  func armW5FaultForPeer(handle: String?, delaySeconds: Double) -> [String: Any] {
+    #if INRANGE_DIAG
+      guard let h = handle, !h.isEmpty else {
+        return ["ok": false, "rejected": "no-peer"]
+      }
+      guard let match = w5Link.diagEligiblePeers.first(where: { $0.handle == h })
+      else {
+        return ["ok": false, "rejected": "peer-not-eligible"]
+      }
+      var ack = W5Diag.armFault(peerRaw: match.raw)
+      // The one-shot delay applies ONLY when the fault actually armed (E-B2:
+      // "the delay applies exactly once and only when the selected fault is armed").
+      if (ack["ok"] as? Bool) == true, delaySeconds > 0 {
+        W5Diag.armHelloDelay(delaySeconds)
+        ack["delaySeconds"] = delaySeconds
+      } else {
+        ack["delaySeconds"] = 0
+      }
+      return ack
+    #else
+      return ["ok": false]
+    #endif
+  }
+
+  /// E-B2: current diagnostic control status for the installed UI.
+  func w5DiagStatus() -> [String: Any] {
+    #if INRANGE_DIAG
+      return [
+        "armed": W5Diag.isFaultArmed,
+        "eligibleCount": w5Link.diagEligiblePeers.count,
+      ]
+    #else
+      return ["armed": false, "eligibleCount": 0]
+    #endif
+  }
+
   func w5EffectiveOff() {
     w5Link.beaconOff()                        // leases/links/timers/ownership + snapshot
     for id in Array(w5.keys) { w5End(id) }    // end every live W5 session
