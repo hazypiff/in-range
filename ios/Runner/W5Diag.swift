@@ -715,10 +715,18 @@ enum W5Diag {
     /// Wipe EVERY evidence family's current + rotated artifact through the writer
     /// inventory, under the one session lock — so the foreign-flavor boot wipe
     /// removes w5_rssi_log.1.jsonl too and bumps the wipe generation (no silent
-    /// bypass of the writer abstraction) (R3).
-    static func wipeAllEvidenceFiles() {
+    /// bypass of the writer abstraction) (R3). Returns `true` ONLY if EVERY typed
+    /// per-file wipe succeeded — the caller (C5 foreign-flavor transition) must
+    /// NOT delete the old keys or advance the stamp on a partial wipe, or a
+    /// new-key emit would append mixed-flavor evidence into stranded old files.
+    @discardableResult
+    static func wipeAllEvidenceFiles() -> Bool {
       eventWriter.withLock {
-        for w in [eventWriter, wakeWriter, rssiWriter] { _ = w.wipeLocked() }
+        var allWiped = true
+        for w in [eventWriter, wakeWriter, rssiWriter] {
+          for (_, ok) in w.wipeLocked() where !ok { allWiped = false }
+        }
+        return allWiped
       }
     }
 

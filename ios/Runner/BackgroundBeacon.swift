@@ -173,19 +173,27 @@ final class BackgroundBeacon: NSObject {
     "w5_events.jsonl", "w5_events.1.jsonl",
     "w5_rssi_log.jsonl", "w5_rssi_log.1.jsonl",
   ]
-  static func wipeDiagnosticFiles() {
+  /// Returns `true` only if every diagnostic artifact was actually removed — the
+  /// C5 foreign-flavor transition inspects this BEFORE deleting keys / advancing
+  /// the stamp, so a partial wipe cannot strand old-key evidence under new keys.
+  @discardableResult
+  static func wipeDiagnosticFiles() -> Bool {
     #if INRANGE_DIAG
       // Wipe through the writer inventory so EVERY current + rotated artifact
       // (incl. w5_rssi_log.1.jsonl) is removed, typed, session-locked, and bumps
       // the wipe generation — no silent bypass of the writer abstraction (R3).
-      W5Diag.wipeAllEvidenceFiles()
+      return W5Diag.wipeAllEvidenceFiles()
     #else
       // Release ships no evidence machinery; defensively remove any stale files.
       let docs = FileManager.default.urls(
         for: .documentDirectory, in: .userDomainMask)[0]
+      var allGone = true
       for name in diagnosticFileNames {
-        try? FileManager.default.removeItem(at: docs.appendingPathComponent(name))
+        let u = docs.appendingPathComponent(name)
+        do { try FileManager.default.removeItem(at: u) }
+        catch { if FileManager.default.fileExists(atPath: u.path) { allGone = false } }
       }
+      return allGone
     #endif
   }
 
@@ -204,6 +212,20 @@ final class BackgroundBeacon: NSObject {
     // foreign operational state — UserDefaults keys, the persisted W5 lease
     // snapshot, AND every diagnostic file — so nothing from another flavor
     // survives into this launch (Phase 3 complete foreign-flavor wipe).
+    //
+    // C5/B3-B4 — TRANSACTIONAL: wipe the evidence FILES first and inspect the
+    // typed per-file result. Only if EVERY file was actually removed do we delete
+    // the old-flavor keys (incl. the run secrets) and advance the stamp. On any
+    // partial wipe we keep the old keys AND the old stamp, record a durable
+    // failure, and return — so the stranded old-flavor evidence stays consistent
+    // with its own keys, no new-key success marker is appended into it, and the
+    // wipe is retried on the next launch (idempotent) instead of silently
+    // producing mixed-flavor evidence.
+    let wiped = Self.wipeDiagnosticFiles()
+    if !wiped {
+      logWake("state-stamp-wipe-FAILED-\(stamp!)")  // keys + stamp unchanged; retry next launch
+      return
+    }
     for key in ["bb.enabled", "bb.slots", "bb.buffer", "bb.pingUrl",
                 "bb.pingAuth", Self.keyW5Links, "bb.w5rssi.off",
                 "bb.w5.snapshot", "bb.w5events.dropped",
@@ -214,7 +236,6 @@ final class BackgroundBeacon: NSObject {
                 "bb.w5diag.runsecret", "bb.w5diag.provisionedsecret"] {
       defaults.removeObject(forKey: key)
     }
-    Self.wipeDiagnosticFiles()
     defaults.set(Self.stateSchemaStamp, forKey: Self.keySchema)
     logWake("state-stamp-wiped-\(stamp!)")
   }
@@ -1544,5 +1565,9 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
     /// W5-links gate so a test can drive dropPeerByToken through the real
     /// w5Link.dropPeer path (w5LinksEnabled reads this under INRANGE_DIAG).
     func testEnableW5Links() { defaults.set(true, forKey: Self.keyW5Links) }
+    /// TEST-ONLY: drive the private foreign-flavor reconciliation directly (C5).
+    func testReconcileStateStamp() { reconcileStateStamp() }
+    static var testStateSchemaStamp: String { stateSchemaStamp }
+    static var testSchemaKey: String { keySchema }
   #endif
 }

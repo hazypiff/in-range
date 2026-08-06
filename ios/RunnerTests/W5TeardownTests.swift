@@ -265,6 +265,50 @@ final class W5TeardownTests: XCTestCase {
       }
       diag?.removeObject(forKey: "bb.w5.snapshot")
     }
+
+    // C5/B3-B4: the foreign-flavor transition is TRANSACTIONAL. On a PARTIAL
+    // evidence wipe, the old-flavor keys are RETAINED and the stamp is NOT
+    // advanced — so no new-key success marker is appended into stranded old-key
+    // evidence, and the wipe retries next launch. A clean wipe completes normally.
+    func testForeignFlavorWipeIsTransactionalOnPartialFailure() {
+      let d = BackgroundBeacon.operationalDefaults()
+      W5Diag.testEnvSecretOverride = nil
+      W5EvidenceWriter.resetInjectedFailures()
+      let schemaKey = BackgroundBeacon.testSchemaKey
+      let foreign = "foreign.vX"
+
+      // A real evidence file must exist for the wipe to (fail to) remove it.
+      W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))
+      W5Diag.emit(.beat, role: .app)
+
+      // Seed a FOREIGN stamp + sentinel old-flavor secret keys.
+      d.set(foreign, forKey: schemaKey)
+      d.set("abc", forKey: "bb.w5diag.provisionedsecret")
+      d.set("def", forKey: "bb.w5diag.runsecret")
+
+      // Inject a wipe failure on the events family → PARTIAL wipe.
+      W5EvidenceWriter.injectedFailures["w5_events.jsonl.wipe"] = 1
+      let bb = BackgroundBeacon()
+      withExtendedLifetime(bb) { bb.testReconcileStateStamp() }
+      XCTAssertEqual(
+        d.string(forKey: "bb.w5diag.provisionedsecret"), "abc",
+        "partial wipe RETAINS the old-flavor secret key (no orphaning)")
+      XCTAssertEqual(
+        d.string(forKey: schemaKey), foreign,
+        "partial wipe does NOT advance the stamp (retry next launch)")
+
+      // GREEN control: no injected failure ⇒ the transition completes.
+      W5EvidenceWriter.resetInjectedFailures()
+      let bb2 = BackgroundBeacon()
+      withExtendedLifetime(bb2) { bb2.testReconcileStateStamp() }
+      XCTAssertNil(
+        d.string(forKey: "bb.w5diag.provisionedsecret"),
+        "clean wipe deletes the old-flavor secret keys")
+      XCTAssertEqual(
+        d.string(forKey: schemaKey), BackgroundBeacon.testStateSchemaStamp,
+        "clean wipe advances the stamp to this flavor")
+      W5EvidenceWriter.resetInjectedFailures()
+    }
   #endif
 
   // REAL CHANNEL ENTRY (B1): the platform-channel handler itself. A server
