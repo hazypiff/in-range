@@ -1,0 +1,50 @@
+# MANIFEST — baf0543 (value-free)
+# Supersedes b5939cd: an A.1 hardening + privacy-tooling pass advanced the SHA.
+
+source_sha            baf05434374839911bf8e4b053ef42cde0fd51ec
+branch                fix/w5-convergence-2026-08-04
+supersedes            b5939cd80f235a751b219ef007bbc6795736dc54  (previously dual-approved)
+delta                 b5939cd..baf0543 = 9 files, +615/-23 (shell/CI/tooling only; NO Swift, NO Dart)
+
+# delta files
+.github/workflows/ios-build.yml
+docs/research/2026-08-01-hardening/hw_matrix_pull.sh
+docs/research/2026-08-01-hardening/hw_matrix_pull_test.sh
+docs/research/2026-08-01-hardening/sanitize_native_log.sh
+docs/research/2026-08-01-hardening/sanitize_native_log_test.sh
+scripts/assert_native_tests.sh
+scripts/assert_native_tests_test.sh
+scripts/privacy_scan.sh
+scripts/privacy_scan_test.sh
+
+# local gate results at baf0543 (this Mac; xcodebuild/flutter reproduced)
+flutter_analyze       clean
+flutter_test          290 / 290
+native_diag           103 passed / 0 fail / 0 skip   (anchor testHandleUsesProvisionedRunSecret ran)
+native_runner          55 passed / 0 fail / 0 skip   (anchor testBuildFlavorMatchesScheme ran)
+hw_matrix_pull_test    54 / 54                        (+3 A.1 fixtures; the 3 FAIL against the b5939cd puller)
+assert_native_tests_test 11 / 11
+privacy_scan_test      pass
+sanitize_native_log_test pass
+privacy_scan (whole-tip) CLEAN
+git_diff_check         clean
+whole_bundle_isolation production diag-syms=0 & run-secret-value=0 (Runner+Flutter+App.framework+bg-service);
+                       diag positive: diag-syms(Runner)=246, run-secret-value(App.framework)=1
+
+# sanitized native evidence (committed derivatives; raw logs never committed)
+native_diag_baf0543.sanitized.log
+  sha256        aaeb44f34925d4d4df74f6d4494344c5414e978e4e6fb111c496c73af94fc685
+  raw_input_sha256 (header) 9b49c082f5af87067634dd9ed3ca5002469760b148a848a6042d494b9d97b67c
+native_runner_baf0543.sanitized.log
+  sha256        32413884863d915decbcd90cc0b4f3ffd27f0b6499ab4999dba2689cc34dea38
+  raw_input_sha256 (header) 0ff0c05d3affe4e22c10abdbc17cb62a6fcd77c6986e9f0b5879232d9f3af31d
+
+# exact-SHA CI (ordinary hosted runners)
+ios-build run          31126815276 (workflow_dispatch at fix/w5-convergence-2026-08-04 = baf0543)
+prior b5939cd run      31125229324 → failure: "job was not acquired by Runner of type hosted" (acquisition, NOT billing, NOT test)
+substitute             native re-run + whole-bundle isolation reproduced locally at baf0543 (R6 OR-clause)
+
+# NOT yet present at baf0543 (hardware-coupled — see PHYSICAL_ACTION_REQUIRED)
+signed_diag_artifact   deferred: free-provisioning is device-specific + 7-day expiry; secret-leak risk in a captured build log
+three_iphone_matrix    not run (2 phones available; Case 1 needs 3; Case 3 needs a human jetsam action)
+final_panel            code re-review on baf0543 done this round; full panel (source+evidence+artifact) after the matrix

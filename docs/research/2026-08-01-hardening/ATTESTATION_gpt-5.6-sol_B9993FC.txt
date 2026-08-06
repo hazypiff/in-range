@@ -1,0 +1,45 @@
+NON-AUTHOR REVIEW ATTESTATION
+=============================
+reviewer_backend/tool : gpt-5.6-sol  (via `codex exec`, headless)
+reviewed_source_sha    : b9993fcd397bcf4dbf77d4065828adc4b043b740  (fix/w5-convergence-2026-08-04)
+prior_approved_base    : b5939cd80f235a751b219ef007bbc6795736dc54
+inspected_range        : b5939cd..b9993fc (A.1 hardening + privacy tooling; shell/CI/tooling ONLY — no Swift, no Dart)
+role                   : independent, adversarial (asked to REFUTE each predicate)
+rounds                 : baf0543 (REJECT: OUT_ROOT TOCTOU, allowlist breadth) -> b9481b2 (REJECT: binary secret,
+                         definitional bypass) -> 58233bb (REJECT: binaries skip home-path/env content) ->
+                         1f6e102 (REJECT: bare-UUID-in-binary, dangling symlink, filename print) ->
+                         f38eb6b (REJECT: newline-delimited enumeration) -> b9993fc (APPROVE)
+
+COMMANDS RUN (by the reviewer, exit codes)
+  git checkout b9993fc ; git diff --stat f38eb6b b9993fc   -> only privacy_scan.sh + privacy_scan_test.sh (0)
+  bash scripts/privacy_scan_test.sh                        -> ALL PRIVACY-SCANNER TESTS PASSED (0)
+  bash scripts/privacy_scan.sh                             -> PRIVACY SCAN CLEAN (0)
+  bash docs/research/2026-08-01-hardening/hw_matrix_pull_test.sh -> 54 passed, 0 failed (0)
+  (P5 native rerun owner-deferred to the frozen SHA; treated DEFERRED, not regressed)
+
+DECISIVE FIXTURES EXECUTED / AUDITED
+  puller: safe_copy_regular O_NOFOLLOW+fstat(nlink==1); OUT_ROOT create+validate+re-verify+O_DIRECTORY|O_NOFOLLOW
+          dir-fd swap; hardlink/symlinked-OUT_ROOT/TOCTOU fixtures.
+  gate:   assert_native_tests.sh =55/=103 exact pins, scheme-specific named anchors, source-sha intake.
+  scanner: git ls-files -z enumeration; committed-blob scan (regular/symlink/dangling/binary uniform);
+          grep -oan NUL-safe token extraction; binary UUID/MAC shape flagged; redacted filename reports;
+          BINARY[secret+/Users+env+bareUUID], NEWLINE-FN, FILENAME+redact, SYMLINK fixtures.
+
+PER-PREDICATE VERDICT (b9993fc)
+  P1_puller_safecopy    : PASS  (byte-identical; scanner-only diff confirmed)
+  P2_out_root_toctou    : PASS  (byte-identical; scanner-only diff confirmed)
+  P3_exact_set_ci_gate  : PASS  (byte-identical; scanner-only diff confirmed)
+  P4_privacy_tooling    : PASS  (blob scan covers text/binary/symlink/dangling/special-name without printing
+                                 matched values; only the documented fixture UUID/MAC shape relaxation remains)
+  P5_native_evidence    : DEFERRED (owner-directed final frozen-SHA native rerun; validated at freeze)
+
+STRONGEST FALSIFICATION ATTEMPT
+  Audited NUL-separated enumeration, binary tokens after NULs, newline filenames, blob extraction, redaction,
+  and allowlist reach; gates were invoked but the read-only review sandbox denied mktemp/git writes (the author
+  re-ran all gates on the frozen SHA — see MANIFEST_B9993FC.txt).
+
+ARTIFACT HASHES (sanitized native evidence at b9993fc)
+  native_diag_b9993fc.sanitized.log   sha256 4f4adb48d58b60b9c0ea8d0c7369dc8b64d63f352a932f0fa3e108e9845de8d5
+  native_runner_b9993fc.sanitized.log sha256 7180ff004a40be40701572827324cab57f00066e0fc2d19345082163847507ae
+
+DECISION: APPROVE b9993fc

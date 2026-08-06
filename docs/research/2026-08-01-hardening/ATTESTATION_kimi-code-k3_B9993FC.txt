@@ -1,0 +1,35 @@
+NON-AUTHOR REVIEW ATTESTATION
+=============================
+reviewer_backend/tool : kimi-code/k3  (via `kimi -m kimi-code/k3 -p`, headless, self-contained prompt)
+reviewed_source_sha    : b9993fcd397bcf4dbf77d4065828adc4b043b740  (fix/w5-convergence-2026-08-04)
+prior_approved_base    : b5939cd80f235a751b219ef007bbc6795736dc54
+inspected_range        : b5939cd..b9993fc (A.1 hardening + privacy tooling; shell/CI/tooling ONLY — no Swift, no Dart)
+role                   : independent, adversarial (asked to REFUTE each predicate)
+input_form             : self-contained — the full delta patch + the full scripts/privacy_scan.sh at b9993fc +
+                         both sanitized native-evidence derivatives were EMBEDDED in the prompt; static reasoning
+                         (no worktree / no command execution) after an earlier headless run stalled on worktree setup.
+
+DECISIVE FIXTURES AUDITED (from the embedded patch + source)
+  scanner: git ls-files -z + read -d '' enumeration; committed-blob scan (regular/symlink/dangling/binary);
+          grep -oan NUL-safe token extraction; binary UUID/MAC shape flagged; redacted filename reports;
+          BINARY[secret+/Users+env+bareUUID], NEWLINE-FN, FILENAME+redact, SYMLINK fixtures.
+  puller/gate (confirmed UNCHANGED by the diff scope): O_NOFOLLOW/fstat safe-copy; OUT_ROOT dir-fd swap;
+          =55/=103 exact pins + anchors + source-sha intake.
+
+PER-PREDICATE VERDICT (b9993fc)
+  P1_puller_safecopy    : PASS  (unchanged in this scanner-only delta; prior PASSED state confirmed)
+  P2_out_root_toctou    : PASS  (untouched by delta; diff scope confirms previously approved state)
+  P3_exact_set_ci_gate  : PASS  (no assert/CI changes; gate wiring remains as approved)
+  P4_privacy_tooling    : PASS  (NUL-safe enumeration/extraction; binary UUID flagged; no hiding path found)
+  P5_native_evidence    : DEFERRED (owner-deferred native rerun at the frozen SHA; not regressed)
+
+STRONGEST FALSIFICATION ATTEMPT
+  Content/secret findings print the tracked filename un-redacted, so a file whose NAME is itself a leak AND
+  which also has leak CONTENT would re-expose the leak-bearing name via the content finding. Noted as
+  pre-existing (not introduced by this delta) and non-blocking; recorded as a residual for a future pass.
+
+ARTIFACT HASHES (sanitized native evidence at b9993fc)
+  native_diag_b9993fc.sanitized.log   sha256 4f4adb48d58b60b9c0ea8d0c7369dc8b64d63f352a932f0fa3e108e9845de8d5
+  native_runner_b9993fc.sanitized.log sha256 7180ff004a40be40701572827324cab57f00066e0fc2d19345082163847507ae
+
+DECISION: APPROVE b9993fc

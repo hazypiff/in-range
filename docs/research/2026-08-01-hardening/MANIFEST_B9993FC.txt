@@ -1,0 +1,66 @@
+# MANIFEST — b9993fc (value-free) — FINAL frozen SHA, dual-approved
+# Supersedes b5939cd (and the intermediate baf0543/b9481b2/58233bb/1f6e102/f38eb6b review candidates).
+
+source_sha            b9993fcd397bcf4dbf77d4065828adc4b043b740
+branch                fix/w5-convergence-2026-08-04
+supersedes            b5939cd80f235a751b219ef007bbc6795736dc54  (previously dual-approved; A.1 + privacy advanced it)
+delta                 b5939cd..b9993fc = 9 files, shell/CI/tooling ONLY (NO Swift, NO Dart)
+
+# delta files
+.github/workflows/ios-build.yml
+docs/research/2026-08-01-hardening/hw_matrix_pull.sh
+docs/research/2026-08-01-hardening/hw_matrix_pull_test.sh
+docs/research/2026-08-01-hardening/sanitize_native_log.sh
+docs/research/2026-08-01-hardening/sanitize_native_log_test.sh
+scripts/assert_native_tests.sh
+scripts/assert_native_tests_test.sh
+scripts/privacy_scan.sh
+scripts/privacy_scan_test.sh
+
+# frozen-SHA gate results (this Mac; xcodebuild/flutter reproduced at b9993fc)
+flutter_analyze          clean
+flutter_test             290 / 290
+native_diag              103 passed / 0 fail / 0 skip   (anchor testHandleUsesProvisionedRunSecret ran)
+native_runner             55 passed / 0 fail / 0 skip   (anchor testBuildFlavorMatchesScheme ran)
+hw_matrix_pull_test       54 / 54                        (+3 A.1 fixtures; the 3 FAIL against the b5939cd puller)
+assert_native_tests_test  11 / 11
+privacy_scan_test         12 fixtures pass (RED/GREEN/BINARY[secret+/Users+env+bareUUID]/NEWLINE-FN/FILENAME+redact/SYMLINK)
+sanitize_native_log_test  pass
+privacy_scan (whole-tip)  CLEAN
+git_diff_check            clean
+whole_bundle_isolation    CARRIED from baf0543 — the b5939cd..b9993fc delta is shell-only, so the compiled
+                          production/diag bundles are byte-identical to baf0543, where isolation was reproduced
+                          on this Mac: production diag-syms=0 & run-secret-value=0 (Runner+Flutter+App.framework+
+                          bg-service); diag positive controls diag-syms(Runner)=246, run-secret-value(App.framework)=1
+
+# sanitized native evidence (committed derivatives; raw logs never committed)
+native_diag_b9993fc.sanitized.log
+  sha256        4f4adb48d58b60b9c0ea8d0c7369dc8b64d63f352a932f0fa3e108e9845de8d5
+native_runner_b9993fc.sanitized.log
+  sha256        7180ff004a40be40701572827324cab57f00066e0fc2d19345082163847507ae
+
+# blinded dual non-author review (both APPROVE the same exact SHA b9993fc)
+gpt-5.6-sol (codex)   P1..P4 PASS, P5 DEFERRED -> APPROVE b9993fc   (ATTESTATION_gpt-5.6-sol_B9993FC.txt)
+kimi-code/k3 (kimi)   P1..P4 PASS, P5 DEFERRED -> APPROVE b9993fc   (ATTESTATION_kimi-code-k3_B9993FC.txt)
+review_rounds         baf0543->b9481b2->58233bb->1f6e102->f38eb6b->b9993fc (5 codex REJECT rounds, all on the
+                      NET-NEW privacy scanner; each finding closed with a red/green fixture; core predicates
+                      P1/P2/P3/P5 PASS from both throughout)
+
+# exact-SHA CI (ordinary hosted runners)
+ios-build run          31128251903 (workflow_dispatch at fix/w5-convergence-2026-08-04 = b9993fc)
+prior runs             31126815276 (baf0543), 31125229324 (b5939cd) both failed: "job was not acquired by
+                       Runner of type hosted" — hosted-runner ACQUISITION failure (infra), NOT billing, NOT a test.
+substitute             native re-run + whole-bundle isolation reproduced locally at the frozen SHA (R6 OR-clause)
+
+# open non-blocking residual (both reviewers approved despite it)
+content-finding filename print: a CONTENT/secret finding reports the tracked path un-redacted, so a file whose
+  NAME is itself a leak AND which also has leak CONTENT re-exposes the leak-bearing name via the content finding.
+  Pre-existing (not introduced by this delta); FILENAME findings ARE redacted. Direction: apply redact_path() to
+  content-finding locations too. Tracked for a future pass; does not gate this SHA.
+
+# NOT present at b9993fc (hardware-coupled — see PHYSICAL_ACTION_REQUIRED)
+signed_diag_artifact   deferred: free-provisioning is device-specific + 7-day expiry; secret-leak risk in a
+                       captured build log; coupled to the phone-connected step.
+three_iphone_matrix    not run (iPhone 14 + iPhone 13 present; Case 1 needs a 3rd phone; Case 3 needs a human jetsam).
+final_panel            code re-review dual-APPROVED at b9993fc; the full source+evidence+ARTIFACT panel runs after
+                       the matrix, on the signed artifact + hardware evidence.

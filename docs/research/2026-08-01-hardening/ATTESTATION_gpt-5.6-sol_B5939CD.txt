@@ -1,3 +1,5 @@
+### WITHDRAWN / SUPERSEDED by ATTESTATION_*_B9993FC.txt — b5939cd was advanced by the A.1 + privacy delta to b9993fc (dual-approved). ###
+
 EXACT-SHA ATTESTATION — gpt-5.6-sol (codex CLI) — blinded non-author review
 =======================================================================
 Implementation SHA : b5939cd  (fix/w5-convergence-2026-08-04)

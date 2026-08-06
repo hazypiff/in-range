@@ -8,32 +8,49 @@
 #
 # FAILS on (each finding prints file:line + CLASS only — never the value, so the
 # scanner itself cannot leak a real identifier into a log or transcript):
-#   * /Users/<name>            real home dir  (placeholder /Users/<redacted> is fine)
-#   * UUID / UDID forms        8-4-4-4-12 hex, unless APPROVED (see allow-model)
-#   * Bluetooth / MAC ids      XX:XX:XX:XX:XX:XX, unless APPROVED
-#   * machine-local env dumps  RUN_DESTINATION_DEVICE_UDID=, *SESSION_ID=, LaunchInstanceID=
-#   * the fleet run secret     exact value, if $INRANGE_DIAG_RUN_SECRET is set (never printed)
+# Every check below scans the COMMITTED GIT BLOB of every tracked path (enumerated
+# with `git ls-files -z`, so filenames with newlines/special chars are handled), so
+# regular files, symlinks (blob == target), dangling symlinks, AND binaries are all
+# covered. Findings print file:line + CLASS only — never the matched value; a
+# leak-bearing FILENAME is redacted before it is reported.
+#   * /Users/<name>            real home dir (placeholder /Users/<redacted> is fine) — text + binary
+#   * machine-local env dumps  RUN_DESTINATION_DEVICE_UDID / *SESSION_ID / LaunchInstanceID assignments — text + binary
+#   * the fleet run secret     exact value, if $INRANGE_DIAG_RUN_SECRET is set (never printed) — text + binary
+#   * UUID / UDID forms        8-4-4-4-12 hex — text + binary (the dashed form is specific
+#                              enough that random binary bytes essentially never match), unless APPROVED
+#   * Bluetooth / MAC ids      XX:XX:XX:XX:XX:XX — text + binary, unless APPROVED
+#   * leak in a FILENAME       UUID/MAC/`/Users` in any tracked path name (every file)
 #   * raw xcodebuild logs      native_*_*.log lacking the sanitizer derivation header
 #
 # Git commit SHAs (40-hex) and content hashes (64-hex) are NOT flagged — they are
 # legitimate, non-identifying provenance. This scanner targets identifiers.
 #
-# APPROVAL MODEL ("unapproved" per the directive). A UUID/MAC token is a finding
-# UNLESS it is approved by one of:
-#   - ALLOW_VALUE_RE : a public/standard constant shape (Bluetooth SIG base UUID,
-#                      the app's fixed iBeacon UUID, the nil UUID, a documentation
-#                      placeholder MAC).
-#   - a path in ALLOW_PATH : synthetic-fixture trees (seed/test SQL, Dart tests)
-#                      that by construction contain only invented values.
-#   - a file in ALLOW_FILE : this scanner + its fixtures + the sanitizer fixture.
-# Everything else must be a real, non-identifying value or it fails. Real device
-# UDIDs are deliberately NOT approved.
+# APPROVAL MODEL ("unapproved" per the directive), hardened across panel P4 rounds:
+#   * The FILENAME and fleet-SECRET checks apply to EVERY tracked path, no exception.
+#   * The /Users and env-dump CONTENT checks apply to every file EXCEPT the small,
+#     explicitly code-reviewed set of DEFINITIONAL files (this scanner + its test +
+#     the leak-fixture files), which contain the leak patterns by construction; those
+#     files build any home-path or env fixture from concatenated parts so nothing real hides.
+#   * A UUID/MAC TOKEN (text OR binary) is a finding unless approved_token() matches a
+#     public/standard constant (Bluetooth SIG base UUID, app iBeacon UUID, Herald UUID,
+#     nil UUID, placeholder MAC). The shape check is relaxed ONLY inside the synthetic-
+#     fixture TREES (supabase/seed, supabase/tests, test/) and the shape-fixture files.
+# SOLE DOCUMENTED RELAXATION: a real device UDID is shape-indistinguishable from a
+# synthetic one, so one committed INTO a fixture tree/file would pass the shape check —
+# those locations are fixture-only by policy (code review is the backstop). This is an
+# in-scope-documented allowlist boundary, not a downgrade of a real defect elsewhere.
+# Real device UDIDs are deliberately NOT in approved_token().
 set -uo pipefail
 
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
-FINDINGS="$(mktemp)"; trap 'rm -f "$FINDINGS"' EXIT
+FINDINGS="$(mktemp)"; BLOBF="$(mktemp)"; trap 'rm -f "$FINDINGS" "$BLOBF"' EXIT
 report() { printf '%s\t%s\n' "$1" "$2" >> "$FINDINGS"; }
+# Redact any matched leak token from a path before it is reported, so a finding
+# for a leak-bearing FILENAME never re-prints the sensitive value (panel P4).
+redact_path() { # path
+  printf '%s' "$1" | sed -E "s#$UUID_RE#<uuid>#g; s#$MAC_RE#<mac>#g; s#$USERPATH_RE#/Users/<redacted>#g"
+}
 
 UUID_RE='[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}'
 MAC_RE='([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}'
@@ -64,72 +81,102 @@ approved_token() {
   return 1
 }
 
-# Synthetic-fixture trees: only invented UUIDs/MACs by construction.
-allow_path() {
+# SHAPE-trusted trees/files (panel P4): these relax ONLY the UUID/MAC *shape*
+# check, because they contain many synthetic UUID/MAC-shaped fixtures by
+# construction. They do NOT bypass the /Users, env-dump, filename, or fleet-secret
+# checks — those still run on every tracked file. RESIDUAL (documented, accepted):
+# a real device UDID is shape-indistinguishable from a synthetic one, so a real
+# UDID *committed into one of these fixture trees* would pass the shape check
+# unflagged; these trees are fixture-only by policy and code review is the backstop.
+shape_trusted_path() {
   case "$1" in
     supabase/seed/*|supabase/tests/*|test/*) return 0 ;;
   esac
   return 1
 }
-
-# Files permitted to hold leak-SHAPED fixtures (synthetic values only).
-allow_file() {
+# Files that hold a synthetic UUID/MAC-shaped fixture and get ONLY the UUID/MAC
+# SHAPE relaxed (never the /Users, env-dump, filename, or secret checks — those
+# still run). The test files build their /Users and env-dump fixture strings from
+# CONCATENATED parts so no real-looking assignment appears literally here (panel
+# P4): the only shape they carry is a synthetic UUID, which this list relaxes.
+shape_trusted_file() {
   case "$1" in
-    scripts/privacy_scan.sh|scripts/privacy_scan_test.sh) return 0 ;;
+    scripts/privacy_scan_test.sh) return 0 ;;
     docs/research/2026-08-01-hardening/sanitize_native_log_test.sh) return 0 ;;
+    docs/research/2026-08-01-hardening/hw_matrix_pull_test.sh) return 0 ;;
   esac
   return 1
 }
 
-# Report file:line for any line containing an UNAPPROVED token of a given form.
-scan_form() { # file, class, regex
-  local f="$1" cls="$2" re="$3" ln rest tok bad
-  while IFS=: read -r ln rest; do
+# Report <reportname>:line for any UNAPPROVED token of a given form in <scanfile>.
+# Uses `grep -oan` (only-matching + line number) so each matched token is extracted
+# CLEANLY as its own string — NUL-safe, because a binary line is never read into a
+# shell variable (which would truncate at the first NUL and drop a later token).
+# report writes to the $FINDINGS FILE, so the `grep | while` subshell is fine.
+scan_form() { # reportname, class, regex, scanfile
+  local rn="$1" cls="$2" re="$3" sf="$4"
+  grep -oan -E "$re" "$sf" 2>/dev/null | while IFS=: read -r ln tok; do
     [ -n "$ln" ] || continue
-    bad=0
-    for tok in $(printf '%s\n' "$rest" | grep -oE "$re"); do
-      approved_token "$tok" && continue
-      bad=1
-    done
-    [ "$bad" -eq 1 ] && report "$f:$ln" "$cls"
-  done < <(grep -nE "$re" "$f" 2>/dev/null)
+    approved_token "$tok" || report "$rn:$ln" "$cls"
+  done
 }
 
-while IFS= read -r f; do
-  [ -f "$f" ] || continue
-  LC_ALL=C grep -qI . "$f" 2>/dev/null || continue   # skip binary
+while IFS= read -r -d '' f; do
+  # FILENAME check — EVERY tracked path (binaries + shape-trusted included). The
+  # reported location is REDACTED so a leak-bearing filename is never re-printed
+  # (panel P4).
+  for tok in $(printf '%s' "$f" | grep -oE "$UUID_RE"); do
+    approved_token "$tok" || report "$(redact_path "$f")" "UUID/UDID identifier in filename"
+  done
+  for tok in $(printf '%s' "$f" | grep -oE "$MAC_RE"); do
+    approved_token "$tok" || report "$(redact_path "$f")" "Bluetooth/MAC identifier in filename"
+  done
+  printf '%s' "$f" | grep -Eq "$USERPATH_RE" && report "$(redact_path "$f")" "/Users/<name> in tracked path"
 
-  # raw xcodebuild log detector (applies even to allow-listed dirs).
+  # Extract the COMMITTED BLOB and scan THAT — this covers regular files, symlinks
+  # (blob == the link target text), DANGLING symlinks, and binaries uniformly, so
+  # nothing is skipped by a working-tree `[ -f ]` test (panel P4 round-4). A
+  # deleted/unreadable blob yields an empty scan file.
+  git show ":$f" > "$BLOBF" 2>/dev/null || git cat-file blob "HEAD:$f" > "$BLOBF" 2>/dev/null || : > "$BLOBF"
+
   case "$f" in
     *native_*.log)
-      head -1 "$f" | grep -q '^# sanitized native-test evidence$' \
+      head -1 "$BLOBF" | grep -q '^# sanitized native-test evidence$' \
         || report "$f" "raw xcodebuild log (missing sanitizer header)"
       ;;
   esac
 
-  allow_file "$f" && continue
-
-  # env-dump identifiers are never allowed anywhere.
+  # Machine-local IDENTIFIER content checks — EVERY tracked file, TEXT or BINARY
+  # (grep -a over the blob): a /Users home path or env-dump id baked into a binary
+  # or named by a symlink target is caught. (The fleet-secret binary scan is the
+  # separate git grep below.)
   while IFS=: read -r ln _; do
     [ -n "$ln" ] && report "$f:$ln" "machine-local env identifier"
-  done < <(grep -nE "$ENVDUMP_RE" "$f" 2>/dev/null)
-
-  # /Users/<name> real home paths (placeholder /Users/<redacted> excluded by class).
+  done < <(grep -a -nE "$ENVDUMP_RE" "$BLOBF" 2>/dev/null)
   while IFS=: read -r ln _; do
     [ -n "$ln" ] && report "$f:$ln" "absolute /Users/<name> home path"
-  done < <(grep -nE "$USERPATH_RE" "$f" 2>/dev/null)
+  done < <(grep -a -nE "$USERPATH_RE" "$BLOBF" 2>/dev/null)
 
-  allow_path "$f" && continue
+  # UUID/MAC *shape* checks — TEXT and BINARY blobs (grep -a). The DASHED UUID form
+  # (32 hex + 4 dashes at exact 8-4-4-4-12 offsets) and the COLONed MAC form are
+  # specific enough that random binary bytes essentially never match, so a real
+  # device UUID/UDID baked into a tracked BINARY IS flagged (no residual here).
+  # Shape is relaxed ONLY for the synthetic-fixture trees/files (invented values,
+  # fixture-only by policy; code review is the backstop) — the sole remaining
+  # relaxation, and it is in-scope-documented, not a real-defect downgrade.
+  if ! shape_trusted_path "$f" && ! shape_trusted_file "$f"; then
+    scan_form "$f" "UUID/UDID identifier"      "$UUID_RE" "$BLOBF"
+    scan_form "$f" "Bluetooth/MAC identifier"  "$MAC_RE"  "$BLOBF"
+  fi
+done < <(git ls-files -z)   # -z: NUL-delimited + UNquoted, so a filename containing a
+                            # newline or special chars is read whole (panel P4 round-5).
 
-  scan_form "$f" "UUID/UDID identifier"      "$UUID_RE"
-  scan_form "$f" "Bluetooth/MAC identifier"  "$MAC_RE"
-done < <(git ls-files)
-
-# fleet run secret exact-value check (never printed; only filename can surface).
+# fleet run secret exact-value check — scans BINARIES too (panel P4: -I would skip
+# a secret baked into a tracked binary). Never printed; only the filename surfaces.
 if [ -n "${INRANGE_DIAG_RUN_SECRET:-}" ]; then
   while IFS= read -r hf; do
     [ -n "$hf" ] && report "$hf" "fleet run secret value present"
-  done < <(git grep -I -l -F -- "$INRANGE_DIAG_RUN_SECRET" 2>/dev/null || true)
+  done < <(git grep -l -F -- "$INRANGE_DIAG_RUN_SECRET" 2>/dev/null || true)
 fi
 
 n="$(wc -l < "$FINDINGS" | tr -d ' ')"
