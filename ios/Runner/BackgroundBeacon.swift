@@ -251,6 +251,14 @@ final class BackgroundBeacon: NSObject {
   /// persisted enabled flag brings both managers straight back up — no
   /// Flutter engine required to serve GATT reads or buffer sightings.
   func bootFromPersistence() {
+    #if INRANGE_DIAG
+      // C4/B3: arm the key-ready gate FIRST — before any restoration emit. Native
+      // restoration runs here, before Dart; handled W5 events buffer until the
+      // launch key is confirmed (Dart provision, or an authoritative env key),
+      // then flush under the confirmed key. So a changed artifact (key A→B) never
+      // writes a handled event under stale A, and no restoration marker is lost.
+      W5Diag.beginLaunchKeyGate()
+    #endif
     // Tell Dart a non-empty buffer is waiting whenever the app returns to
     // foreground — the engine is only trustworthy while active. Delivery is
     // pull-and-ack (see drainBuffer/ackBuffer): nothing is deleted here.

@@ -558,6 +558,68 @@ final class W5DiagTests: XCTestCase {
       d?.removeObject(forKey: "bb.w5diag.provisionedsecret")
     }
 
+    // C4/B3: a changed-artifact relaunch (persisted key A, current key B) must NOT
+    // write any handled event under A, and must lose no restoration marker. Native
+    // restoration emits BEFORE Dart provisions; those emits buffer behind the
+    // launch key gate and flush under B once Dart provisions — so the events file
+    // ends up with the markers under B's key epoch and nothing under A.
+    func testChangedKeyRelaunchBuffersUnderAAndFlushesUnderB() throws {
+      W5Diag.testEnvSecretOverride = nil  // no authoritative env key for this test
+      W5EvidenceWriter.resetInjectedFailures()
+      let d = UserDefaults(suiteName: "io.inrange.diag")
+      d?.removeObject(forKey: "bb.w5diag.destroyed")
+      let keyA = String(repeating: "ab", count: 32)
+      let keyB = String(repeating: "cd", count: 32)
+      // Prior launch provisioned key A (persists across the relaunch).
+      XCTAssertEqual(W5Diag.provisionRunSecret(keyA)["ok"] as? Bool, true)
+      _ = W5Diag.resetCase()
+      let docs = FileManager.default.urls(
+        for: .documentDirectory, in: .userDomainMask)[0]
+      let url = docs.appendingPathComponent("w5_events.jsonl")
+      try? FileManager.default.removeItem(at: url)
+
+      // NEW launch: arm the key-ready gate (as AppDelegate.bootFromPersistence
+      // does), then native restoration emits BEFORE Dart provisions the current
+      // artifact's key B. These must buffer, not write under A.
+      W5Diag.beginLaunchKeyGate()
+      W5Diag.emit(.snapshotLoad, role: .app, result: "loaded", count: 1)
+      W5Diag.emit(.dialStart, role: .outbound, peer: "tokC4")
+      XCTAssertEqual(
+        W5Diag.testPendingEmitCount, 2, "handled emits buffered, not written")
+      XCTAssertFalse(
+        FileManager.default.fileExists(atPath: url.path)
+          && ((try? String(contentsOf: url, encoding: .utf8))?.contains("dialStart")
+            ?? false),
+        "nothing was written under key A")
+
+      // Dart provisions the CHANGED key B → rotation wipes the (empty) A epoch and
+      // the buffer flushes under B.
+      XCTAssertEqual(W5Diag.provisionRunSecret(keyB)["rotated"] as? Bool, true)
+      XCTAssertEqual(W5Diag.testPendingEmitCount, 0, "buffer flushed on confirm")
+
+      let lines = (try String(contentsOf: url, encoding: .utf8))
+        .split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+      let objs = lines.compactMap {
+        try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]
+      }
+      XCTAssertNotNil(
+        objs.first { $0["event"] as? String == "snapshotLoad" },
+        "the restoration marker survived (not lost)")
+      let dial = objs.first { $0["event"] as? String == "dialStart" }
+      XCTAssertNotNil(dial, "the handled dial event is present after flush")
+      let wantB = Self.expectedHandle(domain: "peer", raw: "tokC4", secretHex: keyB)
+      XCTAssertEqual(
+        dial?["peer"] as? String, wantB, "flushed under key B, not key A")
+      XCTAssertEqual(
+        dial?["keyEpoch"] as? Int, W5Diag.keyEpoch, "written in B's key epoch")
+      // Every line is under B's key epoch — nothing stranded under A.
+      for o in objs {
+        XCTAssertEqual(o["keyEpoch"] as? Int, W5Diag.keyEpoch, "no A-epoch line")
+      }
+      try? FileManager.default.removeItem(at: url)
+      d?.removeObject(forKey: "bb.w5diag.provisionedsecret")
+    }
+
     // R5: armFault's state mutation and its acknowledgment event are ONE locked
     // transaction — concurrent arm/disarm/reset never crash or tear an event
     // line, and the final control state is coherent with the last operation.

@@ -67,39 +67,117 @@ enum W5Diag {
           eventWriter.droppedLocked("nokey")
           return
         }
-        let snap = sessionSnapshotLocked()
-        var obj: [String: Any] = [
-          "v": 1,
-          "run": runLabel,
-          "epoch": bootEpoch,
-          "keyEpoch": snap.keyEpoch,
-          "caseEpoch": snap.caseEpoch,
-          "runEpoch": runEpoch,
-          "wallMs": Int(Date().timeIntervalSince1970 * 1000),
-          "monoNs": DispatchTime.now().uptimeNanoseconds,
-          "seq": nextSeqLocked(),
-          "event": event.rawValue,
-        ]
-        if let rRole { obj["role"] = rRole.rawValue }
-        if let h = handle(with: snap.secret, "peer", rPeer) { obj["peer"] = h }
-        if let h = handle(with: snap.secret, "lease", rLease) { obj["lease"] = h }
-        if let h = handle(with: snap.secret, "link", rLink) { obj["link"] = h }
-        if let h = handle(with: snap.secret, "peripheral", rPeriph) {
-          obj["peripheral"] = h
-        }
-        if let rResult { obj["result"] = rResult }
-        if let rReason { obj["reason"] = rReason }
-        if let rCount { obj["count"] = rCount }
-        guard let data = try? JSONSerialization.data(withJSONObject: obj),
-          let s = String(data: data, encoding: .utf8)
-        else {
-          eventWriter.droppedLocked("encode")
+        // C4/B3: hold handled emits until the launch key is CONFIRMED. Native
+        // restoration (AppDelegate.bootFromPersistence) runs BEFORE Dart, so
+        // without this a handled .dialStart/.restore* would be written under the
+        // persisted PRIOR key A and then wiped when Dart provisions a changed key
+        // B. Buffer the raw args now; the flush on confirmation writes them under
+        // the confirmed key, so nothing lands under A and no marker is lost. An
+        // authoritative env key keeps emits immediate (the matrix path).
+        if !isKeyConfirmedForLaunch {
+          if pendingEmits.count < maxPendingEmits {
+            pendingEmits.append(PendingEmit(
+              event: event, role: rRole, peer: rPeer, lease: rLease, link: rLink,
+              peripheral: rPeriph, result: rResult, reason: rReason, count: rCount))
+          } else {
+            eventWriter.droppedLocked("keypending-overflow")
+          }
           return
         }
-        _ = eventWriter.appendLocked(s + "\n")
+        emitObjectLocked(
+          event: event, role: rRole, peer: rPeer, lease: rLease, link: rLink,
+          peripheral: rPeriph, result: rResult, reason: rReason, count: rCount)
       }
     #endif
   }
+
+  #if INRANGE_DIAG
+    /// C4: a handled emit held (raw args) until the launch key is confirmed.
+    private struct PendingEmit {
+      let event: Event
+      let role: Role?
+      let peer, lease, link, peripheral, result, reason: String?
+      let count: Int?
+    }
+    private static var pendingEmits: [PendingEmit] = []  // guarded by eventWriter lock
+    private static let maxPendingEmits = 1000
+    /// Per-launch gate. Defaults TRUE (tests + normal foreground emit immediately);
+    /// the real boot path arms it via `beginLaunchKeyGate()` so pre-Dart restoration
+    /// emits are held until a key is confirmed for this launch.
+    private static var launchKeyConfirmed = true
+
+    /// True iff the session key is CONFIRMED for this launch: an authoritative env
+    /// fleet key is present at boot, or Dart has provisioned/confirmed this launch.
+    static var isKeyConfirmedForLaunch: Bool {
+      envSecretData() != nil || launchKeyConfirmed
+    }
+
+    /// Arm the key-ready gate for a fresh launch — called at the very start of the
+    /// native boot path, BEFORE any restoration emit, so handled events buffer
+    /// until Dart provisions (or, with an env key, pass straight through).
+    static func beginLaunchKeyGate() {
+      eventWriter.withLock {
+        launchKeyConfirmed = false
+        pendingEmits.removeAll()
+      }
+    }
+
+    /// Mark the launch key confirmed and flush any buffered handled emits UNDER
+    /// THE NOW-CONFIRMED KEY. Caller holds the events-writer lock.
+    static func confirmLaunchKeyAndFlushLocked() {
+      launchKeyConfirmed = true
+      guard !pendingEmits.isEmpty else { return }
+      let pend = pendingEmits
+      pendingEmits.removeAll()
+      for p in pend {
+        emitObjectLocked(
+          event: p.event, role: p.role, peer: p.peer, lease: p.lease,
+          link: p.link, peripheral: p.peripheral, result: p.result,
+          reason: p.reason, count: p.count)
+      }
+    }
+
+    /// Build + append one event under the CURRENT session snapshot. Caller holds
+    /// the events-writer lock. Shared by emit() (key-confirmed) and the flush.
+    private static func emitObjectLocked(
+      event: Event, role: Role?, peer: String?, lease: String?, link: String?,
+      peripheral: String?, result: String?, reason: String?, count: Int?
+    ) {
+      let snap = sessionSnapshotLocked()
+      var obj: [String: Any] = [
+        "v": 1,
+        "run": runLabel,
+        "epoch": bootEpoch,
+        "keyEpoch": snap.keyEpoch,
+        "caseEpoch": snap.caseEpoch,
+        "runEpoch": runEpoch,
+        "wallMs": Int(Date().timeIntervalSince1970 * 1000),
+        "monoNs": DispatchTime.now().uptimeNanoseconds,
+        "seq": nextSeqLocked(),
+        "event": event.rawValue,
+      ]
+      if let role { obj["role"] = role.rawValue }
+      if let h = handle(with: snap.secret, "peer", peer) { obj["peer"] = h }
+      if let h = handle(with: snap.secret, "lease", lease) { obj["lease"] = h }
+      if let h = handle(with: snap.secret, "link", link) { obj["link"] = h }
+      if let h = handle(with: snap.secret, "peripheral", peripheral) {
+        obj["peripheral"] = h
+      }
+      if let result { obj["result"] = result }
+      if let reason { obj["reason"] = reason }
+      if let count { obj["count"] = count }
+      guard let data = try? JSONSerialization.data(withJSONObject: obj),
+        let s = String(data: data, encoding: .utf8)
+      else {
+        eventWriter.droppedLocked("encode")
+        return
+      }
+      _ = eventWriter.appendLocked(s + "\n")
+    }
+
+    /// TEST-ONLY: count of currently buffered (unflushed) handled emits.
+    static var testPendingEmitCount: Int { eventWriter.withLock { pendingEmits.count } }
+  #endif
 
   /// Provision the shared fleet run secret (hex). Validated: >= 64 hex chars
   /// (a full 256-bit key), EVEN length, valid hex — a short/odd/non-hex value
@@ -134,6 +212,7 @@ enum W5Diag {
             diagDefaults?.removeObject(forKey: destroyedTombstoneKey)  // C3: a real provision revives the session
             _cachedRunSecret = env
             runSecretLock.unlock()
+            confirmLaunchKeyAndFlushLocked()  // C4: key confirmed → flush buffer
             return [
               "ok": true, "keyEpoch": keyEpoch, "rotated": false,
               "note": "matches-env",
@@ -170,6 +249,7 @@ enum W5Diag {
           _cachedRunSecret = d
           runSecretLock.unlock()
         }
+        confirmLaunchKeyAndFlushLocked()  // C4: key confirmed → flush buffered emits
         return ["ok": true, "keyEpoch": keyEpoch, "rotated": changed]
       }
     #else
