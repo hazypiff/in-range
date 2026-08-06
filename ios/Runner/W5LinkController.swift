@@ -594,6 +594,13 @@ final class W5LinkController {
     /// can capture a specific in-flight state (e.g. an in-grace snapshot, R4).
     func testForcePersist() { persistNow() }
     var testGraceTimerCount: Int { graceTimers.count }
+    /// Arm a dummy my-prev-token timer (kimi C2 regression).
+    func testArmMyPrevTokenTimer() {
+      myPrevTokenTimer?.invalidate()
+      myPrevTokenTimer = Timer.scheduledTimer(
+        withTimeInterval: 3600, repeats: false) { _ in }
+    }
+    var testMyPrevTokenTimerArmed: Bool { myPrevTokenTimer != nil }
   #endif
 
   func inboundGone(_ central: CBCentral) {
@@ -1077,6 +1084,11 @@ final class W5LinkController {
     for t in prevAliasTimers.values { t.invalidate() }
     persistTimer?.invalidate()
     persistTimer = nil
+    // kimi C2: isQuiescent counts myPrevTokenTimer, so the effective-OFF teardown
+    // (which runs through beaconOff) MUST invalidate it too, or a live
+    // my-prev-token timer would keep W5 non-quiescent after OFF.
+    myPrevTokenTimer?.invalidate()
+    myPrevTokenTimer = nil
     retryTimers.removeAll()
     graceTimers.removeAll()
     prevAliasTimers.removeAll()

@@ -482,6 +482,27 @@ final class W5TeardownTests: XCTestCase {
         XCTAssertFalse(W5Diag.isFaultArmed, "disarm clears the control")
       }
     }
+
+    // C2 (kimi): isQuiescent counts myPrevTokenTimer, so the effective-OFF
+    // teardown MUST invalidate it too — otherwise a live my-prev-token timer keeps
+    // W5 non-quiescent after OFF and the ack's quiescent flag never clears.
+    func testEffectiveOffClearsMyPrevTokenTimer() {
+      W5Diag.testEnvSecretOverride = nil
+      W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))
+      let bb = BackgroundBeacon()
+      withExtendedLifetime(bb) {
+        bb.testEnableW5Links()
+        bb.w5Link.testArmMyPrevTokenTimer()
+        XCTAssertTrue(
+          bb.w5Link.testMyPrevTokenTimerArmed, "armed a my-prev-token timer")
+        XCTAssertFalse(
+          bb.isW5Quiescent, "a live my-prev-token timer ⇒ not quiescent")
+        bb.w5EffectiveOff()
+        XCTAssertFalse(
+          bb.w5Link.testMyPrevTokenTimerArmed, "effective-OFF cleared the timer")
+        XCTAssertTrue(bb.isW5Quiescent, "quiescent after effective-OFF")
+      }
+    }
   #endif
 
   // REAL CHANNEL ENTRY (B1): the platform-channel handler itself. A server
