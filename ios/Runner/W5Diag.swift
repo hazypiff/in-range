@@ -129,6 +129,11 @@ enum W5Diag {
     static func beginLaunchKeyGate() {
       eventWriter.withLock {
         launchKeyConfirmed = false
+        // D1 companion: never discard a leftover buffer silently. Any handled
+        // emits still pending from a PRIOR unconfirmed launch that never
+        // provisioned (in-process re-arm) are ACCOUNTED as typed loss before the
+        // reset, so the evidence gap is visible, not silent.
+        for _ in pendingEmits { eventWriter.droppedLocked("launch-gate-reset") }
         pendingEmits.removeAll()
       }
     }

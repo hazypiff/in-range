@@ -875,15 +875,36 @@ final class W5LinkController {
   /// are re-bound without minting fresh ids. Inbound subscriptions re-attach
   /// through the normal controlSubscribed/controlWrite path once the restored
   /// CBCentral subscribes again.
+  /// D1: set when restore refused because the launch key was not yet confirmed,
+  /// so a persisted snapshot survives. `redriveRestoreIfDeferred()` re-runs the
+  /// restore once Dart provisions (the OS `willRestoreState` moment does not
+  /// refire), so a same-key relaunch does not silently lose its in-grace leases.
+  private var restoreDeferredUnconfirmedKey = false
+
+  /// D1: after Dart confirms the launch key (successful provision), re-drive a
+  /// restore that was deferred at boot for want of a confirmed key. The OS-restored
+  /// peripheral objects are gone by now, so this restores the LEASE state (in-grace
+  /// leases + re-armed deadlines); the peripherals re-bind on their next connect
+  /// via the persisted linkMeta. No-op if nothing was deferred.
+  func redriveRestoreIfDeferred() {
+    guard restoreDeferredUnconfirmedKey else { return }
+    restoreFromPersistence()
+  }
+
   func restoreFromPersistence(restoredPeripherals: [CBPeripheral] = []) {
     guard bb.w5LinksEnabled else { return }
     // A snapshot restore is a KEYED operation: never reconstruct a lease under an
     // unconfirmed current fleet key (its handles/generation could not be trusted).
     guard W5Diag.keyConfirmedForLaunch else {
+      // Only DEFER (retry later) if there is actually a snapshot to restore.
+      if bb.defaults.dictionary(forKey: Self.keyW5Snapshot) != nil {
+        restoreDeferredUnconfirmedKey = true
+      }
       W5Diag.emit(.snapshotLoad, role: .app, result: "reject",
         reason: "key-unconfirmed", count: restoredPeripherals.count)
       return
     }
+    restoreDeferredUnconfirmedKey = false
     guard let payload = bb.defaults.dictionary(forKey: Self.keyW5Snapshot)
     else {
       // No persisted lease to restore — Case 3 must be able to tell "cold, no

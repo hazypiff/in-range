@@ -409,7 +409,8 @@ final class W5TeardownTests: XCTestCase {
         bb1.w5Link.testForcePersist()
       }
       // Arm the gate (fresh launch, key not yet confirmed) — restore must refuse
-      // but NOT wipe.
+      // but NOT wipe, and recovery must come through the PRODUCTION provision path
+      // (D1), never a manual restore re-invocation.
       W5Diag.beginLaunchKeyGate()
       let bb2 = BackgroundBeacon()
       withExtendedLifetime(bb2) {
@@ -417,18 +418,14 @@ final class W5TeardownTests: XCTestCase {
         bb2.w5Link.restoreFromPersistence(restoredPeripherals: [])
         XCTAssertEqual(
           bb2.w5Link.testActiveLeaseCount, 0, "no restore under unconfirmed key")
-      }
-      XCTAssertNotNil(
-        d.dictionary(forKey: "bb.w5.snapshot"),
-        "unconfirmed-key refusal does NOT wipe a possibly-valid snapshot")
-      // Confirm the key, then restore succeeds.
-      W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))
-      let bb3 = BackgroundBeacon()
-      withExtendedLifetime(bb3) {
-        bb3.testEnableW5Links()
-        bb3.w5Link.restoreFromPersistence(restoredPeripherals: [])
+        XCTAssertNotNil(
+          d.dictionary(forKey: "bb.w5.snapshot"),
+          "unconfirmed-key refusal does NOT wipe a possibly-valid snapshot")
+        // Dart provisions the same key on THIS launch → auto re-drive restores.
+        bb2.provisionDiagRunSecret(String(repeating: "ab", count: 32))
         XCTAssertEqual(
-          bb3.w5Link.testActiveLeaseCount, 1, "restores once the key is confirmed")
+          bb2.w5Link.testActiveLeaseCount, 1,
+          "restores via the production re-drive once the key is confirmed")
       }
       d.removeObject(forKey: "bb.w5.snapshot")
     }
@@ -502,6 +499,65 @@ final class W5TeardownTests: XCTestCase {
           bb.w5Link.testMyPrevTokenTimerArmed, "effective-OFF cleared the timer")
         XCTAssertTrue(bb.isW5Quiescent, "quiescent after effective-OFF")
       }
+    }
+
+    // D1 (panel): the launch-key gate defers a boot restore under an unconfirmed
+    // key — but the OS willRestoreState moment does not refire, so nothing but the
+    // PRODUCTION provision path can re-drive it. A same-key relaunch through
+    // provisionDiagRunSecret must automatically restore its in-grace leases (NOT a
+    // manual restore call). Red before this repair: leases stay 0 forever.
+    func testDeferredRestoreIsReDrivenOnDartProvision() {
+      W5Diag.testEnvSecretOverride = nil  // no env key ⇒ boot restore refuses
+      let d = BackgroundBeacon.operationalDefaults()
+      d.removeObject(forKey: "bb.w5.snapshot")
+      let keyA = String(repeating: "ab", count: 32)
+      W5Diag.provisionRunSecret(keyA)
+      let id = UUID()
+      let bb1 = BackgroundBeacon()
+      withExtendedLifetime(bb1) {
+        bb1.testEnableW5Links()
+        bb1.w5Link.testSeedOutboundLink(
+          peripheralID: id, myCand: "a", peerCand: "b", alias: "aliasD1",
+          linkId: "LD1")
+        bb1.w5Link.linkDown(id)          // → grace (a live in-grace lease)
+        bb1.w5Link.testForcePersist()
+      }
+      // NEW launch: arm the gate (unconfirmed); the boot-moment restore REFUSES.
+      W5Diag.beginLaunchKeyGate()
+      let bb2 = BackgroundBeacon()
+      withExtendedLifetime(bb2) {
+        bb2.testEnableW5Links()
+        bb2.w5Link.restoreFromPersistence()  // willRestoreState moment
+        XCTAssertEqual(
+          bb2.w5Link.testActiveLeaseCount, 0,
+          "boot restore refused under an unconfirmed key")
+        // PRODUCTION PATH: Dart provisions the SAME key → deferred restore is
+        // AUTO re-driven; no manual restore call.
+        XCTAssertEqual(bb2.provisionDiagRunSecret(keyA)["ok"] as? Bool, true)
+        XCTAssertEqual(
+          bb2.w5Link.testActiveLeaseCount, 1,
+          "same-key relaunch restores its in-grace lease via the re-drive")
+      }
+      d.removeObject(forKey: "bb.w5.snapshot")
+    }
+
+    // D1 companion: beginLaunchKeyGate must ACCOUNT a discarded leftover buffer
+    // (typed loss), never drop it silently.
+    func testBeginLaunchKeyGateAccountsDiscardedBuffer() {
+      W5Diag.testEnvSecretOverride = nil
+      let d = UserDefaults(suiteName: "io.inrange.diag")
+      W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))  // confirm+flush
+      let k = "bb.evwrite.dropped.w5_events.jsonl.launch-gate-reset"
+      d?.removeObject(forKey: k)
+      W5Diag.beginLaunchKeyGate()  // unconfirmed → subsequent emits buffer
+      W5Diag.emit(.dialStart, role: .outbound, peer: "p1")
+      W5Diag.emit(.dialStart, role: .outbound, peer: "p2")
+      XCTAssertEqual(W5Diag.testPendingEmitCount, 2)
+      W5Diag.beginLaunchKeyGate()  // re-arm ⇒ the 2 buffered emits are accounted
+      XCTAssertEqual(W5Diag.testPendingEmitCount, 0)
+      XCTAssertEqual(
+        d?.integer(forKey: k), 2, "discarded buffer accounted, not silent")
+      W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))
     }
   #endif
 

@@ -442,19 +442,7 @@ final class BackgroundBeacon: NSObject {
         // structured provisioning ack (`ok`, `rotated`, `keyEpoch`) so Dart can
         // AWAIT it and fail closed — never enabling W5 on an unprovisioned key
         // (A3). No-op in a release binary (W5Diag compiles the body out).
-        let provAck = W5Diag.provisionRunSecret((call.arguments as? String) ?? "")
-        // R5: a FAILED provision forces W5 OFF at the NATIVE level, independent
-        // of Dart's setW5Links. So a stale `bb.w5links=true` + an older valid
-        // provisioned key + a swallowed Dart disable can no longer start W5 under
-        // the stale key — the failed provision itself clears the flag.
-        if (provAck["ok"] as? Bool) != true {
-          self.defaults.set(false, forKey: Self.keyW5Links)
-          // C2: a failed provision forces W5 OFF — and OFF is a real teardown,
-          // not just a flag flip. Reap any restored/live old-key W5 state so a
-          // swallowed Dart disable cannot leave it running.
-          self.w5EffectiveOff()
-        }
-        result(provAck)
+        result(self.provisionDiagRunSecret((call.arguments as? String) ?? ""))
       // E-B2 (codex): the raw-alias "armW5Fault" channel case was REMOVED so a raw
       // peer token can never cross the channel. Fault arming is handle-based only
       // ("armW5FaultForPeer"); W5Diag.armFault(peerRaw:) is now called ONLY
@@ -540,6 +528,24 @@ final class BackgroundBeacon: NSObject {
   /// W5 dial — so afterward `isW5Quiescent` is true and no restored old-key state
   /// survives. It deliberately leaves the shared beacon advertiser/scanner alone;
   /// W5 links are a strict subset of the beacon's lifecycle.
+  /// The `setDiagRunSecret` production path (extracted so tests exercise the REAL
+  /// flow, not a manual restore). Provisions the fleet key; a FAILED provision
+  /// forces W5 OFF natively + reaps state (R5/C2); a SUCCESSFUL provision confirms
+  /// the launch key and RE-DRIVES a boot restore that was deferred for want of a
+  /// confirmed key (D1) — so a same-key relaunch actually restores its in-grace
+  /// leases (the OS `willRestoreState` moment does not refire).
+  @discardableResult
+  func provisionDiagRunSecret(_ hex: String) -> [String: Any] {
+    let provAck = W5Diag.provisionRunSecret(hex)
+    if (provAck["ok"] as? Bool) != true {
+      defaults.set(false, forKey: Self.keyW5Links)
+      w5EffectiveOff()
+    } else {
+      w5Link.redriveRestoreIfDeferred()
+    }
+    return provAck
+  }
+
   /// E-B2: the eligible peers for the installed selected-peer control, as
   /// run-scoped handles only (raw aliases are retained natively and never cross
   /// the channel). Empty in a release binary (no W5 links exist).
