@@ -223,6 +223,48 @@ final class W5TeardownTests: XCTestCase {
       }
       diag?.removeObject(forKey: "bb.w5.snapshot")
     }
+
+    // C2/A3: OFF must be a real atomic teardown, not a Boolean echo. A restored
+    // in-grace lease (live W5 state under a stale key) must be REAPED by the
+    // effective-OFF transaction — afterward isW5Quiescent is true, the lease and
+    // grace timer are gone, and the persisted snapshot is cleared. Before the
+    // fix, disabling the flag left this restored state running (the R4 test above
+    // shows a mere restore stays NOT-quiescent); w5EffectiveOff is what empties it.
+    func testEffectiveOffReapsRestoredInGraceLease() {
+      let diag = UserDefaults(suiteName: "io.inrange.diag")
+      diag?.removeObject(forKey: "bb.w5.snapshot")
+      W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))
+      let id = UUID()
+      let bb1 = BackgroundBeacon()
+      withExtendedLifetime(bb1) {
+        bb1.testEnableW5Links()
+        bb1.w5Link.testSeedOutboundLink(
+          peripheralID: id, myCand: "a", peerCand: "b", alias: "aliasEO",
+          linkId: "LEO")
+        bb1.w5Link.linkDown(id)          // → grace
+        bb1.w5Link.testForcePersist()    // capture the in-grace snapshot
+      }
+      let bb2 = BackgroundBeacon()
+      withExtendedLifetime(bb2) {
+        bb2.testEnableW5Links()
+        bb2.w5Link.restoreFromPersistence(restoredPeripherals: [])
+        // Precondition: the restored live lease makes W5 NOT quiescent.
+        XCTAssertEqual(bb2.w5Link.testActiveLeaseCount, 1, "restored live lease")
+        XCTAssertFalse(bb2.isW5Quiescent, "restored lease ⇒ not quiescent")
+        // The effective-OFF transaction reaps EVERY W5-specific producer.
+        bb2.w5EffectiveOff()
+        XCTAssertEqual(
+          bb2.w5Link.testActiveLeaseCount, 0, "effective-OFF reaped the lease")
+        XCTAssertEqual(
+          bb2.w5Link.testGraceTimerCount, 0, "effective-OFF invalidated timers")
+        XCTAssertTrue(
+          bb2.isW5Quiescent, "W5 is quiescent after the effective-OFF teardown")
+        XCTAssertNil(
+          diag?.dictionary(forKey: "bb.w5.snapshot"),
+          "effective-OFF cleared the persisted restoration snapshot")
+      }
+      diag?.removeObject(forKey: "bb.w5.snapshot")
+    }
   #endif
 
   // REAL CHANNEL ENTRY (B1): the platform-channel handler itself. A server

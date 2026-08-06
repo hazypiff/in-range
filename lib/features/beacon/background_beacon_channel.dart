@@ -347,9 +347,16 @@ class BackgroundBeaconChannel {
   /// requested state actually took (an acknowledged configuration transaction).
   /// Returns `null` on a channel error — treated as "not confirmed", never as
   /// silent success (R5).
-  Future<bool?> setW5Links(bool enabled) async {
+  /// Set the W5-links gate. Returns the native STRUCTURED effective-state ack
+  /// (C2/A3): `{flag, effectiveEnabled, quiescent}`. OFF is an atomic native
+  /// teardown of every W5-specific live/restored producer, so the caller can
+  /// fail closed unless the ack proves BOTH `effectiveEnabled==false` AND
+  /// `quiescent==true`. Returns null on a channel error (never silent success).
+  Future<Map<String, dynamic>?> setW5Links(bool enabled) async {
     try {
-      return await _channel.invokeMethod<bool>('setW5Links', enabled);
+      final ack = await _channel.invokeMethod<dynamic>('setW5Links', enabled);
+      if (ack is Map) return ack.cast<String, dynamic>();
+      return null;
     } catch (e) {
       debugPrint('BackgroundBeacon setW5Links failed: $e');
       return null;

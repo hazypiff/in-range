@@ -415,6 +415,10 @@ final class BackgroundBeacon: NSObject {
         // the stale key — the failed provision itself clears the flag.
         if (provAck["ok"] as? Bool) != true {
           self.defaults.set(false, forKey: Self.keyW5Links)
+          // C2: a failed provision forces W5 OFF — and OFF is a real teardown,
+          // not just a flag flip. Reap any restored/live old-key W5 state so a
+          // swallowed Dart disable cannot leave it running.
+          self.w5EffectiveOff()
         }
         result(provAck)
       case "armW5Fault":
@@ -446,12 +450,19 @@ final class BackgroundBeacon: NSObject {
         // genuinely QUIESCENT (live managers/sessions, not the persisted flag).
         result(W5Diag.destroySessionSecret(w5Quiescent: self.isW5Quiescent))
       case "setW5Links":
-        // Gate for W5 persistent links. Returns the CONFIRMED persisted flag so
-        // Dart's key-ready gate can verify the requested state actually took —
-        // an acknowledged configuration transaction rather than fire-and-forget
-        // (R5). The effective enablement is still `flag && hasFleetKey`.
-        self.defaults.set((call.arguments as? Bool) ?? false, forKey: Self.keyW5Links)
-        result(self.defaults.bool(forKey: Self.keyW5Links))
+        // Gate for W5 persistent links (C2/A3). OFF is an ATOMIC EFFECTIVE-OFF
+        // TRANSACTION, not a Boolean echo: it tears down every W5-specific live/
+        // restored producer, then returns the STRUCTURED effective state. Dart
+        // continues only when the ack proves BOTH `effectiveEnabled==false` AND
+        // `quiescent==true` — a stored `false` flag alone never proves W5 stopped.
+        let want = (call.arguments as? Bool) ?? false
+        self.defaults.set(want, forKey: Self.keyW5Links)
+        if !want { self.w5EffectiveOff() }
+        result([
+          "flag": self.defaults.bool(forKey: Self.keyW5Links),
+          "effectiveEnabled": self.w5LinksEnabled,
+          "quiescent": self.isW5Quiescent,
+        ])
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -471,6 +482,22 @@ final class BackgroundBeacon: NSObject {
         delegate: self, queue: nil,
         options: [CBCentralManagerOptionRestoreIdentifierKey: Self.centralRestoreID])
     }
+  }
+
+  /// C2: a real W5 effective-OFF is an ATOMIC teardown, not a Boolean echo.
+  /// Disabling the persisted flag alone leaves any already-live or OS-RESTORED
+  /// W5 session/lease/link/timer running under a stale key. This reaps every
+  /// W5-specific producer — the controller's leases/links/timers/ownership AND
+  /// its persisted snapshot (via `beaconOff`), every W5 session, and any inflight
+  /// W5 dial — so afterward `isW5Quiescent` is true and no restored old-key state
+  /// survives. It deliberately leaves the shared beacon advertiser/scanner alone;
+  /// W5 links are a strict subset of the beacon's lifecycle.
+  func w5EffectiveOff() {
+    w5Link.beaconOff()                        // leases/links/timers/ownership + snapshot
+    for id in Array(w5.keys) { w5End(id) }    // end every live W5 session
+    for (_, p) in inflight { centralMgr?.cancelPeripheralConnection(p) }
+    inflight.removeAll()
+    inflightRSSI.removeAll()
   }
 
   private func stopEverything() {

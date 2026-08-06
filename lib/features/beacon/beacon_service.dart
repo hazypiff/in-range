@@ -878,17 +878,23 @@ class BeaconService {
     return e.runtimeType.toString();
   }
 
-  /// A3 W5 start gate (codex re-review). After the key-ready sequence sets the
-  /// W5-links flag to [want] and native returns [confirmed], decide whether it
-  /// is safe to start the native managers. Fail closed: when W5 was requested
+  /// A3/C2 W5 start gate. After the key-ready sequence sets the W5-links flag to
+  /// [want] and native returns its structured effective-state ack, decide whether
+  /// it is safe to start the native managers. Fail closed: when W5 was requested
   /// OFF (`want == false`, because W5 is disabled OR the fleet key is not ready)
-  /// but native did NOT confirm OFF — `confirmed` is null on a dead channel, or
-  /// true if native still reports it on — a prior run's persisted `bb.w5links`
-  /// flag + provisioned key could let W5 run unattested. We cannot prove W5 will
-  /// stay inert, so we refuse to start. Extracted as a pure predicate so the
-  /// decision is testable without the compile-time diag gate.
-  static bool w5StartGateAllows({required bool want, required bool? confirmed}) =>
-      want || confirmed == false;
+  /// the native OFF must be an ATOMIC EFFECTIVE-OFF — proven only by
+  /// `effectiveEnabled == false` AND `quiescent == true` in the ack ([effOff]).
+  /// A stored `false` flag alone (the old Boolean echo) does NOT prove the
+  /// restored/live W5 state was torn down, so it never satisfies the gate. Pure
+  /// predicate so the decision is testable without the compile-time diag gate.
+  static bool w5StartGateAllows({required bool want, required bool effOff}) =>
+      want || effOff;
+
+  /// True only when the native setW5Links ack proves an atomic effective-OFF:
+  /// both `effectiveEnabled == false` and `quiescent == true` (C2). Null ack
+  /// (dead channel) or either field unproven ⇒ false ⇒ fail closed.
+  static bool w5AckIsEffectiveOff(Map<String, dynamic>? ack) =>
+      ack != null && ack['effectiveEnabled'] == false && ack['quiescent'] == true;
 
   /// Bounded BLE burst for the subtle-wake path
   /// (docs/SUBTLE_TRACKING_ARCHITECTURE.md): restarts the scan session so a
@@ -1044,20 +1050,20 @@ class BeaconService {
         // flag OFF natively; here we also fail closed if the requested-OFF was
         // not acknowledged — never assume a swallowed disable succeeded.
         final want = AppConfig.w5LinksEnabled && keyReady;
-        final confirmed = await _bgBeacon.setW5Links(want);
-        if (!w5StartGateAllows(want: want, confirmed: confirmed)) {
-          // Requested W5 OFF but native did NOT confirm OFF (confirmed is null
-          // when the platform channel is unavailable, or true if native reports
-          // it still on). A prior run may have persisted `bb.w5links=true` plus a
-          // provisioned fleet key, so starting now could run W5 under stale,
-          // unattested state. We cannot prove W5 will stay inert, so fail closed:
-          // do NOT start native managers until an OFF is confirmed (A3, codex
-          // re-review — the native provision-failure gate only covers a call that
-          // REACHED native, not a dead channel). Production takes the else branch.
+        final linkAck = await _bgBeacon.setW5Links(want);
+        final effOff = w5AckIsEffectiveOff(linkAck);
+        if (!w5StartGateAllows(want: want, effOff: effOff)) {
+          // Requested W5 OFF but native did NOT prove an atomic effective-OFF
+          // (C2/A3). The ack is null on a dead channel, or reports
+          // effectiveEnabled/quiescent that do not both clear — meaning a prior
+          // run's restored/live W5 state (sessions, leases, links, timers) may
+          // still be running under a stale key. A stored `false` flag alone is
+          // not proof. We cannot show W5 is inert, so fail closed: do NOT start
+          // native managers. Production takes the else branch.
           debugPrint(
-              'W5 links: requested OFF but native did not confirm OFF '
-              '(confirmed=$confirmed) — aborting native start (fail-closed)');
-          _applyAdvertisingVerdict(false, 'W5 unconfirmed-off gate');
+              'W5 links: requested OFF but native did not prove effective-OFF '
+              '(ack=$linkAck) — aborting native start (fail-closed)');
+          _applyAdvertisingVerdict(false, 'W5 effective-off gate');
           return;
         }
         if (AppConfig.w5LinksEnabled && !keyReady) {

@@ -124,16 +124,24 @@ void main() {
     expect(second!['rotated'], isTrue, reason: 'a changed key reports rotation');
   });
 
-  // R5: setW5Links is an ACKNOWLEDGED configuration transaction — it returns the
-  // CONFIRMED persisted flag so the caller can verify the requested state took.
-  test('setW5Links returns the native-confirmed flag', () async {
+  // C2/A3: setW5Links is an ACKNOWLEDGED effective-state transaction — it returns
+  // the native structured ack {flag, effectiveEnabled, quiescent}, not a Boolean
+  // echo, so the caller can prove W5 was actually torn down (not just flagged).
+  test('setW5Links returns the structured effective-state ack', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
       calls.add(call);
-      return call.arguments as bool?; // native echoes the persisted flag
+      return <String, dynamic>{
+        'flag': call.arguments as bool,
+        'effectiveEnabled': call.arguments as bool,
+        'quiescent': !(call.arguments as bool),
+      };
     });
-    expect(await bb.setW5Links(true), isTrue);
-    expect(await bb.setW5Links(false), isFalse);
+    final onAck = await bb.setW5Links(true);
+    expect(onAck?['effectiveEnabled'], isTrue);
+    final offAck = await bb.setW5Links(false);
+    expect(offAck?['effectiveEnabled'], isFalse);
+    expect(offAck?['quiescent'], isTrue);
   });
 
   test('setW5Links returns null on a channel error (never silent success)',
@@ -143,43 +151,40 @@ void main() {
       throw PlatformException(code: 'boom');
     });
     expect(await bb.setW5Links(false), isNull,
-        reason: 'a channel error is NOT-confirmed, not success');
+        reason: 'a channel error is NOT an effective-off ack, not success');
   });
 
-  test('setW5Links surfaces a native OFF that was NOT honored', () async {
-    // Native keeps the flag true despite an OFF request (stale flag).
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(channel, (call) async => true);
-    expect(await bb.setW5Links(false), isTrue,
-        reason: 'caller sees the un-honored OFF and can fail closed (R5)');
-  });
-
-  // A3 (codex re-review): the CALLER decision, not just the channel primitive.
-  // Before the fix `_startAdvertisingLocked` logged an unconfirmed OFF and then
-  // started native managers anyway — under a prior run's stale `bb.w5links=true`
-  // + provisioned key, W5 could run unattested. The pure start-gate predicate
-  // now fails closed whenever W5 was requested OFF but not CONFIRMED off.
-  group('w5StartGateAllows (A3 fail-closed start gate)', () {
-    test('requested OFF + native did NOT confirm (channel down) ⇒ BLOCK', () {
-      expect(BeaconService.w5StartGateAllows(want: false, confirmed: null),
-          isFalse,
-          reason: 'null confirm = dead channel; stale flag may persist → block');
+  // C2/A3: the CALLER decision. Before the fix a stored `false` flag (or a
+  // Boolean echo) was accepted as proof W5 stopped; the panel HOLD showed a
+  // restored old-key session/lease/timer can survive a flag flip. The gate now
+  // demands an atomic effective-OFF ack: effectiveEnabled==false AND quiescent.
+  group('w5AckIsEffectiveOff + w5StartGateAllows (C2/A3 fail-closed gate)', () {
+    Map<String, dynamic> ack(bool eff, bool q) =>
+        {'flag': eff, 'effectiveEnabled': eff, 'quiescent': q};
+    test('null ack (dead channel) is NOT effective-off', () {
+      expect(BeaconService.w5AckIsEffectiveOff(null), isFalse);
     });
-    test('requested OFF + native still reports ON ⇒ BLOCK', () {
-      expect(BeaconService.w5StartGateAllows(want: false, confirmed: true),
-          isFalse,
-          reason: 'native did not honor OFF → block start (fail closed)');
+    test('effectiveEnabled true is NOT effective-off', () {
+      expect(BeaconService.w5AckIsEffectiveOff(ack(true, true)), isFalse);
     });
-    test('requested OFF + native CONFIRMED off ⇒ ALLOW', () {
-      expect(BeaconService.w5StartGateAllows(want: false, confirmed: false),
-          isTrue,
-          reason: 'confirmed OFF is safe to start');
+    test('effectiveEnabled false but NOT quiescent is NOT effective-off', () {
+      expect(BeaconService.w5AckIsEffectiveOff(ack(false, false)), isFalse,
+          reason: 'restored/live W5 state still present → not torn down');
     });
-    test('requested ON ⇒ ALLOW regardless of confirm (W5 fails closed natively)',
-        () {
-      expect(BeaconService.w5StartGateAllows(want: true, confirmed: true), isTrue);
-      expect(BeaconService.w5StartGateAllows(want: true, confirmed: null), isTrue);
-      expect(BeaconService.w5StartGateAllows(want: true, confirmed: false), isTrue);
+    test('effectiveEnabled false AND quiescent IS effective-off', () {
+      expect(BeaconService.w5AckIsEffectiveOff(ack(false, true)), isTrue);
+    });
+    test('requested OFF + not effective-off ⇒ BLOCK', () {
+      expect(BeaconService.w5StartGateAllows(want: false, effOff: false),
+          isFalse);
+    });
+    test('requested OFF + proven effective-off ⇒ ALLOW', () {
+      expect(
+          BeaconService.w5StartGateAllows(want: false, effOff: true), isTrue);
+    });
+    test('requested ON ⇒ ALLOW regardless (W5 fails closed natively)', () {
+      expect(BeaconService.w5StartGateAllows(want: true, effOff: true), isTrue);
+      expect(BeaconService.w5StartGateAllows(want: true, effOff: false), isTrue);
     });
   });
 }
