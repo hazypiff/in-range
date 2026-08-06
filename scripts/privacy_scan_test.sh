@@ -56,5 +56,20 @@ else
   bad "GREEN: scanner still failing:"; sed 's/^/     /' /tmp/ps_green.out
 fi
 
+# --- FILENAME leak (panel P4): a UUID in a tracked filename is flagged even when
+#     the file content is clean. Isolated scenario in a fresh repo. --------------
+FN="$(mktemp -d)"; git -C "$FN" init -q; git -C "$FN" config user.email t@t; git -C "$FN" config user.name t
+mkdir -p "$FN/scripts" "$FN/docs"; cp "$SCAN" "$FN/scripts/privacy_scan.sh"
+printf 'clean content, no tokens\n' > "$FN/docs/evidence_DEADBEEF-1234-5678-9ABC-DEF012345678.txt"
+git -C "$FN" add -A -f >/dev/null
+if ( cd "$FN" && bash scripts/privacy_scan.sh >/tmp/ps_fn.out 2>&1 ); then
+  bad "FILENAME: scanner passed but a UUID filename should fail"
+else
+  grep -qF "UUID/UDID identifier in filename" /tmp/ps_fn.out \
+    && ok "FILENAME: UUID in a tracked filename flagged (content was clean)" \
+    || bad "FILENAME: wrong finding: $(cat /tmp/ps_fn.out)"
+fi
+rm -rf "$FN"
+
 echo "----"
 if [ "$fails" -eq 0 ]; then echo "ALL PRIVACY-SCANNER TESTS PASSED"; else echo "$fails TEST(S) FAILED"; exit 1; fi

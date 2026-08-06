@@ -125,23 +125,36 @@ mkdir -p "$RAW" "$SAN"
 trap 'rm -rf "$STAGE"' EXIT
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 OUT_ROOT="$SCRIPT_DIR/hardware_evidence"
-# A.1-2: a symlinked OUT_ROOT would land every published revision OUTSIDE the
-# worktree. Refuse if `hardware_evidence` (or an intermediate component of its
-# canonical path) is a symlink: OUT_ROOT must be a real directory directly under
-# the script dir. Checked BEFORE any mkdir/copy so nothing can be published out.
-if [ -L "$OUT_ROOT" ]; then
-  echo "ERROR: OUT_ROOT ($OUT_ROOT) is a symlink — refusing to publish outside the worktree." >&2
-  exit 9
-fi
-if [ -e "$OUT_ROOT" ]; then
-  _out_root_canon="$(cd "$OUT_ROOT" 2>/dev/null && pwd -P || printf '')"
-  if [ -z "$_out_root_canon" ] || [ "$(dirname "$_out_root_canon")" != "$SCRIPT_DIR" ] \
-     || [ "$(basename "$_out_root_canon")" != "hardware_evidence" ]; then
-    echo "ERROR: OUT_ROOT does not canonically resolve to $SCRIPT_DIR/hardware_evidence" >&2
-    echo "       (resolved: ${_out_root_canon:-<none>}) — refusing." >&2
+# A.1-2 (hardened per panel P2): OUT_ROOT must be a REAL directory directly under
+# the script dir — never a symlink — at EVERY use, not just once. A single early
+# check is a TOCTOU: an attacker with write access to the checkout could swap
+# hardware_evidence for a symlink AFTER the check but BEFORE mkdir/lock/revision/
+# swap, publishing outside the worktree. Defenses: (a) create-and-validate OUT_ROOT
+# together HERE so nothing can be planted "before mkdir -p"; (b) re-verify before
+# the lock, before staging the revision, and (c) perform the final swap through an
+# O_DIRECTORY|O_NOFOLLOW dir fd so a symlinked OUT_ROOT at swap-time is refused and
+# the rename targets the real directory the fd points to. RESIDUAL (documented,
+# accepted): a pure-bash puller cannot hold a dir fd across ALL operations, so a
+# concurrent attacker who wins a sub-syscall race between two of these re-checks
+# is out of scope — the checkout is assumed non-hostile for concurrent writes
+# (panel-accepted interim; full closure needs an openat-based rewrite).
+verify_out_root_realdir() {
+  if [ -L "$OUT_ROOT" ]; then
+    echo "ERROR: OUT_ROOT ($OUT_ROOT) is a symlink — refusing to publish outside the worktree." >&2
     exit 9
   fi
-fi
+  local canon
+  canon="$(cd "$OUT_ROOT" 2>/dev/null && pwd -P || printf '')"
+  if [ -z "$canon" ] || [ "$(dirname "$canon")" != "$SCRIPT_DIR" ] \
+     || [ "$(basename "$canon")" != "hardware_evidence" ]; then
+    echo "ERROR: OUT_ROOT does not canonically resolve to $SCRIPT_DIR/hardware_evidence" >&2
+    echo "       (resolved: ${canon:-<none>}) — refusing." >&2
+    exit 9
+  fi
+}
+[ -L "$OUT_ROOT" ] && { echo "ERROR: OUT_ROOT is a symlink — refusing to publish outside the worktree." >&2; exit 9; }
+mkdir -p "$OUT_ROOT"          # create-and-validate together (no "before mkdir -p" gap)
+verify_out_root_realdir
 OUT="$OUT_ROOT/${CASE}"
 
 # C1: the ONLY filenames a revision may carry are the sanctioned per-device
@@ -461,6 +474,7 @@ fi
 # process kill always sees either the old complete evidence or the new complete
 # evidence, never nothing. The prior data dir is removed only AFTER the swap.
 mkdir -p "$OUT_ROOT"
+verify_out_root_realdir      # P2: re-verify before acquiring the lock / staging
 # The 3-device merge is a read-copy-swap: it seeds the new revision from the
 # CURRENT `<case>`. Two publishers of the SAME case running concurrently could
 # each seed from the same prior revision and lost-update each other on swap. So
@@ -602,12 +616,23 @@ if ! ln -s "$(basename "$REV")" "$LINKTMP"; then
   echo "ERROR: could not stage publish symlink; prior evidence restored." >&2
   exit 4
 fi
-# Swap with rename(2) via python os.replace: it operates on the PATH and never
-# follows the destination symlink (unlike `mv`, which would move LINKTMP INTO
-# the old rev dir when `<case>` is a symlink-to-dir). Atomic; replaces the prior
-# `<case>` symlink in place with no absent/half-written interval.
-if python3 -c 'import os,sys; os.replace(sys.argv[1], sys.argv[2])' \
-    "$LINKTMP" "$OUT"; then
+# Swap with rename(2) via python os.replace RELATIVE TO AN O_NOFOLLOW DIR FD (P2):
+# open OUT_ROOT with O_DIRECTORY|O_NOFOLLOW — this REFUSES a symlinked OUT_ROOT at
+# swap-time — then rename by basename via src_dir_fd/dst_dir_fd, so the operation
+# targets the REAL directory the fd points to and a name swap after the open cannot
+# redirect it. Still atomic, still never follows the destination symlink.
+if python3 - "$OUT_ROOT" "$(basename "$LINKTMP")" "$(basename "$OUT")" <<'PY'; then
+import os, sys
+root, src, dst = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    dfd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+except OSError:
+    sys.exit(1)   # OUT_ROOT is a symlink or vanished — refuse the publish
+try:
+    os.replace(src, dst, src_dir_fd=dfd, dst_dir_fd=dfd)
+finally:
+    os.close(dfd)
+PY
   # Published. Cleanup of superseded revisions is BEST-EFFORT and must not turn a
   # successful publish into a nonzero exit — remove the prior rev / migrated
   # legacy dir, ignoring failures. The superseded-rev name is validated as a

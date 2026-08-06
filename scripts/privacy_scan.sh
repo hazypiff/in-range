@@ -18,16 +18,20 @@
 # Git commit SHAs (40-hex) and content hashes (64-hex) are NOT flagged — they are
 # legitimate, non-identifying provenance. This scanner targets identifiers.
 #
-# APPROVAL MODEL ("unapproved" per the directive). A UUID/MAC token is a finding
-# UNLESS it is approved by one of:
-#   - ALLOW_VALUE_RE : a public/standard constant shape (Bluetooth SIG base UUID,
-#                      the app's fixed iBeacon UUID, the nil UUID, a documentation
-#                      placeholder MAC).
-#   - a path in ALLOW_PATH : synthetic-fixture trees (seed/test SQL, Dart tests)
-#                      that by construction contain only invented values.
-#   - a file in ALLOW_FILE : this scanner + its fixtures + the sanitizer fixture.
-# Everything else must be a real, non-identifying value or it fails. Real device
-# UDIDs are deliberately NOT approved.
+# APPROVAL MODEL ("unapproved" per the directive), hardened after panel P4:
+#   * The FILENAME check and the fleet-SECRET check apply to EVERY tracked path,
+#     with NO exceptions (even shape-trusted files / binaries).
+#   * The /Users and env-dump CONTENT checks apply to every file EXCEPT the small,
+#     explicitly code-reviewed set of DEFINITIONAL files (this scanner + its test +
+#     the leak-fixture files), which contain the leak patterns by construction.
+#   * A UUID/MAC TOKEN is a finding unless approved_token() matches a public/standard
+#     constant (Bluetooth SIG base UUID, app iBeacon UUID, Herald UUID, nil UUID,
+#     placeholder MAC). This shape check is relaxed ONLY inside the synthetic-fixture
+#     TREES (supabase/seed, supabase/tests, test/), which hold many invented UUIDs.
+# DOCUMENTED RESIDUAL: a real device UDID is shape-indistinguishable from a synthetic
+# one, so one committed into a fixture tree / definitional file would pass the shape
+# check; those locations are fixture-only by policy and code review is the backstop.
+# Real device UDIDs are deliberately NOT in approved_token().
 set -uo pipefail
 
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -64,16 +68,20 @@ approved_token() {
   return 1
 }
 
-# Synthetic-fixture trees: only invented UUIDs/MACs by construction.
-allow_path() {
+# SHAPE-trusted trees/files (panel P4): these relax ONLY the UUID/MAC *shape*
+# check, because they contain many synthetic UUID/MAC-shaped fixtures by
+# construction. They do NOT bypass the /Users, env-dump, filename, or fleet-secret
+# checks — those still run on every tracked file. RESIDUAL (documented, accepted):
+# a real device UDID is shape-indistinguishable from a synthetic one, so a real
+# UDID *committed into one of these fixture trees* would pass the shape check
+# unflagged; these trees are fixture-only by policy and code review is the backstop.
+shape_trusted_path() {
   case "$1" in
     supabase/seed/*|supabase/tests/*|test/*) return 0 ;;
   esac
   return 1
 }
-
-# Files permitted to hold leak-SHAPED fixtures (synthetic values only).
-allow_file() {
+shape_trusted_file() {
   case "$1" in
     scripts/privacy_scan.sh|scripts/privacy_scan_test.sh) return 0 ;;
     docs/research/2026-08-01-hardening/sanitize_native_log_test.sh) return 0 ;;
@@ -99,10 +107,20 @@ scan_form() { # file, class, regex
 }
 
 while IFS= read -r f; do
-  [ -f "$f" ] || continue
-  LC_ALL=C grep -qI . "$f" 2>/dev/null || continue   # skip binary
+  # FILENAME check first — applies to EVERY tracked path, even binaries and
+  # shape-trusted files (panel P4: a leak in a tracked filename was unscanned).
+  for tok in $(printf '%s' "$f" | grep -oE "$UUID_RE"); do
+    approved_token "$tok" || report "$f" "UUID/UDID identifier in filename"
+  done
+  for tok in $(printf '%s' "$f" | grep -oE "$MAC_RE"); do
+    approved_token "$tok" || report "$f" "Bluetooth/MAC identifier in filename"
+  done
+  printf '%s' "$f" | grep -Eq "$USERPATH_RE" && report "$f" "/Users/<name> in tracked path"
 
-  # raw xcodebuild log detector (applies even to allow-listed dirs).
+  [ -f "$f" ] || continue
+  LC_ALL=C grep -qI . "$f" 2>/dev/null || continue   # skip binary content
+
+  # raw xcodebuild log detector (applies even to shape-trusted files).
   case "$f" in
     *native_*.log)
       head -1 "$f" | grep -q '^# sanitized native-test evidence$' \
@@ -110,22 +128,29 @@ while IFS= read -r f; do
       ;;
   esac
 
-  allow_file "$f" && continue
+  # DEFINITIONAL files (this scanner + its test + the leak-fixture files) contain
+  # the leak PATTERNS and synthetic fixtures BY CONSTRUCTION, so their content
+  # checks are skipped — but the FILENAME check above and the global fleet-secret
+  # check below still apply to them. These are a small, explicitly code-reviewed
+  # set (not broad trees).
+  shape_trusted_file "$f" && continue
 
-  # env-dump identifiers are never allowed anywhere.
+  # These content checks run on every OTHER file — including the fixture TREES:
+  # env-dump identifiers and /Users home paths are never relaxed by shape trust.
   while IFS=: read -r ln _; do
     [ -n "$ln" ] && report "$f:$ln" "machine-local env identifier"
   done < <(grep -nE "$ENVDUMP_RE" "$f" 2>/dev/null)
-
-  # /Users/<name> real home paths (placeholder /Users/<redacted> excluded by class).
   while IFS=: read -r ln _; do
     [ -n "$ln" ] && report "$f:$ln" "absolute /Users/<name> home path"
   done < <(grep -nE "$USERPATH_RE" "$f" 2>/dev/null)
 
-  allow_path "$f" && continue
-
-  scan_form "$f" "UUID/UDID identifier"      "$UUID_RE"
-  scan_form "$f" "Bluetooth/MAC identifier"  "$MAC_RE"
+  # UUID/MAC *shape* checks — relaxed ONLY for the synthetic-fixture trees (which
+  # hold many invented UUID/MAC-shaped values). Documented residual: a real UDID
+  # shape-hidden in such a tree passes; these trees are fixture-only by policy.
+  if ! shape_trusted_path "$f"; then
+    scan_form "$f" "UUID/UDID identifier"      "$UUID_RE"
+    scan_form "$f" "Bluetooth/MAC identifier"  "$MAC_RE"
+  fi
 done < <(git ls-files)
 
 # fleet run secret exact-value check (never printed; only filename can surface).
