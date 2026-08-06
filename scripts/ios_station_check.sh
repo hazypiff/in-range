@@ -14,12 +14,15 @@
 #     --window smoke:0:60 --trim 0
 set -euo pipefail
 
-IPHONE14="27A0976C-78DD-5D1D-926E-0CE635E5C23A"
-IPHONE15P="67B16DBC-964F-592E-986C-281FED5AE8B8"
+# Device UDIDs are machine-local identifiers and are NOT committed. Provide them
+# via the environment (e.g. an untracked local profile), never in the repo:
+#   export INRANGE_IPHONE14_UDID=...   INRANGE_IPHONE15P_UDID=...
+IPHONE14="${INRANGE_IPHONE14_UDID:-}"
+IPHONE15P="${INRANGE_IPHONE15P_UDID:-}"
 
 case "${1:-}" in
-  14)  IOS_DEVICE=$IPHONE14 ;;
-  15p) IOS_DEVICE=$IPHONE15P ;;
+  14)  IOS_DEVICE="${IPHONE14:?set INRANGE_IPHONE14_UDID for the iPhone 14 device UDID}" ;;
+  15p) IOS_DEVICE="${IPHONE15P:?set INRANGE_IPHONE15P_UDID for the iPhone 15 Plus device UDID}" ;;
   *)
     echo "usage: $0 14|15p --date YYYY-MM-DD --start HH:MM:SS [summary options]"
     exit 1

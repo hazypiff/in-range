@@ -35,13 +35,16 @@ is an acceptable interim if the fix is deferred.
 
 ## Evidence-wording hygiene
 
-6. The committed native logs are **raw xcodebuild logs**, not "privacy-sanitized":
-   they contain local macOS user paths (~2,400 lines), a simulator UDID, and
-   terminal/launch session IDs — nothing dangerous (no hardware ECID, no secret
-   values). Packet wording corrected to "raw xcodebuild logs, reviewed for
-   secrets"; a future pass may scrub the paths if a cleaner artifact is wanted.
-7. The logs contain no literal `<SHA>` string; provenance is hash + commit
-   adjacency only. Direction (optional): stamp the SHA into the log header.
+6. **RESOLVED (privacy repair, 2026-08-06).** The raw xcodebuild logs are removed
+   from the branch tip and replaced with deterministic sanitized derivatives
+   (`*.sanitized.log` via `sanitize_native_log.sh`). Machine-local user paths,
+   simulator UDID, and terminal/launch/session IDs are gone by construction
+   (allowlist extraction). Enforced going forward by `scripts/privacy_scan.sh`
+   (whole-tip) with red/green fixtures. Raw inputs retained only in protected
+   scratch. History exposure recorded value-free in `PRIVACY_REMEDIATION_PROPOSAL.md`.
+7. **RESOLVED.** The sanitized derivative header now stamps `source_sha` and
+   `raw_input_sha256`; `assert_native_tests.sh` still parses it and the panel can
+   verify provenance from the header hash.
 
 ## Isolation reproducibility
 

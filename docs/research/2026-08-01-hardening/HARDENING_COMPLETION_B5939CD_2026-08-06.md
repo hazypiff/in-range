@@ -70,11 +70,20 @@ E-B2 installed selected-peer UI (handles only; production-absent, `diag-syms=0`)
 | `check_final_binary_isolation.sh` | production **diag-syms=0**, run-secret absent | — |
 | `git diff --check` | clean | — |
 
-`native_diag_b5939cd.log` / `native_runner_b5939cd.log` are committed beside this
-packet and re-validate under `scripts/assert_native_tests.sh` at the pinned floors
-(55 / 103). **These are raw xcodebuild logs, reviewed for secrets** (they contain
-local macOS paths + a simulator UDID; no ECID, no secret values) — not scrubbed.
-Manifest (value-free): see `MANIFEST_B5939CD.txt` (`1d0b6c5..b5939cd`).
+**Evidence is now privacy-sanitized (not raw).** The committed files are
+`native_diag_b5939cd.sanitized.log` / `native_runner_b5939cd.sanitized.log`,
+deterministic allowlist-extracted derivatives produced by
+`sanitize_native_log.sh` (test suite/case results, `Executed N` summaries, and
+`** TEST SUCCEEDED **` only — every env-dump line, absolute path, simulator UDID,
+and per-run timestamp removed by construction). Each derivative's header carries
+its `raw_input_sha256`, and the Hash column above IS that value (raw diag
+`1eaa8f56…`, raw Runner `e2f4e457…`), so provenance stays recomputable from the
+raw input. The derivatives re-validate under `scripts/assert_native_tests.sh` at
+the pinned floors (55 / 103) with the named A5 anchor present, and pass
+`scripts/privacy_scan.sh` whole-tip. The raw xcodebuild logs are **removed from
+the branch tip** (forward, non-force) and kept only in protected scratch. See
+`PRIVACY_REMEDIATION_PROPOSAL.md` for the value-free record of what remains in
+history. Manifest (value-free): see `MANIFEST_B5939CD.txt` (`1d0b6c5..b5939cd`).
 
 ## Blinded panel — both non-author reviewers APPROVE `b5939cd`
 
