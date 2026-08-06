@@ -309,6 +309,110 @@ final class W5TeardownTests: XCTestCase {
         "clean wipe advances the stamp to this flavor")
       W5EvidenceWriter.resetInjectedFailures()
     }
+
+    // §3 persisted-restoration schema: a snapshot carries an explicit
+    // version + flavor + key generation. Restore FAILS CLOSED (rejects AND wipes)
+    // on an unknown/future/stale version, a wrong flavor, a stale key generation,
+    // or corrupt fields — never reinterpreting unusable bytes as valid state. A
+    // valid snapshot still restores (positive control).
+    func testSchemaBoundaryRejectsAndWipesBadSnapshots() {
+      let d = BackgroundBeacon.operationalDefaults()
+      W5Diag.testEnvSecretOverride = nil
+      W5EvidenceWriter.resetInjectedFailures()
+      W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))  // confirms launch key
+
+      func seedValidSnapshot() {
+        d.removeObject(forKey: "bb.w5.snapshot")
+        let id = UUID()
+        let bb1 = BackgroundBeacon()
+        withExtendedLifetime(bb1) {
+          bb1.testEnableW5Links()
+          bb1.w5Link.testSeedOutboundLink(
+            peripheralID: id, myCand: "a", peerCand: "b", alias: "aliasS",
+            linkId: "LS")
+          bb1.w5Link.linkDown(id)          // → grace (a live in-grace lease)
+          bb1.w5Link.testForcePersist()
+        }
+      }
+
+      func rejectsAndWipes(_ label: String, _ mutate: (inout [String: Any]) -> Void) {
+        seedValidSnapshot()
+        var payload = d.dictionary(forKey: "bb.w5.snapshot") as? [String: Any] ?? [:]
+        mutate(&payload)
+        d.set(payload, forKey: "bb.w5.snapshot")
+        let bb2 = BackgroundBeacon()
+        withExtendedLifetime(bb2) {
+          bb2.testEnableW5Links()
+          bb2.w5Link.restoreFromPersistence(restoredPeripherals: [])
+          XCTAssertEqual(
+            bb2.w5Link.testActiveLeaseCount, 0, "\(label): no lease restored")
+        }
+        XCTAssertNil(
+          d.dictionary(forKey: "bb.w5.snapshot"), "\(label): snapshot wiped")
+      }
+
+      rejectsAndWipes("future-version") { $0["schemaVersion"] = 99 }
+      rejectsAndWipes("stale-version") { $0["schemaVersion"] = 0 }
+      rejectsAndWipes("no-version") { $0.removeValue(forKey: "schemaVersion") }
+      rejectsAndWipes("wrong-flavor") { $0["flavor"] = "prod.v1.FOREIGN" }
+      rejectsAndWipes("stale-generation") { $0["keyEpoch"] = 999_999 }
+      rejectsAndWipes("corrupt-snapshot") { $0["snapshot"] = "@@@not-base64@@@" }
+      rejectsAndWipes("missing-linkMeta") { $0.removeValue(forKey: "linkMeta") }
+
+      // Positive control: an UNMUTATED valid snapshot restores the live lease.
+      seedValidSnapshot()
+      let bb3 = BackgroundBeacon()
+      withExtendedLifetime(bb3) {
+        bb3.testEnableW5Links()
+        bb3.w5Link.restoreFromPersistence(restoredPeripherals: [])
+        XCTAssertEqual(
+          bb3.w5Link.testActiveLeaseCount, 1, "valid snapshot restores the lease")
+      }
+      d.removeObject(forKey: "bb.w5.snapshot")
+    }
+
+    // §3: a restore under an UNCONFIRMED current fleet key is refused WITHOUT
+    // wiping (the snapshot may be valid — it just can't be trusted yet); once the
+    // key is confirmed it restores. Guards against reconstructing a lease whose
+    // handles/generation can't be validated on a pre-Dart boot.
+    func testRestoreRefusedUntilLaunchKeyConfirmed() {
+      let d = BackgroundBeacon.operationalDefaults()
+      W5Diag.testEnvSecretOverride = nil
+      W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))
+      d.removeObject(forKey: "bb.w5.snapshot")
+      let id = UUID()
+      let bb1 = BackgroundBeacon()
+      withExtendedLifetime(bb1) {
+        bb1.testEnableW5Links()
+        bb1.w5Link.testSeedOutboundLink(
+          peripheralID: id, myCand: "a", peerCand: "b", alias: "aliasK", linkId: "LK")
+        bb1.w5Link.linkDown(id)
+        bb1.w5Link.testForcePersist()
+      }
+      // Arm the gate (fresh launch, key not yet confirmed) — restore must refuse
+      // but NOT wipe.
+      W5Diag.beginLaunchKeyGate()
+      let bb2 = BackgroundBeacon()
+      withExtendedLifetime(bb2) {
+        bb2.testEnableW5Links()
+        bb2.w5Link.restoreFromPersistence(restoredPeripherals: [])
+        XCTAssertEqual(
+          bb2.w5Link.testActiveLeaseCount, 0, "no restore under unconfirmed key")
+      }
+      XCTAssertNotNil(
+        d.dictionary(forKey: "bb.w5.snapshot"),
+        "unconfirmed-key refusal does NOT wipe a possibly-valid snapshot")
+      // Confirm the key, then restore succeeds.
+      W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))
+      let bb3 = BackgroundBeacon()
+      withExtendedLifetime(bb3) {
+        bb3.testEnableW5Links()
+        bb3.w5Link.restoreFromPersistence(restoredPeripherals: [])
+        XCTAssertEqual(
+          bb3.w5Link.testActiveLeaseCount, 1, "restores once the key is confirmed")
+      }
+      d.removeObject(forKey: "bb.w5.snapshot")
+    }
   #endif
 
   // REAL CHANNEL ENTRY (B1): the platform-channel handler itself. A server

@@ -197,6 +197,10 @@ final class BackgroundBeacon: NSObject {
     #endif
   }
 
+  /// The current build's operational flavor stamp (diag.v1 / prod.v1) — the
+  /// value a persisted W5 snapshot must carry to be restorable in THIS flavor.
+  static var operationalFlavor: String { stateSchemaStamp }
+
   private func reconcileStateStamp() {
     let stamp = defaults.string(forKey: Self.keySchema)
     if stamp == Self.stateSchemaStamp { return }

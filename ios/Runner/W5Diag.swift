@@ -179,6 +179,27 @@ enum W5Diag {
     static var testPendingEmitCount: Int { eventWriter.withLock { pendingEmits.count } }
   #endif
 
+  /// Current key epoch (0 in a Release binary). Release-safe accessor used by the
+  /// persisted-restoration schema's generation boundary (a snapshot written under
+  /// one key epoch must not be restored under a rotated one).
+  static var currentKeyEpoch: Int {
+    #if INRANGE_DIAG
+      return keyEpoch
+    #else
+      return 0
+    #endif
+  }
+
+  /// Release-safe form of the per-launch key-ready gate — true in a Release binary
+  /// (no keyed restoration exists there). Used by the schema restore gate.
+  static var keyConfirmedForLaunch: Bool {
+    #if INRANGE_DIAG
+      return isKeyConfirmedForLaunch
+    #else
+      return true
+    #endif
+  }
+
   /// Provision the shared fleet run secret (hex). Validated: >= 64 hex chars
   /// (a full 256-bit key), EVEN length, valid hex — a short/odd/non-hex value
   /// MUST NOT mutate state. The >= 64 floor MATCHES the frozen puller/artifact

@@ -110,6 +110,11 @@ final class W5LinkController {
   // #8 isolation: all W5 persistence lands in BackgroundBeacon.operationalDefaults(),
   // never UserDefaults.standard directly.
   private static let keyW5Snapshot = "bb.w5.snapshot"
+  /// Persisted-restoration schema version. A snapshot carries this + the build
+  /// flavor + the key-epoch it was written under; restore fails closed (wipes)
+  /// on an unknown/future/stale version, a wrong flavor, or a stale key
+  /// generation. Bump when the snapshot shape changes (no silent reinterpretation).
+  private static let snapshotSchemaVersion = 1
   // Shared contract: Dart's `SwipeCard.radioAliasTtl` mirrors this value so the
   // app only attempts a teardown for an alias still likely-live natively.
   private static let aliasTTL: TimeInterval = 15 * 60  // mirrors tokenCacheTTL
@@ -816,6 +821,10 @@ final class W5LinkController {
       ]
     }
     let payload: [String: Any] = [
+      // Schema/flavor/generation boundary — validated on restore (fail closed).
+      "schemaVersion": Self.snapshotSchemaVersion,
+      "flavor": BackgroundBeacon.operationalFlavor,
+      "keyEpoch": W5Diag.currentKeyEpoch,
       "snapshot": snapshot.base64EncodedString(),
       "linkMeta": linkMeta,
       "candidateByAlias": candidateByAlias,
@@ -839,9 +848,15 @@ final class W5LinkController {
   /// CBCentral subscribes again.
   func restoreFromPersistence(restoredPeripherals: [CBPeripheral] = []) {
     guard bb.w5LinksEnabled else { return }
-    guard let payload = bb.defaults.dictionary(forKey: Self.keyW5Snapshot) as? [String: Any],
-      let snapB64 = payload["snapshot"] as? String,
-      let snapData = Data(base64Encoded: snapB64)
+    // A snapshot restore is a KEYED operation: never reconstruct a lease under an
+    // unconfirmed current fleet key (its handles/generation could not be trusted).
+    guard W5Diag.keyConfirmedForLaunch else {
+      W5Diag.emit(.snapshotLoad, role: .app, result: "reject",
+        reason: "key-unconfirmed", count: restoredPeripherals.count)
+      return
+    }
+    guard let payload = bb.defaults.dictionary(forKey: Self.keyW5Snapshot)
+      as? [String: Any]
     else {
       // No persisted lease to restore — Case 3 must be able to tell "cold, no
       // snapshot" from "restored".
@@ -849,8 +864,40 @@ final class W5LinkController {
         count: restoredPeripherals.count)
       return
     }
-    let linkMeta = payload["linkMeta"] as? [String: [String: Any]] ?? [:]
-    candidateByAlias = payload["candidateByAlias"] as? [String: String] ?? [:]
+    // Schema / flavor / generation boundary — FAIL CLOSED with a structured,
+    // sanitized reason (and WIPE the unusable snapshot) so a partial, corrupt,
+    // future, stale-version, wrong-flavor, or stale-generation snapshot is never
+    // reinterpreted as valid state.
+    func rejectSnapshot(_ reason: String) {
+      W5Diag.emit(.snapshotLoad, role: .app, result: "reject", reason: reason,
+        count: restoredPeripherals.count)
+      clearPersistedState()
+    }
+    guard let ver = payload["schemaVersion"] as? Int else {
+      return rejectSnapshot("no-version")
+    }
+    if ver > Self.snapshotSchemaVersion { return rejectSnapshot("future-version") }
+    if ver < Self.snapshotSchemaVersion {
+      // No migration path defined for an older shape yet: reject + wipe by an
+      // explicit rule rather than reinterpret unknown bytes.
+      return rejectSnapshot("stale-version")
+    }
+    guard (payload["flavor"] as? String) == BackgroundBeacon.operationalFlavor else {
+      return rejectSnapshot("wrong-flavor")
+    }
+    guard let snapKeyEpoch = payload["keyEpoch"] as? Int,
+      snapKeyEpoch == W5Diag.currentKeyEpoch
+    else {
+      return rejectSnapshot("stale-generation")
+    }
+    guard let snapB64 = payload["snapshot"] as? String,
+      let snapData = Data(base64Encoded: snapB64),
+      let linkMeta = payload["linkMeta"] as? [String: [String: Any]],
+      let restoredCandidates = payload["candidateByAlias"] as? [String: String]
+    else {
+      return rejectSnapshot("corrupt-fields")
+    }
+    candidateByAlias = restoredCandidates
 
     let restored = ownership.restore(
       from: snapData,
