@@ -83,8 +83,18 @@ case " ${DEVICE_FAIL:-} " in
     exit 1 ;;
 esac
 if [ -f "${FIXTURES:?}/$base" ]; then cp "${FIXTURES}/$base" "$dst"; exit 0; fi
-# A MISSING fixture models a VERIFIED not-found on the device.
-echo "error: no such file: Documents/$base (FileNotFound)" >&2
+# A MISSING fixture models a VERIFIED not-found on the device — emitted in the
+# REAL `xcrun devicectl` shape: benign timestamped PROGRESS lines (one of which
+# says "connection to device.") FOLLOWED by the actual CoreDeviceError 7000
+# "Failed to retrieve the file node" error that names the source file. The puller
+# must strip the progress noise (so the "device" word there is NOT read as a
+# device-lookup failure) and recognize error 7000 as a verified absence.
+{
+  echo "20:04:03  Acquired tunnel connection to device."
+  echo "20:04:03  Enabling developer disk image services."
+  echo "20:04:03  Acquired usage assertion."
+  echo "ERROR: Failed to retrieve the file node for Documents/$base (com.apple.dt.CoreDeviceError error 7000 (0x1B58))"
+} >&2
 exit 1
 FAKE
   chmod +x "$sb/bin/xcrun"
