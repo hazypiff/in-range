@@ -5,6 +5,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CHECK="$HERE/check_artifact_build_context.sh"
+BUILDER="$HERE/build_diag_artifact.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 SRC="$TMP/source"
@@ -29,7 +30,10 @@ git -C "$SRC" config user.name fixture
 git -C "$SRC" config user.email fixture@example.invalid
 printf '.env\n' > "$SRC/.gitignore"
 printf 'tracked\n' > "$SRC/tracked.txt"
-git -C "$SRC" add .gitignore tracked.txt
+mkdir -p "$SRC/scripts"
+cp "$CHECK" "$SRC/scripts/check_artifact_build_context.sh"
+cp "$BUILDER" "$SRC/scripts/build_diag_artifact.sh"
+git -C "$SRC" add .gitignore tracked.txt scripts
 git -C "$SRC" commit -qm initial
 SHA="$(git -C "$SRC" rev-parse HEAD)"
 
@@ -52,6 +56,31 @@ rm -f "$WT/untracked.txt"
 printf 'approved ignored input\n' > "$WT/.env"
 expect_pass "ignored environment input does not dirty Git provenance" "$WT" "$SHA"
 rm -f "$WT/.env"
+
+# A same-SHA foreign Git environment can satisfy a child context check while
+# still poisoning later build tools in the parent shell. The builder must clear
+# every plumbing variable before deriving SOURCE_SHA or invoking Flutter.
+mkdir -p "$TMP/bin"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'if [ -n "${GIT_DIR+x}" ] || [ -n "${GIT_WORK_TREE+x}" ] || [ -n "${GIT_COMMON_DIR+x}" ] || [ -n "${GIT_INDEX_FILE+x}" ]; then' \
+  '  printf poisoned > "$ARTIFACT_ENV_MARKER"' \
+  '  exit 41' \
+  'fi' \
+  'printf clean > "$ARTIFACT_ENV_MARKER"' \
+  'exit 42' > "$TMP/bin/flutter"
+chmod 700 "$TMP/bin/flutter"
+MARKER="$TMP/builder-env-marker"
+if env PATH="$TMP/bin:$PATH" ARTIFACT_ENV_MARKER="$MARKER" \
+  GIT_DIR="$SRC/.git" GIT_WORK_TREE="$SRC" \
+  GIT_COMMON_DIR="$SRC/.git" GIT_INDEX_FILE="$SRC/.git/index" \
+  bash "$WT/scripts/build_diag_artifact.sh" >/dev/null 2>&1; then
+  bad "builder stopped at the synthetic Flutter boundary (expected nonzero)"
+elif [ "$(cat "$MARKER" 2>/dev/null || true)" = clean ]; then
+  ok "builder clears ambient Git plumbing before later build tools"
+else
+  bad "builder clears ambient Git plumbing before later build tools"
+fi
 
 git -C "$SRC" worktree add -q -b fixture-branch "$WT_BRANCH" "$SHA"
 expect_fail "linked but branch-attached worktree rejected" "$WT_BRANCH" "$SHA"
