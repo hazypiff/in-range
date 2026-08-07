@@ -254,10 +254,13 @@ pull() {
   allow='failed|to|retrieve|the|file|node|for|documents|document|no|such|does|not|exist|found|filenotfound|com|apple|dt|coredeviceerror|error|7000'
   # Lowercased, ERE-escaped source name for the strip (have_abs is lowercased below).
   qlc="$(printf '%s' "$1" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9_]/\\&/g')"
-  # Lowercase the sole absence line(s); REMOVE the exact matched filename/path and
-  # 0x… hex codes; extract alpha+numeric tokens; keep only those NOT allowed.
+  # Lowercase the sole absence line(s); REMOVE only the FIRST (the matcher's)
+  # '(documents/)?<name>' occurrence — NOT a global /g strip (codex 084ab1e):
+  # erasing every occurrence would hide a SECOND, unexplained mention of the path.
+  # A duplicated path therefore leaves its (non-allowlisted) name tokens as residue
+  # ⇒ FATAL. Then drop 0x hex, extract alpha+numeric tokens, keep only non-allowed.
   resid="$(printf '%s\n' "$have_abs" | tr 'A-Z' 'a-z' \
-    | sed -E "s#(documents/)?${qlc}##g" \
+    | sed -E "s#(documents/)?${qlc}##" \
     | sed -E 's/0x[0-9a-f]+//g' \
     | grep -oE '[a-z]+|[0-9]+' | grep -vxE "$allow" || true)"
   if [ -n "$have_abs" ] && [ -z "$non_abs" ] && [ -z "$resid" ]; then

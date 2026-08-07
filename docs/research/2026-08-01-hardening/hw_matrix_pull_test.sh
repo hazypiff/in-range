@@ -195,6 +195,16 @@ case " ${DIGITREUSE_7000:-} " in
     echo "ERROR: Failed to retrieve the file node for Documents/w5_rssi_log.jsonl (com.apple.dt.CoreDeviceError error 7000 (0x1B58)) error 5" >&2
     exit 1 ;;
 esac
+# DUPPATH_7000 (audit Finding 1, repro 12 — codex 084ab1e): the valid 7000 shape
+# FOLLOWED by a SECOND, unexplained mention of the same path. A global strip erased
+# both and left empty residue; stripping only the FIRST (matched) occurrence leaves
+# the duplicate's name tokens as residue. FATAL — the trailing duplicate is
+# unexplained content, not part of the recognized single-file absence shape.
+case " ${DUPPATH_7000:-} " in
+  *" $base "*)
+    echo "ERROR: Failed to retrieve the file node for Documents/w5_rssi_log.jsonl (com.apple.dt.CoreDeviceError error 7000 (0x1B58)) Documents/w5_rssi_log.jsonl" >&2
+    exit 1 ;;
+esac
 if [ -f "${FIXTURES:?}/$base" ]; then cp "${FIXTURES}/$base" "$dst"; exit 0; fi
 # A MISSING fixture models a VERIFIED not-found on the device — emitted in the
 # REAL `xcrun devicectl` shape: benign timestamped PROGRESS lines (one of which
@@ -923,6 +933,20 @@ dr_rc=$?
 [ "$dr_rc" -eq 8 ] && [ ! -e "$SB_DR/work/hardware_evidence/caseDR" ] \
   && ok "appended fatal reusing a source digit ('error 5') aborts (exit 8)" \
   || bad "source-digit-reuse fatal misclassified as absence (rc=$dr_rc)"
+
+# 34p. AUDIT FINDING 1 repro 12 (codex 084ab1e): a valid 7000 line FOLLOWED by a
+# SECOND, unexplained mention of the same path MUST be FATAL — only the first
+# (matched) path occurrence is stripped, so the duplicate's name tokens remain as
+# residue. RED.
+SB_DP="$(make_sandbox)"; valid_fixtures "$SB_DP"
+( cd "$SB_DP/work" && HW_MATRIX_XCRUN="$SB_DP/bin/xcrun" FIXTURES="$SB_DP/fixtures" \
+  XCRUN_MARKER="$SB_DP/m" DUPPATH_7000="w5_rssi_log.jsonl" \
+  INRANGE_DIAG_RUN_SECRET="$SECRET" \
+  bash ./hw_matrix_pull.sh test-udid iphone14 caseDP ) >/dev/null 2>&1
+dp_rc=$?
+[ "$dp_rc" -eq 8 ] && [ ! -e "$SB_DP/work/hardware_evidence/caseDP" ] \
+  && ok "valid 7000 + duplicate unexplained path aborts (exit 8), not absence" \
+  || bad "duplicate-path line misclassified as absence (rc=$dp_rc)"
 
 # 35. VERIFIED-ABSENT optional artifact publishes normally (exit 0): missing on
 # device is fine, only the primary is mandatory.
