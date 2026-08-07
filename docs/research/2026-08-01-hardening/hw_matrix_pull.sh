@@ -219,13 +219,18 @@ pull() {
   # or 'name.jsonl.bak' would match 'name.jsonl' as absence. Exclude filename
   # continuation chars ([A-Za-z0-9._-]) from the boundary on both branches.
   fb='[^A-Za-z0-9._-]'
-  # BOTH branches pin the name to the EXACT optional 'documents/' prefix + filename
-  # — NO arbitrary '.*' path content before it (codex b9ae21a): otherwise a
-  # subdirectory whose name is allowlisted vocabulary ('Documents/found/<name>')
-  # matched with empty residue and was falsely called absence. The classic branch
-  # allows only non-filename separators (': ', ' ') between the phrase and the
-  # optional 'documents/' + name.
-  abs_re="(failed to retrieve the file node for (documents/)?${q1}(${fb}|$).*coredeviceerror error 7000)|((no such file|does not exist|file ?not ?found|filenotfound)${fb}+(documents/)?${q1}(${fb}|$))"
+  # The name must be the FINAL path component: the char AFTER it must terminate the
+  # path (space, ')', ':' or line end), NOT '/' (codex 392c27c) — otherwise the
+  # requested basename could sit in the MIDDLE of a longer path
+  # ('Documents/<name>/found') and, since 'found' is allowlisted, pass with empty
+  # residue. So the TRAILING boundary also excludes '/'. (The LEADING separator
+  # keeps '/' — 'documents/<name>' is legitimate.)
+  local tb='[^A-Za-z0-9._/-]'
+  # BOTH branches pin the name to the EXACT optional 'documents/' prefix + the
+  # final filename — NO arbitrary '.*' path content before it (codex b9ae21a) and
+  # no trailing subpath after it (codex 392c27c). The classic branch allows only
+  # non-filename separators between the phrase and the optional 'documents/' + name.
+  abs_re="(failed to retrieve the file node for (documents/)?${q1}(${tb}|$).*coredeviceerror error 7000)|((no such file|does not exist|file ?not ?found|filenotfound)${fb}+(documents/)?${q1}(${tb}|$))"
   have_abs="$(printf '%s\n' "$errc" | grep -iE "$abs_re" || true)"
   non_abs="$(printf '%s\n' "$errc" | grep -vE '^[[:space:]]*$' | grep -viE "$abs_re" || true)"
   # Fatal-RESIDUE gate (replaces an ever-incomplete denylist — codex rejected the
@@ -236,16 +241,23 @@ pull() {
   # a standalone 'app'/'domain'/'damaged'/'installed'/'locked'/'denied' fatal
   # signal embedded in the SAME line — is unexplained ⇒ FATAL. This fails CLOSED
   # on fatal vocabulary we never enumerated, instead of chasing a denylist.
+  # The residue check extracts BOTH alphabetic AND numeric tokens (kimi 392c27c):
+  # checking only [a-z] let a bare numeric/decimal fatal detail (e.g. an appended
+  # secondary error code) pass with empty residue. Allowed numerics are ONLY the
+  # CoreDeviceError file-not-found code '7000' and this source's own digit tokens.
   local allow resid w
-  allow='failed|to|retrieve|the|file|node|for|documents|document|no|such|does|not|exist|found|filenotfound|com|apple|dt|coredeviceerror|error'
-  for w in $(printf '%s' "$1" | tr 'A-Z' 'a-z' | tr -c 'a-z' ' '); do
+  allow='failed|to|retrieve|the|file|node|for|documents|document|no|such|does|not|exist|found|filenotfound|com|apple|dt|coredeviceerror|error|7000'
+  # Split the source name into alpha AND numeric tokens the SAME way the residue is
+  # extracted (so e.g. 'w5' contributes both 'w' and '5'), else genuine digits
+  # would look like residue.
+  for w in $(printf '%s' "$1" | tr 'A-Z' 'a-z' | grep -oE '[a-z]+|[0-9]+'); do
     allow="$allow|$w"   # this source's own name tokens are legitimately present
   done
-  # Lowercase the sole absence line(s), drop 0x… hex codes, extract alpha words,
-  # keep only those NOT in the allowed vocabulary. Any survivor ⇒ fatal residue.
+  # Lowercase the sole absence line(s), drop 0x… hex codes, extract alpha+numeric
+  # tokens, keep only those NOT in the allowed vocabulary. Any survivor ⇒ fatal.
   resid="$(printf '%s\n' "$have_abs" | tr 'A-Z' 'a-z' \
     | sed -E 's/0x[0-9a-f]+//g' \
-    | grep -oE '[a-z]+' | grep -vxE "$allow" || true)"
+    | grep -oE '[a-z]+|[0-9]+' | grep -vxE "$allow" || true)"
   if [ -n "$have_abs" ] && [ -z "$non_abs" ] && [ -z "$resid" ]; then
     echo "  (absent $1)"; return 0   # verified not-found of the SOURCE FILE (nothing else unexplained)
   fi

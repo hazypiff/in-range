@@ -159,6 +159,32 @@ case " ${SUBDIR_NOSUCH:-} " in
     echo "ERROR: no such file: Documents/found/w5_rssi_log.jsonl does not exist" >&2
     exit 1 ;;
 esac
+# SUBPATH_NOSUCH (audit Finding 1, repro 8 — codex 392c27c): the requested basename
+# used as a DIRECTORY component with a trailing subpath ('Documents/<name>/found').
+# The '/' after the name satisfied the old boundary and 'found' is allowlisted ⇒
+# empty residue ⇒ false absence. FATAL — the name is not the final file. (classic)
+case " ${SUBPATH_NOSUCH:-} " in
+  *" $base "*)
+    echo "ERROR: no such file: Documents/w5_rssi_log.jsonl/found does not exist" >&2
+    exit 1 ;;
+esac
+# SUBPATH_7000 (audit Finding 1, repro 9): the same trailing-'/'-subpath on the
+# COMPOUND branch ('Documents/<name>/found'). FATAL. (compound)
+case " ${SUBPATH_7000:-} " in
+  *" $base "*)
+    echo "ERROR: Failed to retrieve the file node for Documents/w5_rssi_log.jsonl/found (com.apple.dt.CoreDeviceError error 7000 (0x1B58))" >&2
+    exit 1 ;;
+esac
+# NUMFATAL_7000 (audit Finding 1, repro 10 — kimi 392c27c): an unexplained bare
+# NUMERIC detail appended to the 7000 line (a secondary error/status code, here
+# '13'). The residue gate used to extract only [a-z] words, so this left empty
+# residue and was published as absence. FATAL — an unexplained non-file-not-found
+# code is present. The residue gate now extracts numeric tokens too.
+case " ${NUMFATAL_7000:-} " in
+  *" $base "*)
+    echo "ERROR: Failed to retrieve the file node for Documents/$base (com.apple.dt.CoreDeviceError error 7000 (0x1B58)) 13" >&2
+    exit 1 ;;
+esac
 if [ -f "${FIXTURES:?}/$base" ]; then cp "${FIXTURES}/$base" "$dst"; exit 0; fi
 # A MISSING fixture models a VERIFIED not-found on the device — emitted in the
 # REAL `xcrun devicectl` shape: benign timestamped PROGRESS lines (one of which
@@ -836,6 +862,43 @@ sd_rc=$?
 [ "$sd_rc" -eq 8 ] && [ ! -e "$SB_SD/work/hardware_evidence/caseSD" ] \
   && ok "allowlisted-subdir '/found/<name>' aborts (exit 8), not absence" \
   || bad "subdirectory path match misclassified as absence (rc=$sd_rc)"
+
+# 34l/34m. AUDIT FINDING 1 repro 8-9 (codex 392c27c): the requested basename used
+# as a DIRECTORY with a trailing subpath ('Documents/<name>/found') MUST be FATAL
+# on BOTH branches — the trailing boundary now excludes '/', so the name must be
+# the final path component.
+SB_SP="$(make_sandbox)"; valid_fixtures "$SB_SP"
+( cd "$SB_SP/work" && HW_MATRIX_XCRUN="$SB_SP/bin/xcrun" FIXTURES="$SB_SP/fixtures" \
+  XCRUN_MARKER="$SB_SP/m" SUBPATH_NOSUCH="w5_rssi_log.jsonl" \
+  INRANGE_DIAG_RUN_SECRET="$SECRET" \
+  bash ./hw_matrix_pull.sh test-udid iphone14 caseSP ) >/dev/null 2>&1
+sp_rc=$?
+[ "$sp_rc" -eq 8 ] && [ ! -e "$SB_SP/work/hardware_evidence/caseSP" ] \
+  && ok "classic-branch trailing subpath '<name>/found' aborts (exit 8)" \
+  || bad "classic-branch trailing-subpath match misclassified as absence (rc=$sp_rc)"
+SB_SP2="$(make_sandbox)"; valid_fixtures "$SB_SP2"
+( cd "$SB_SP2/work" && HW_MATRIX_XCRUN="$SB_SP2/bin/xcrun" FIXTURES="$SB_SP2/fixtures" \
+  XCRUN_MARKER="$SB_SP2/m" SUBPATH_7000="w5_rssi_log.jsonl" \
+  INRANGE_DIAG_RUN_SECRET="$SECRET" \
+  bash ./hw_matrix_pull.sh test-udid iphone14 caseSP2 ) >/dev/null 2>&1
+sp2_rc=$?
+[ "$sp2_rc" -eq 8 ] && [ ! -e "$SB_SP2/work/hardware_evidence/caseSP2" ] \
+  && ok "compound-branch trailing subpath '<name>/found' aborts (exit 8)" \
+  || bad "compound-branch trailing-subpath match misclassified as absence (rc=$sp2_rc)"
+
+# 34n. AUDIT FINDING 1 repro 10 (kimi 392c27c): an unexplained bare NUMERIC detail
+# appended to the 7000 line ('… 7000 (0x1B58)) 13') MUST be FATAL — the residue
+# gate now extracts numeric tokens, so the stray '13' (not the 7000 code, not a
+# source digit) is caught. RED.
+SB_NF="$(make_sandbox)"; valid_fixtures "$SB_NF"
+( cd "$SB_NF/work" && HW_MATRIX_XCRUN="$SB_NF/bin/xcrun" FIXTURES="$SB_NF/fixtures" \
+  XCRUN_MARKER="$SB_NF/m" NUMFATAL_7000="w5_rssi_log.jsonl" \
+  INRANGE_DIAG_RUN_SECRET="$SECRET" \
+  bash ./hw_matrix_pull.sh test-udid iphone14 caseNF ) >/dev/null 2>&1
+nf_rc=$?
+[ "$nf_rc" -eq 8 ] && [ ! -e "$SB_NF/work/hardware_evidence/caseNF" ] \
+  && ok "unexplained appended numeric detail aborts (exit 8), not absence" \
+  || bad "numeric fatal detail misclassified as absence (rc=$nf_rc)"
 
 # 35. VERIFIED-ABSENT optional artifact publishes normally (exit 0): missing on
 # device is fine, only the primary is mandatory.
