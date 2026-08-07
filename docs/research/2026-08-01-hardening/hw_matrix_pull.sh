@@ -206,8 +206,14 @@ pull() {
   #    unexplained line remaining. Build the recognized-absence-for-this-source
   #    matcher, then require: at least one such line exists, and EVERY non-empty
   #    line of errc is such a line (anything else = unexplained ⇒ FATAL).
-  local abs_re have_abs non_abs
-  abs_re="(failed to retrieve the file node for (documents/)?${1}([^0-9a-z]|$).*coredeviceerror error 7000)|((no such file|does not exist|file ?not ?found|filenotfound).*${1})"
+  local abs_re have_abs non_abs q1
+  # Escape EVERY non-word char of the source name before it enters the regex
+  # (codex ffa85e7): unescaped, the '.' in e.g. 'w5_rssi_log.jsonl' is a wildcard,
+  # so a 7000 error naming a DIFFERENT file ('w5_rssi_log-jsonl') would match and
+  # be accepted as this file's absence — and the residue gate cannot see it
+  # because '-' and '.' tokenize identically. Escaping makes the match EXACT.
+  q1="$(printf '%s' "$1" | sed 's/[^A-Za-z0-9_]/\\&/g')"
+  abs_re="(failed to retrieve the file node for (documents/)?${q1}([^0-9a-z]|$).*coredeviceerror error 7000)|((no such file|does not exist|file ?not ?found|filenotfound).*${q1})"
   have_abs="$(printf '%s\n' "$errc" | grep -iE "$abs_re" || true)"
   non_abs="$(printf '%s\n' "$errc" | grep -vE '^[[:space:]]*$' | grep -viE "$abs_re" || true)"
   # Fatal-RESIDUE gate (replaces an ever-incomplete denylist — codex rejected the

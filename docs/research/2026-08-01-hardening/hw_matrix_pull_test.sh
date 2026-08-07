@@ -120,6 +120,17 @@ case " ${NOSUCH_ABSENT:-} " in
     echo "ERROR: no such file: Documents/$base does not exist" >&2
     exit 1 ;;
 esac
+# DOTFUZZ_7000 (audit Finding 1, repro 4 — codex ffa85e7): a 7000 error naming a
+# DIFFERENT file whose name differs from the requested one only where a '.' sits
+# ('w5_rssi_log-jsonl' vs 'w5_rssi_log.jsonl'). With the source name interpolated
+# UNESCAPED, the regex '.' matched the '-', so this was accepted as absence of the
+# requested file — and the residue gate could not see it because '-' and '.'
+# tokenize identically. FATAL: it does not name the exact requested source.
+case " ${DOTFUZZ_7000:-} " in
+  *" $base "*)
+    echo "ERROR: Failed to retrieve the file node for Documents/w5_rssi_log-jsonl (com.apple.dt.CoreDeviceError error 7000 (0x1B58))" >&2
+    exit 1 ;;
+esac
 if [ -f "${FIXTURES:?}/$base" ]; then cp "${FIXTURES}/$base" "$dst"; exit 0; fi
 # A MISSING fixture models a VERIFIED not-found on the device — emitted in the
 # REAL `xcrun devicectl` shape: benign timestamped PROGRESS lines (one of which
@@ -742,6 +753,20 @@ ns_rc=$?
 [ "$ns_rc" -eq 0 ] && [ -f "$SB_NS/work/hardware_evidence/caseNS/iphone14_w5_events.jsonl" ] \
   && ok "genuine 'no such file' absence of the optional still publishes (exit 0)" \
   || bad "benign 'no such file' absence wrongly aborted (rc=$ns_rc)"
+
+# 34h. AUDIT FINDING 1 repro 4 (codex ffa85e7): a 7000 error naming a DIFFERENT
+# file that differs only where the '.' sits ('w5_rssi_log-jsonl') MUST be FATAL —
+# it does not name the exact requested source. Unescaped, the regex '.' matched
+# the '-' and published it as absence; the escaped source name now forbids it.
+SB_DF="$(make_sandbox)"; valid_fixtures "$SB_DF"
+( cd "$SB_DF/work" && HW_MATRIX_XCRUN="$SB_DF/bin/xcrun" FIXTURES="$SB_DF/fixtures" \
+  XCRUN_MARKER="$SB_DF/m" DOTFUZZ_7000="w5_rssi_log.jsonl" \
+  INRANGE_DIAG_RUN_SECRET="$SECRET" \
+  bash ./hw_matrix_pull.sh test-udid iphone14 caseDF ) >/dev/null 2>&1
+df2_rc=$?
+[ "$df2_rc" -eq 8 ] && [ ! -e "$SB_DF/work/hardware_evidence/caseDF" ] \
+  && ok "7000 naming a dot-fuzzed different file aborts (exit 8), not absence" \
+  || bad "dot-wildcard filename match misclassified as absence (rc=$df2_rc)"
 
 # 35. VERIFIED-ABSENT optional artifact publishes normally (exit 0): missing on
 # device is fine, only the primary is mandatory.
