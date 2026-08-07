@@ -2249,11 +2249,17 @@ class BeaconService {
   }
 
   /// Record a pass teardown outcome (sanitized summary) in the native evidence
-  /// layer. No-op off-iOS.
-  Future<void> recordW5Teardown(String outcome) async {
+  /// layer and RETURN the durable-write acknowledgment `{ok, recorded, reason,
+  /// aliasClass}` (audit Finding 2). Off-iOS: recorded=false (never a false
+  /// success), so the caller marks the diagnostic evidence UNAVAILABLE.
+  Future<Map<String, Object?>> recordW5Teardown(
+    String outcome, {
+    String aliasClass = 'unavailable',
+  }) async {
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
-      await _bgBeacon.recordW5Teardown(outcome);
+      return _bgBeacon.recordW5Teardown(outcome, aliasClass: aliasClass);
     }
+    return {'ok': false, 'recorded': false, 'reason': 'not-ios', 'aliasClass': aliasClass};
   }
 
   /// Reset the current diagnostic CASE — retains the fleet secret, rotates the

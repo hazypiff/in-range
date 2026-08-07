@@ -33,6 +33,13 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
   // Last pass's radio-lease teardown result (honest observability; may be a
   // server-card 'unavailable' or a stale miss). Read in tests/diagnostics.
   TeardownOutcome? _lastTeardown;
+  /// Audit Finding 2 (E-B1): observable durable-evidence acknowledgment of the
+  /// last pass teardown. True ONLY when native confirmed the sanitized outcome was
+  /// durably appended (`recorded==true`); false/null means the product pass may
+  /// have happened but the diagnostic evidence is UNAVAILABLE — never conflated.
+  bool? _lastTeardownRecorded;
+  @visibleForTesting
+  bool? get lastTeardownRecorded => _lastTeardownRecorded;
 
   /// Most recent pass teardown outcome, for diagnostics/tests.
   TeardownOutcome? get lastTeardownOutcome => _lastTeardown;
@@ -141,8 +148,17 @@ class _SwipeFeedState extends ConsumerState<SwipeFeed> {
       );
       // Record EVERY outcome (tore / unavailable / stale-miss / native-
       // unavailable) in the native sanitized evidence layer — diag builds only.
+      // Audit Finding 2 (E-B1): AWAIT the durable-write acknowledgment before we
+      // treat the teardown as evidence-proven. The product pass already happened
+      // above; here we only record whether native durably persisted the sanitized
+      // outcome (recorded==true). The requested alias class (fresh|stale|
+      // unavailable) is forwarded so a stale hit is never taken for a fresh one.
       if (AppConfig.kDiagBuild) {
-        unawaited(beacon.recordW5Teardown(_lastTeardown!.summary));
+        final ack = await beacon.recordW5Teardown(
+          _lastTeardown!.summary,
+          aliasClass: _lastTeardown!.requested.name,
+        );
+        _lastTeardownRecorded = ack['recorded'] == true;
       }
       await _showUndo();
       return true;

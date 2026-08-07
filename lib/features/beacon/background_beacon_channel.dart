@@ -457,14 +457,27 @@ class BackgroundBeaconChannel {
     }
   }
 
-  /// Diagnostic-only: record a pass teardown OUTCOME summary (already sanitized:
-  /// role names + counts, no raw ids) in the native evidence layer. No-op in a
-  /// release binary.
-  Future<void> recordW5Teardown(String outcome) async {
+  /// E-B1 durable teardown-evidence ACK (audit Finding 2): record a pass teardown
+  /// OUTCOME (sanitized: role names + counts, no raw ids) in the native evidence
+  /// layer and RETURN the native structured acknowledgment
+  /// `{ok, recorded, reason, aliasClass}` from the real serialized append. A
+  /// channel error, or a null/invalid reply, is reported as `recorded: false` and
+  /// NEVER swallowed as a success. `aliasClass` (fresh|stale|unavailable) is
+  /// forwarded so a stale hit cannot be mistaken for a fresh Case-4 teardown.
+  Future<Map<String, Object?>> recordW5Teardown(
+    String outcome, {
+    String aliasClass = 'unavailable',
+  }) async {
     try {
-      await _channel.invokeMethod<void>('recordW5Teardown', outcome);
+      final res = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+        'recordW5Teardown', {'outcome': outcome, 'aliasClass': aliasClass});
+      if (res == null) {
+        return {'ok': false, 'recorded': false, 'reason': 'null-ack', 'aliasClass': aliasClass};
+      }
+      return res.map((k, v) => MapEntry(k.toString(), v));
     } catch (e) {
       debugPrint('BackgroundBeacon recordW5Teardown failed: $e');
+      return {'ok': false, 'recorded': false, 'reason': 'channel-error', 'aliasClass': aliasClass};
     }
   }
 

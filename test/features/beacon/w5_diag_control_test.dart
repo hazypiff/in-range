@@ -46,6 +46,47 @@ void main() {
     expect(calls.single.method, 'disarmW5Fault');
   });
 
+  // AUDIT FINDING 2 (E-B1): recordW5Teardown must RETURN the native durable-write
+  // acknowledgment and NEVER swallow a failure as success.
+  test('recordW5Teardown forwards {outcome,aliasClass} and returns the ack',
+      () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      return <String, Object?>{
+        'ok': true, 'recorded': true, 'reason': 'recorded', 'aliasClass': 'fresh',
+      };
+    });
+    final ack = await bb.recordW5Teardown('teardown-ended(roles=outbound)', aliasClass: 'fresh');
+    expect(calls.single.method, 'recordW5Teardown');
+    final args = Map<String, dynamic>.from(calls.single.arguments as Map);
+    expect(args['outcome'], 'teardown-ended(roles=outbound)');
+    expect(args['aliasClass'], 'fresh');
+    expect(ack['recorded'], true);
+    expect(ack['reason'], 'recorded');
+    expect(ack['aliasClass'], 'fresh');
+  });
+
+  test('recordW5Teardown reports recorded=false on a null native ack', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async => null);
+    final ack = await bb.recordW5Teardown('x', aliasClass: 'stale');
+    expect(ack['recorded'], false);
+    expect(ack['reason'], 'null-ack');
+    expect(ack['aliasClass'], 'stale');
+  });
+
+  test('recordW5Teardown reports recorded=false on a channel error', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      throw PlatformException(code: 'boom');
+    });
+    final ack = await bb.recordW5Teardown('x', aliasClass: 'unavailable');
+    expect(ack['recorded'], false);
+    expect(ack['reason'], 'channel-error');
+    expect(ack['aliasClass'], 'unavailable');
+  });
+
   test('resetW5Case invokes the native case-reset control', () async {
     await bb.resetW5Case();
     expect(calls.single.method, 'resetW5Case');

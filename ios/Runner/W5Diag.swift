@@ -96,6 +96,20 @@ enum W5Diag {
     #endif
   }
 
+  /// E-B1 durable teardown-evidence acknowledgment (audit Finding 2). Public entry:
+  /// acquires the writer lock and returns the structured `{ok, recorded, reason,
+  /// aliasClass}` from the real append result. Release build: no diag evidence
+  /// exists, so it reports `recorded=false` honestly (never a false success).
+  static func recordTeardownOutcome(outcome: String, aliasClass: String) -> [String: Any] {
+    #if INRANGE_DIAG
+      return eventWriter.withLock {
+        recordTeardownOutcomeLocked(outcome: outcome, aliasClass: aliasClass)
+      }
+    #else
+      return ["ok": true, "recorded": false, "reason": "release", "aliasClass": aliasClass]
+    #endif
+  }
+
   #if INRANGE_DIAG
     /// C4: a handled emit held (raw args) until the launch key is confirmed.
     private struct PendingEmit {
@@ -158,10 +172,15 @@ enum W5Diag {
 
     /// Build + append one event under the CURRENT session snapshot. Caller holds
     /// the events-writer lock. Shared by emit() (key-confirmed) and the flush.
+    /// Returns the REAL durable-append result (true iff the JSONL line was written
+    /// to disk), so a caller that needs a durability acknowledgment (E-B1 teardown
+    /// evidence) can fail closed on a write/protection/encode failure instead of
+    /// assuming success.
+    @discardableResult
     private static func emitObjectLocked(
       event: Event, role: Role?, peer: String?, lease: String?, link: String?,
       peripheral: String?, result: String?, reason: String?, count: Int?
-    ) {
+    ) -> Bool {
       let snap = sessionSnapshotLocked()
       var obj: [String: Any] = [
         "v": 1,
@@ -189,9 +208,41 @@ enum W5Diag {
         let s = String(data: data, encoding: .utf8)
       else {
         eventWriter.droppedLocked("encode")
-        return
+        return false
       }
-      _ = eventWriter.appendLocked(s + "\n")
+      return eventWriter.appendLocked(s + "\n")
+    }
+
+    /// E-B1 durable teardown-evidence recorder (audit Finding 2). Emits the pass
+    /// teardown OUTCOME and returns a raw-id-free STRUCTURED ACKNOWLEDGMENT built
+    /// from the REAL serialized append result — so the widget can await a durable
+    /// write and never *report* a hardware-proof teardown that did not persist.
+    /// FAILS CLOSED (recorded=false, with a typed reason) when the session is a
+    /// destroyed/unprovisioned key, the launch key is not yet confirmed, encoding
+    /// fails, or the evidence writer reports an append/durability failure.
+    /// `aliasClass` (fresh|stale|unavailable) is echoed so a stale hit can never be
+    /// mistaken for the required FRESH Case-4 teardown.
+    static func recordTeardownOutcomeLocked(
+      outcome: String, aliasClass: String
+    ) -> [String: Any] {
+      if isDestroyedUnprovisioned {
+        eventWriter.droppedLocked("nokey")
+        return ["ok": true, "recorded": false, "reason": "nokey", "aliasClass": aliasClass]
+      }
+      if !isKeyConfirmedForLaunch {
+        // Cannot durably record under an unconfirmed launch key — fail closed;
+        // the caller keeps the product pass but marks evidence UNAVAILABLE.
+        return ["ok": true, "recorded": false, "reason": "key-unconfirmed", "aliasClass": aliasClass]
+      }
+      let recorded = emitObjectLocked(
+        event: .dropPeer, role: .app, peer: nil, lease: nil, link: nil,
+        peripheral: nil, result: outcome, reason: "passOutcome", count: nil)
+      return [
+        "ok": true,
+        "recorded": recorded,
+        "reason": recorded ? "recorded" : "append-failed",
+        "aliasClass": aliasClass,
+      ]
     }
 
     /// TEST-ONLY: count of currently buffered (unflushed) handled emits.

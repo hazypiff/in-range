@@ -470,13 +470,16 @@ final class BackgroundBeacon: NSObject {
         // E-B2: current armed handle / delay / eligible count for the UI.
         result(self.w5DiagStatus())
       case "recordW5Teardown":
-        // Diag-only: record a pass's teardown OUTCOME (already sanitized — role
-        // names + counts, no raw ids) in the structured evidence layer, so all
-        // four outcomes (tore / unavailable / stale-miss / native-unavailable)
-        // are operationally attributable, not just debugPrint'd.
-        W5Diag.emit(.dropPeer, role: .app, result: call.arguments as? String,
-          reason: "passOutcome")
-        result(nil)
+        // E-B1 durable evidence ACK (audit Finding 2): record the pass teardown
+        // OUTCOME (already sanitized — role names + counts, no raw ids) and return
+        // the STRUCTURED acknowledgment {ok, recorded, reason, aliasClass} built
+        // from the real serialized append, so Dart can await a durable write and
+        // never report a hardware-proof teardown that did not persist. Accepts the
+        // new {outcome, aliasClass} map, or a bare outcome String (back-compat).
+        let a = call.arguments as? [String: Any]
+        let outcome = (a?["outcome"] as? String) ?? (call.arguments as? String) ?? ""
+        let aliasClass = (a?["aliasClass"] as? String) ?? "unavailable"
+        result(W5Diag.recordTeardownOutcome(outcome: outcome, aliasClass: aliasClass))
       case "resetW5Case":
         // Owner ruling: RETAIN the fleet secret, rotate the public case epoch,
         // wipe evidence, clear controls + sequence. Returns a structured ack.

@@ -182,6 +182,36 @@ final class W5TeardownTests: XCTestCase {
       }
     }
 
+    // AUDIT FINDING 2 (E-B1): the durable teardown-evidence recorder returns an ACK
+    // built from the REAL serialized append result and FAILS CLOSED — the widget
+    // must never see a `recorded=true` it did not durably persist. The requested
+    // alias class (fresh|stale|unavailable) is echoed so a stale hit is never taken
+    // for a fresh Case-4 teardown.
+    func testRecordTeardownOutcomeAckFailsClosed() {
+      W5Diag.testEnvSecretOverride = nil
+      // (a) key CONFIRMED ⇒ durable append succeeds ⇒ recorded=true, class echoed.
+      W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))
+      let ok = W5Diag.recordTeardownOutcome(
+        outcome: "teardown-ended(roles=outbound,reaped=0)", aliasClass: "fresh")
+      XCTAssertEqual(ok["ok"] as? Bool, true)
+      XCTAssertEqual(ok["recorded"] as? Bool, true, "confirmed key ⇒ durably recorded")
+      XCTAssertEqual(ok["reason"] as? String, "recorded")
+      XCTAssertEqual(ok["aliasClass"] as? String, "fresh", "requested alias class echoed")
+      // (b) launch key UNCONFIRMED ⇒ cannot durably record ⇒ recorded=false.
+      W5Diag.beginLaunchKeyGate()  // no env override ⇒ isKeyConfirmedForLaunch=false
+      let pend = W5Diag.recordTeardownOutcome(outcome: "teardown-hit-noop", aliasClass: "stale")
+      XCTAssertEqual(pend["recorded"] as? Bool, false, "unconfirmed key ⇒ NOT recorded")
+      XCTAssertEqual(pend["reason"] as? String, "key-unconfirmed")
+      XCTAssertEqual(pend["aliasClass"] as? String, "stale")
+      // (c) DESTROYED/unprovisioned ⇒ fail closed with nokey, never a false success.
+      W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))  // re-confirm to allow destroy
+      _ = W5Diag.destroySessionSecret(w5Quiescent: true)
+      let dead = W5Diag.recordTeardownOutcome(outcome: "teardown-unavailable(native)", aliasClass: "unavailable")
+      XCTAssertEqual(dead["recorded"] as? Bool, false, "destroyed session ⇒ NOT recorded")
+      XCTAssertEqual(dead["reason"] as? String, "nokey")
+      XCTAssertEqual(dead["aliasClass"] as? String, "unavailable")
+    }
+
     // R4: a restored IN-GRACE live encounter carries NO handle/peripheral, so
     // every adapter map/timer is empty — yet ownership.activeLeases == 1. Real
     // quiescence must count the lease: isW5Quiescent MUST be false and secret
