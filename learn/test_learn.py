@@ -267,7 +267,8 @@ class EndToEndTest(unittest.TestCase):
             d = os.path.join(tmp, f"2026-07-2{i}-walk")
             os.makedirs(d)
             p = os.path.join(d, "walk.json")
-            json.dump(synth_walk(rng), open(p, "w"))
+            with open(p, "w", encoding="utf-8") as walk_file:
+                json.dump(synth_walk(rng), walk_file)
             walks.append(p)
         dataset = os.path.join(tmp, "dataset.jsonl")
         registry = os.path.join(tmp, "registry")
@@ -292,14 +293,18 @@ class EndToEndTest(unittest.TestCase):
         run_id = [l for l in r.stdout.splitlines()
                   if l.startswith("RUN_ID=")][0].split("=", 1)[1]
         self.assertEqual(run_id, runs[0])
-        model = json.load(open(os.path.join(registry, runs[0], "model.json")))
+        with open(os.path.join(registry, runs[0], "model.json"),
+                  encoding="utf-8") as model_file:
+            model = json.load(model_file)
         self.assertEqual(model["schema"], "inrange-gnb-1")
         self.assertTrue(model["dataset_sha256"])
         self.assertTrue(model["cv"]["held_out"])
         # synth walks carry no manifest -> every walk unverified -> recorded
         # in the artifact and called out in the report
         self.assertEqual(len(model["cv"]["unverified_walks"]), 2)
-        report = open(os.path.join(registry, runs[0], "report.md")).read()
+        with open(os.path.join(registry, runs[0], "report.md"),
+                  encoding="utf-8") as report_file:
+            report = report_file.read()
         self.assertIn("UNVERIFIED", report)
 
         # idempotent publish: identical rerun must not crash or clobber
