@@ -1,0 +1,10 @@
+ATTESTATION — kimi -m kimi-code/k3 — In Range W5 Release-isolation fix — exact SHA 2f29b52
+Reviewer: kimi-code/k3 (independent non-author). Date: 2026-08-07.
+Context: Findings 1-3 dual-approved at a5c85c5; this re-review covers ONLY the
+Release-symbol isolation fix.
+---
+VERDICT: APPROVE
+ISOLATION-FIX: OK
+DIAG-PATH-UNCHANGED: OK
+RELEASE-FAILCLOSED: OK
+TOP-RISK: The inline Release ack shape in BackgroundBeacon could silently drift from the diag ack shape over time (maintainability note; not a defect).
