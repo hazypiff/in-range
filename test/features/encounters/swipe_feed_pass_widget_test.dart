@@ -11,6 +11,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:in_range/core/config/app_config.dart';
 import 'package:in_range/core/session/app_session.dart';
 import 'package:in_range/features/encounters/encounters_provider.dart';
 import 'package:in_range/features/encounters/local_encounter_store.dart';
@@ -157,6 +158,81 @@ ENCOUNTER_REVEAL_DELAY_HOURS=0
       expect(drop, isNotNull, reason: 'a stale alias is still attempted natively');
       expect(drop!.arguments, 'stale00',
           reason: 'the alias crosses; the native miss (not a fabricated tear) is trusted');
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  // AUDIT FINDING 2 (E-B1): the durable-write ACK must be observed through the
+  // REAL widget pass, and the whole recording path must be compiled out of a
+  // release build. This single test asserts the kDiagBuild gate in BOTH
+  // directions: run under `--dart-define=INRANGE_DIAG=true` it exercises the
+  // diag branch (recordW5Teardown is invoked, its ack awaited, and the observable
+  // set true); run normally the branch const-folds away (no channel call, the
+  // observable stays null — evidence layer absent, never faked as recorded).
+  testWidgets(
+      'diag build records+awaits the teardown ack via the real pass; release '
+      'records nothing (kDiagBuild gate, both directions)', (tester) async {
+    final chan = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      chan.add(call);
+      if (call.method == 'dropPeer') {
+        // A committed hit ⇒ TeardownOutcome.tore, requested alias class 'fresh'.
+        return <String, dynamic>{
+          'lookupHit': true,
+          'leaseEnded': true,
+          'rawSessionsReaped': 1,
+          'rolesClosed': <String>['outbound'],
+        };
+      }
+      if (call.method == 'recordW5Teardown') {
+        // Native durably appended the sanitized outcome, echoing the class it
+        // was handed so a stale hit can never be laundered into a fresh one.
+        final args = Map<String, dynamic>.from(call.arguments as Map);
+        return <String, Object?>{
+          'ok': true,
+          'recorded': true,
+          'reason': 'recorded',
+          'aliasClass': args['aliasClass'],
+        };
+      }
+      return null;
+    });
+    final fresh = LocalEncounter(
+      correlationId: 'feedface',
+      firstSeenAt: DateTime.now(),
+      lastSeenAt: DateTime.now(),
+      bestRssi: -50,
+      rangeType: 'feet_10',
+    );
+    try {
+      await pumpFeed(tester, [fresh]);
+      await tester.tap(find.byIcon(Icons.close));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+
+      // Read the observable through the actual widget State (private type ⇒
+      // dynamic dispatch on the @visibleForTesting getter).
+      final dynamic state = tester.state(find.byType(SwipeFeed));
+      final recordCalls =
+          chan.where((c) => c.method == 'recordW5Teardown').toList();
+
+      if (AppConfig.kDiagBuild) {
+        expect(recordCalls, hasLength(1),
+            reason: 'diag build durably records the pass teardown natively');
+        final args = Map<String, dynamic>.from(recordCalls.single.arguments as Map);
+        expect(args['outcome'], isNotNull, reason: 'the sanitized outcome crosses');
+        expect(args['aliasClass'], 'fresh',
+            reason: 'a fresh committed hit forwards the fresh alias class, not stale');
+        expect(state.lastTeardownRecorded, isTrue,
+            reason: 'recorded==true was AWAITED and observed end-to-end via _doPass');
+      } else {
+        expect(recordCalls, isEmpty,
+            reason: 'release build makes NO diagnostic record channel call');
+        expect(state.lastTeardownRecorded, isNull,
+            reason: 'release never sets the observable — the evidence layer is absent');
+      }
     } finally {
       debugDefaultTargetPlatformOverride = null;
     }
