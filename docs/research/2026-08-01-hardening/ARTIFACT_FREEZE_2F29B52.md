@@ -1,5 +1,14 @@
 # Replacement diagnostic artifact — freeze manifest (audit step 5)
 
+> **HOLD (independent audit, 2026-08-07):** Do not install this artifact for the
+> final matrix. The build had two untracked files present, so it does not satisfy
+> the controlling directive's requirement to build from a clean separate
+> detached worktree. The executable source is not known to be defective, but
+> the artifact provenance is inadmissible for the final evidence tuple. Rebuild
+> once from a clean detached worktree after the exact native CI floor is updated
+> from 103 to 105, then replace this manifest with the new hashes and inspection
+> results.
+
 Supersedes the a3ff0b4-era artifact. Findings 1-3 (+ the Release-isolation fix)
 are complete and dual-approved; this records the ONE signed diagnostic artifact
 built, signed, inspected, and frozen from the approved source, for the step-6
@@ -11,8 +20,9 @@ three-phone hardware rerun. The a3ff0b4 provisional evidence is NOT reused.
   - Release-isolation fix dual-approved at `2f29b52` (codex APPROVE/TOP-RISK NONE;
     kimi APPROVE). See `ATTESTATION_*_A5C85C5.txt`, `FINDING1_CONVERGENCE_A5C85C5.md`,
     and the isolation re-review below.
-- Built from a clean working tree (only two untracked, unrelated audit docs present;
-  not compiled, not committed — no effect on artifact provenance).
+- Built with two untracked, unrelated audit docs present. They were not compiled
+  or committed and do not indicate a byte-level defect, but this was **not** the
+  clean detached worktree required by the controlling directive; see HOLD above.
 
 ## Artifact
 - Bundle id: `io.inrange.inRange.diag` (diag flavor, issue-#8 isolation).
@@ -70,6 +80,8 @@ same `2f29b52` source and hashed as the negative control:
   ack over time (maintainability note; not a defect).
 
 ## Next (step 6 — PHYSICAL_ACTION_REQUIRED)
-Request slotC; install THIS frozen artifact on all three phones; rerun the complete
-preflight + Cases 1-4. Do NOT reuse a3ff0b4's provisional evidence. Advance PR #11
-head non-force only after clean signatures + approval.
+Rebuild from a clean detached worktree and replace this held manifest first.
+Then request slotC; install only the replacement frozen artifact on all three
+phones; rerun the complete preflight + Cases 1-4. Do NOT reuse a3ff0b4's
+provisional evidence. Advance PR #11 head non-force only after clean signatures
+and approval.

@@ -87,10 +87,10 @@ jobs:
             -parallel-testing-enabled NO \
             -maximum-concurrent-test-simulator-destinations 1 \
             CODE_SIGNING_ALLOWED=NO | tee xcodebuild-diag.log | grep -E "Test [Cc]ase|Executed|TEST" || true
-          # A.1-4: PIN THE EXACT discovered set (=103), not just a lower bound; the
+          # A.1-4: PIN THE EXACT discovered set (=105), not just a lower bound; the
           # diag scheme must run the named A5 test (no environment skip). A dropped
           # OR an added test fails the pinned gate.
-          bash ../scripts/assert_native_tests.sh xcodebuild-diag.log =103 \
+          bash ../scripts/assert_native_tests.sh xcodebuild-diag.log =105 \
             testHandleUsesProvisionedRunSecret
 
       - name: Record authoritative native test counts + log hashes
