@@ -74,6 +74,17 @@ assert_no_symlink_component() {
 assert_no_symlink_component "$EVIDENCE_ROOT"
 mkdir -p "$EVIDENCE_ROOT"
 assert_no_symlink_component "$EVIDENCE_ROOT"
+# Literal comparisons do not catch root-equivalent spellings such as /./ or
+# //. Resolve the already-created, symlink-free directory physically before
+# deciding whether it is an admissible evidence container.
+EVIDENCE_ROOT="$(cd -P "$EVIDENCE_ROOT" && pwd -P)" || {
+  echo "ARTIFACT NATIVE GATE FAIL: evidence root cannot be resolved" >&2
+  exit 1
+}
+[ "$EVIDENCE_ROOT" != "/" ] || {
+  echo "ARTIFACT NATIVE GATE FAIL: evidence root is too broad" >&2
+  exit 1
+}
 EVIDENCE_DIR="$(mktemp -d "$EVIDENCE_ROOT/native-$SOURCE_SHA.XXXXXX")"
 EVIDENCE_LABEL="$(basename "$EVIDENCE_DIR")"
 

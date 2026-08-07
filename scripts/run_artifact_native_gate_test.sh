@@ -126,6 +126,16 @@ if env PATH="$TMP/bin:$PATH" bash "$GATE" "$SHA" / >/dev/null 2>&1; then
 else
   ok "filesystem-root evidence target rejected"
 fi
+cp "$HERE/fixtures/fake_artifact_mktemp.sh" "$TMP/bin/mktemp"
+chmod 700 "$TMP/bin/mktemp"
+for root_spelling in /./ //; do
+  if env PATH="$TMP/bin:$PATH" FAKE_WRITABLE_ROOT_DIR="$TMP/fake-root" \
+    bash "$GATE" "$SHA" "$root_spelling" >/dev/null 2>&1; then
+    bad "root-equivalent evidence spelling rejected (expected FAIL)"
+  else
+    ok "root-equivalent evidence spelling rejected"
+  fi
+done
 
 printf '%s\n' '----'
 if [ "$FAILS" -eq 0 ]; then
