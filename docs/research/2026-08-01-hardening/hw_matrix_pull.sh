@@ -193,42 +193,29 @@ pull() {
   fi
   if [ "$rc" -eq 0 ]; then echo "  pulled $1"; return 0; fi
   rm -f "$RAW/$1"   # discard any partial bytes a failed copy left behind
-  # Classify on the ERROR content ONLY, not devicectl's benign timestamped PROGRESS
-  # lines. Real devicectl prints progress like "20:04:03  Acquired tunnel connection
-  # to device." — the word "device" there is NOT a device-lookup FAILURE (the device
-  # was reached), yet the fail-closed override below matched it and wrongly called a
-  # simple missing SOURCE FILE a fatal transport error (hardware preflight). Strip
-  # `HH:MM:SS`-prefixed progress lines; the real error(s) (ERROR:/CoreDeviceError)
-  # are never timestamp-prefixed and survive.
-  local errc
-  errc="$(printf '%s\n' "$err" | grep -Ev '^[[:space:]]*[0-9]{2}:[0-9]{2}:[0-9]{2}[[:space:]]' || true)"
-  # An ACCEPTABLE ABSENCE is a not-found that names the SOURCE FILE and blames
-  # NOTHING in the infrastructure lookup chain. FAIL CLOSED: if the error mentions
-  # the app-data CONTAINER, the application, a domain, the DEVICE, or a UDID —
-  # anywhere, in any phrasing — the lookup itself is uncertain and this is FATAL,
-  # never an absent optional file (a bare 'not found' or a `no such device`-only
-  # override wrongly published cases that had dropped a real artifact — codex A4).
-  # Only after that override does a source-file-specific not-found count as absent.
-  # (`device`/`udid` are matched as whole WORDS — the string is space-padded so a
-  # leading/trailing token still has a boundary, and `deviced_foo` never matches.
-  # A no-anchor bracket pair is used because BSD grep mishandles `(^|…)` before an
-  # alternation group.)
-  if printf '%s' "$errc" | grep -Eqi \
-        'container|appdatacontainer|application|not installed|domain[- ]?identifier|domain[- ]?type|no such (app|application|domain|user)' \
-     || printf ' %s ' "$errc" | grep -Eqi \
-        '[^[:alnum:]](device|udid)[^[:alnum:]]'; then
-    :   # container/app/domain/device/udid lookup failure — fall through to FATAL
-  elif printf '%s' "$errc" | grep -Eqi \
-        '(no such file|does not exist|file ?not ?found|filenotfound|no matching|failed to retrieve the file node|coredeviceerror error 7000)' \
-     && { printf '%s' "$errc" | grep -qiF "$1" \
-          || printf '%s' "$errc" | grep -qiF "Documents/$1"; }; then
-    # Real-device absence signatures added after the container/app/domain/device
-    # override above: `xcrun devicectl` reports a genuinely missing SOURCE FILE as
-    # "Failed to retrieve the file node for Documents/<file> (com.apple.dt.
-    # CoreDeviceError error 7000)". A container/domain/app-lookup failure carries a
-    # DIFFERENT message and is already caught by the fatal override, so classifying
-    # a 7000 that NAMES the source file as absent is safe (hardware preflight).
-    echo "  (absent $1)"; return 0   # verified not-found of the SOURCE FILE
+  # ABSENCE CLASSIFICATION (audit Finding 1 — must FAIL CLOSED on any fatal signal).
+  # 1) Strip ONLY an EXACT allowlist of known-benign devicectl PROGRESS messages
+  #    (optionally `HH:MM:SS`-prefixed). We must NEVER drop a line merely because it
+  #    starts with a clock — a timestamped device/permission/trust failure must
+  #    survive for fail-closed evaluation.
+  local errc benign
+  benign='Acquired tunnel connection to device\.|Enabling developer disk image services\.|Acquired usage assertion\.|Configuring the device for use\.|Waiting for the device to unlock\.|Preparing the device for use\.'
+  errc="$(printf '%s\n' "$err" | grep -Ev "^[[:space:]]*([0-9]{2}:[0-9]{2}:[0-9]{2}[[:space:]]+)?(${benign})[[:space:]]*$" || true)"
+  # 2) The ONLY acceptable absence is the COMPOUND CoreDevice shape naming THIS
+  #    source, OR a classic exact not-found naming THIS source — AND with NO other
+  #    unexplained line remaining. Build the recognized-absence-for-this-source
+  #    matcher, then require: at least one such line exists, and EVERY non-empty
+  #    line of errc is such a line (anything else = unexplained ⇒ FATAL).
+  local abs_re have_abs non_abs
+  abs_re="(failed to retrieve the file node for (documents/)?${1}([^0-9a-z]|$).*coredeviceerror error 7000)|((no such file|does not exist|file ?not ?found|filenotfound).*${1})"
+  have_abs="$(printf '%s\n' "$errc" | grep -iE "$abs_re" || true)"
+  non_abs="$(printf '%s\n' "$errc" | grep -vE '^[[:space:]]*$' | grep -viE "$abs_re" || true)"
+  # Defensive fatal override: even a lone would-be absence line is FATAL if it also
+  # carries an infra/permission/trust/lock/device/udid/container/app/domain signal.
+  if [ -n "$have_abs" ] && [ -z "$non_abs" ] \
+     && ! printf ' %s ' "$errc" | grep -Eqi \
+        'container|appdatacontainer|application|not installed|domain[- ]?identifier|domain[- ]?type|no such (app|application|domain|user)|permission|denied|not permitted|operation not permitted|untrusted|pairing|passcode|[^[:alnum:]](device|udid|locked|trust)[^[:alnum:]]'; then
+    echo "  (absent $1)"; return 0   # verified not-found of the SOURCE FILE (nothing else unexplained)
   fi
   echo "ERROR: pull of '$1' failed (transport/permission/container) — not a" >&2
   echo "       verified absence; refusing to publish an uncertain case:" >&2

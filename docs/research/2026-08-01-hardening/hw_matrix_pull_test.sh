@@ -82,6 +82,24 @@ case " ${DEVICE_FAIL:-} " in
     echo "error: $base: file not found because device test-udid was not found" >&2
     exit 1 ;;
 esac
+# DEVFAIL_7000 (audit Finding 1, repro 1): a TIMESTAMPED device-lookup failure
+# followed by an unprefixed CoreDeviceError-7000 line naming the source. A
+# classifier that strips every clock-prefixed line would drop the real device
+# failure and wrongly call this absent. It is FATAL.
+case " ${DEVFAIL_7000:-} " in
+  *" $base "*)
+    echo "20:04:03  Failed to locate device test-udid on the local network." >&2
+    echo "ERROR: Failed to retrieve the file node for Documents/$base (com.apple.dt.CoreDeviceError error 7000 (0x1B58))" >&2
+    exit 1 ;;
+esac
+# PERMFAIL_7000 (audit Finding 1, repro 2): a permission-denied error PLUS the
+# CoreDeviceError-7000 line naming the source. FATAL, never absent.
+case " ${PERMFAIL_7000:-} " in
+  *" $base "*)
+    echo "ERROR: permission denied while opening Documents/$base" >&2
+    echo "ERROR: Failed to retrieve the file node for Documents/$base (com.apple.dt.CoreDeviceError error 7000 (0x1B58))" >&2
+    exit 1 ;;
+esac
 if [ -f "${FIXTURES:?}/$base" ]; then cp "${FIXTURES}/$base" "$dst"; exit 0; fi
 # A MISSING fixture models a VERIFIED not-found on the device — emitted in the
 # REAL `xcrun devicectl` shape: benign timestamped PROGRESS lines (one of which
@@ -651,6 +669,31 @@ df_rc=$?
 [ "$df_rc" -eq 8 ] && [ ! -e "$SB_DF/work/hardware_evidence/caseDF" ] \
   && ok "device-not-found naming the source file still aborts (exit 8)" \
   || bad "device-not-found misclassified as absence (rc=$df_rc)"
+
+# 34d. AUDIT FINDING 1 repro 1: a TIMESTAMPED device-lookup failure followed by a
+# CoreDeviceError-7000 line MUST be FATAL (exit 8) — a classifier that strips every
+# clock-prefixed line would drop the device failure and wrongly publish an absence.
+SB_D7="$(make_sandbox)"; valid_fixtures "$SB_D7"
+( cd "$SB_D7/work" && HW_MATRIX_XCRUN="$SB_D7/bin/xcrun" FIXTURES="$SB_D7/fixtures" \
+  XCRUN_MARKER="$SB_D7/m" DEVFAIL_7000="w5_rssi_log.jsonl" \
+  INRANGE_DIAG_RUN_SECRET="$SECRET" \
+  bash ./hw_matrix_pull.sh test-udid iphone14 caseD7 ) >/dev/null 2>&1
+d7_rc=$?
+[ "$d7_rc" -eq 8 ] && [ ! -e "$SB_D7/work/hardware_evidence/caseD7" ] \
+  && ok "timestamped device-failure + error 7000 aborts (exit 8), not absence" \
+  || bad "device-failure+7000 misclassified as absence (rc=$d7_rc)"
+
+# 34e. AUDIT FINDING 1 repro 2: permission-denied PLUS a CoreDeviceError-7000 line
+# MUST be FATAL (exit 8) — never an absence.
+SB_P7="$(make_sandbox)"; valid_fixtures "$SB_P7"
+( cd "$SB_P7/work" && HW_MATRIX_XCRUN="$SB_P7/bin/xcrun" FIXTURES="$SB_P7/fixtures" \
+  XCRUN_MARKER="$SB_P7/m" PERMFAIL_7000="w5_rssi_log.jsonl" \
+  INRANGE_DIAG_RUN_SECRET="$SECRET" \
+  bash ./hw_matrix_pull.sh test-udid iphone14 caseP7 ) >/dev/null 2>&1
+p7_rc=$?
+[ "$p7_rc" -eq 8 ] && [ ! -e "$SB_P7/work/hardware_evidence/caseP7" ] \
+  && ok "permission-denied + error 7000 aborts (exit 8), not absence" \
+  || bad "permission-denied+7000 misclassified as absence (rc=$p7_rc)"
 
 # 35. VERIFIED-ABSENT optional artifact publishes normally (exit 0): missing on
 # device is fine, only the primary is mandatory.
