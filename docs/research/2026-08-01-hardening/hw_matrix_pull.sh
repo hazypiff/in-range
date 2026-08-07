@@ -242,20 +242,22 @@ pull() {
   # signal embedded in the SAME line — is unexplained ⇒ FATAL. This fails CLOSED
   # on fatal vocabulary we never enumerated, instead of chasing a denylist.
   # The residue check extracts BOTH alphabetic AND numeric tokens (kimi 392c27c):
-  # checking only [a-z] let a bare numeric/decimal fatal detail (e.g. an appended
-  # secondary error code) pass with empty residue. Allowed numerics are ONLY the
-  # CoreDeviceError file-not-found code '7000' and this source's own digit tokens.
-  local allow resid w
+  # checking only [a-z] let a bare numeric fatal detail pass with empty residue.
+  # But the source name's own tokens must NOT be globally allowlisted (codex
+  # 655976b): 'w5_rssi_log' contributes a '5', which would launder an appended
+  # fatal 'error 5'. Instead REMOVE the matched '(documents/)?<name>' occurrence
+  # from the line FIRST — so the name legitimately vanishes exactly where it
+  # appears — then the ONLY tokens that may remain are the fixed file-not-found
+  # vocabulary + the CoreDeviceError boilerplate + the '7000' code. ANY survivor —
+  # a stray word OR a stray number reusing a source digit — is unexplained ⇒ FATAL.
+  local allow resid qlc
   allow='failed|to|retrieve|the|file|node|for|documents|document|no|such|does|not|exist|found|filenotfound|com|apple|dt|coredeviceerror|error|7000'
-  # Split the source name into alpha AND numeric tokens the SAME way the residue is
-  # extracted (so e.g. 'w5' contributes both 'w' and '5'), else genuine digits
-  # would look like residue.
-  for w in $(printf '%s' "$1" | tr 'A-Z' 'a-z' | grep -oE '[a-z]+|[0-9]+'); do
-    allow="$allow|$w"   # this source's own name tokens are legitimately present
-  done
-  # Lowercase the sole absence line(s), drop 0x… hex codes, extract alpha+numeric
-  # tokens, keep only those NOT in the allowed vocabulary. Any survivor ⇒ fatal.
+  # Lowercased, ERE-escaped source name for the strip (have_abs is lowercased below).
+  qlc="$(printf '%s' "$1" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9_]/\\&/g')"
+  # Lowercase the sole absence line(s); REMOVE the exact matched filename/path and
+  # 0x… hex codes; extract alpha+numeric tokens; keep only those NOT allowed.
   resid="$(printf '%s\n' "$have_abs" | tr 'A-Z' 'a-z' \
+    | sed -E "s#(documents/)?${qlc}##g" \
     | sed -E 's/0x[0-9a-f]+//g' \
     | grep -oE '[a-z]+|[0-9]+' | grep -vxE "$allow" || true)"
   if [ -n "$have_abs" ] && [ -z "$non_abs" ] && [ -z "$resid" ]; then

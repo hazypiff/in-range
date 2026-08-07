@@ -185,6 +185,16 @@ case " ${NUMFATAL_7000:-} " in
     echo "ERROR: Failed to retrieve the file node for Documents/$base (com.apple.dt.CoreDeviceError error 7000 (0x1B58)) 13" >&2
     exit 1 ;;
 esac
+# DIGITREUSE_7000 (audit Finding 1, repro 11 — codex 655976b): an appended fatal
+# secondary code ('error 5') whose digit '5' is REUSED from the source name
+# 'w5_rssi_log.jsonl'. When source digits were globally allowlisted this laundered
+# through with empty residue. FATAL — after removing the matched filename itself,
+# the stray '5' (and 'error' is boilerplate) is unexplained residue.
+case " ${DIGITREUSE_7000:-} " in
+  *" $base "*)
+    echo "ERROR: Failed to retrieve the file node for Documents/w5_rssi_log.jsonl (com.apple.dt.CoreDeviceError error 7000 (0x1B58)) error 5" >&2
+    exit 1 ;;
+esac
 if [ -f "${FIXTURES:?}/$base" ]; then cp "${FIXTURES}/$base" "$dst"; exit 0; fi
 # A MISSING fixture models a VERIFIED not-found on the device — emitted in the
 # REAL `xcrun devicectl` shape: benign timestamped PROGRESS lines (one of which
@@ -899,6 +909,20 @@ nf_rc=$?
 [ "$nf_rc" -eq 8 ] && [ ! -e "$SB_NF/work/hardware_evidence/caseNF" ] \
   && ok "unexplained appended numeric detail aborts (exit 8), not absence" \
   || bad "numeric fatal detail misclassified as absence (rc=$nf_rc)"
+
+# 34o. AUDIT FINDING 1 repro 11 (codex 655976b): an appended fatal 'error 5' whose
+# digit reuses the source name ('w5') MUST be FATAL — the residue gate now removes
+# the matched filename itself (rather than globally allowlisting source tokens),
+# so the stray '5' cannot be laundered. RED.
+SB_DR="$(make_sandbox)"; valid_fixtures "$SB_DR"
+( cd "$SB_DR/work" && HW_MATRIX_XCRUN="$SB_DR/bin/xcrun" FIXTURES="$SB_DR/fixtures" \
+  XCRUN_MARKER="$SB_DR/m" DIGITREUSE_7000="w5_rssi_log.jsonl" \
+  INRANGE_DIAG_RUN_SECRET="$SECRET" \
+  bash ./hw_matrix_pull.sh test-udid iphone14 caseDR ) >/dev/null 2>&1
+dr_rc=$?
+[ "$dr_rc" -eq 8 ] && [ ! -e "$SB_DR/work/hardware_evidence/caseDR" ] \
+  && ok "appended fatal reusing a source digit ('error 5') aborts (exit 8)" \
+  || bad "source-digit-reuse fatal misclassified as absence (rc=$dr_rc)"
 
 # 35. VERIFIED-ABSENT optional artifact publishes normally (exit 0): missing on
 # device is fine, only the primary is mandatory.
