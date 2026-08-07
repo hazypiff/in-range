@@ -534,6 +534,10 @@ final class W5LinkController {
       // MISS: no live lease for this alias (server-id-as-alias, rotated-away,
       // or dropped mid-handshake). Report honestly; no teardown occurred here.
       W5Diag.emit(.dropPeer, peer: alias, result: "miss")
+      // Case-4 proof: on an idempotent REPEAT drop the alias is already gone, so
+      // the surviving-lease count is UNCHANGED — no other peer's lease was
+      // collateral-damaged by the no-op.
+      W5Diag.emit(.leaseLiveness, peer: alias, result: "miss", count: ownership.activeLeases)
       return res
     }
     let fx = ownership.onTeardown(leaseId: lease)
@@ -547,6 +551,12 @@ final class W5LinkController {
       result: res.leaseEnded ? "ended" : "hit",
       reason: res.rolesClosed.isEmpty ? "none" : res.rolesClosed.joined(separator: "+"),
       count: res.rolesClosed.count)
+    // Case-4 "unswiped positive control": after tearing down THIS lease, record
+    // how many leases remain live. A concurrently-mapped, un-passed peer's lease
+    // must survive (count stays ≥1 when another peer is present), proving the
+    // teardown is scoped to the dismissed alias and not a blanket wipe.
+    W5Diag.emit(.leaseLiveness, peer: alias, lease: lease,
+      result: res.leaseEnded ? "ended" : "hit", count: ownership.activeLeases)
     return res
   }
 

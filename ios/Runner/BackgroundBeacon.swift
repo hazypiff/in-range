@@ -1636,6 +1636,12 @@ extension BackgroundBeacon: CBCentralManagerDelegate, CBPeripheralDelegate {
       reaped += 1
     }
     result["rawSessionsReaped"] = reaped
+    // Case-4 proof: the raw CA5E/token session reap is a DISTINCT teardown fact
+    // from the ownership-lease drop above, and until now it lived only in this
+    // Dart return value — never in the durable ledger. Emit it (handle-only,
+    // just the count) so "raw sessions reaped" is auditable from the evidence,
+    // and an idempotent repeat is provable as reaped:0.
+    W5Diag.emit(.dropReap, peer: tokenHex, count: reaped)
     return result
   }
 

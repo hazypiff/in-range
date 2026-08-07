@@ -27,6 +27,14 @@ enum W5Diag {
     case commit, linkDown, graceEnter, graceBypass, graceExpiry
     case aliasRollSend, aliasRollRecv, prevAliasExpiry
     case dropPeer
+    // Audit Finding 3 (E-B1, Case-4 proof): teardown RESULT observability that
+    // the single .dropPeer event cannot carry. .dropReap records how many raw
+    // CA5E/token sessions the pass reaped (previously only in the Dart return,
+    // never durable); .leaseLiveness records the count of leases STILL LIVE after
+    // a targeted teardown — the "unswiped positive control" and idempotent-repeat
+    // proof. Both are handle-only counts, both compile out of the production
+    // bundle with the rest of the emit path, and NEITHER vetoes a later dial.
+    case dropReap, leaseLiveness
     case restoreCentral, restorePeriph, restoreRebind, coldLaunch, snapshotLoad
     case boot, beat, parted
     case faultInject

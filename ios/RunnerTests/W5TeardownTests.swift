@@ -182,6 +182,72 @@ final class W5TeardownTests: XCTestCase {
       }
     }
 
+    // AUDIT FINDING 3 (E-B1, Case-4 proof events): the two teardown FACTS the
+    // single .dropPeer line cannot carry must now be in the DURABLE ledger:
+    // (1) raw sessions reaped (.dropReap) and (2) the "unswiped positive control"
+    // — after tearing down ONE mapped lease, a concurrently-mapped un-passed
+    // peer's lease MUST survive (.leaseLiveness count stays ≥1). Also proves the
+    // idempotent repeat leaves the survivor untouched. Handle-only counts; the
+    // whole emit path compiles out of production.
+    func testDropEmitsReapAndLeaseLivenessPositiveControl() throws {
+      let docs = FileManager.default.urls(
+        for: .documentDirectory, in: .userDomainMask)[0]
+      let url = docs.appendingPathComponent("w5_events.jsonl")
+      try? FileManager.default.removeItem(at: url)
+      try? FileManager.default.removeItem(
+        at: docs.appendingPathComponent("w5_events.1.jsonl"))
+      W5Diag.testEnvSecretOverride = nil
+      W5Diag.provisionRunSecret(String(repeating: "ab", count: 32))  // confirms launch key
+      let bb = BackgroundBeacon()
+      try withExtendedLifetime(bb) {
+        bb.testEnableW5Links()
+        // TWO concurrently-mapped committed leases: aliasZ is passed, aliasY is
+        // the un-passed positive control that must survive the targeted drop.
+        bb.w5Link.testSeedOutboundLink(
+          peripheralID: UUID(), myCand: "cand-a", peerCand: "cand-b",
+          alias: "aliasZ", linkId: "L-Z")
+        bb.w5Link.testSeedOutboundLink(
+          peripheralID: UUID(), myCand: "cand-c", peerCand: "cand-d",
+          alias: "aliasY", linkId: "L-Y")
+        XCTAssertEqual(bb.w5Link.testActiveLeaseCount, 2, "both leases live")
+
+        let d = bb.dropPeerByToken("aliasZ")
+        XCTAssertEqual(d["leaseEnded"] as? Bool, true, "aliasZ torn down")
+        // aliasY untouched by the targeted drop.
+        XCTAssertEqual(bb.w5Link.testActiveLeaseCount, 1, "aliasY survives in state")
+
+        func objs() throws -> [[String: Any]] {
+          try String(contentsOf: url, encoding: .utf8)
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .compactMap {
+              try JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]
+            }
+        }
+        let after1 = try objs()
+        // (1) .dropReap is now durable (0 here — no raw CBPeripheral session seeded).
+        let reap = after1.filter { $0["event"] as? String == "dropReap" }
+        XCTAssertEqual(reap.count, 1, "raw-session reap is recorded in the ledger")
+        XCTAssertEqual((reap.first?["count"] as? NSNumber)?.intValue, 0)
+        // (2) .leaseLiveness positive control: exactly one survivor after the tear.
+        let live = after1.filter { $0["event"] as? String == "leaseLiveness" }
+        XCTAssertEqual(live.count, 1)
+        XCTAssertEqual(live.first?["result"] as? String, "ended")
+        XCTAssertEqual((live.first?["count"] as? NSNumber)?.intValue, 1,
+          "the un-passed aliasY lease survives the targeted teardown")
+
+        // Idempotent REPEAT: aliasZ is already gone ⇒ miss, and the survivor
+        // count is UNCHANGED — the no-op did not collateral-damage aliasY.
+        _ = bb.dropPeerByToken("aliasZ")
+        let repeatLive = try objs().filter {
+          $0["event"] as? String == "leaseLiveness"
+            && $0["result"] as? String == "miss"
+        }
+        XCTAssertEqual(repeatLive.count, 1, "repeat drop records a miss-liveness")
+        XCTAssertEqual((repeatLive.first?["count"] as? NSNumber)?.intValue, 1,
+          "aliasY still live after the idempotent repeat")
+      }
+    }
+
     // AUDIT FINDING 2 (E-B1): the durable teardown-evidence recorder returns an ACK
     // built from the REAL serialized append result and FAILS CLOSED — the widget
     // must never see a `recorded=true` it did not durably persist. The requested
