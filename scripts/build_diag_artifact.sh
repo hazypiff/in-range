@@ -21,6 +21,20 @@ SOURCE_SHA="$(git rev-parse HEAD)"
 # build-setting generator cannot silently mutate the candidate in between.
 bash scripts/check_artifact_build_context.sh "$PWD" "$SOURCE_SHA" inputs-only
 
+# B3 fleet alignment: bake one shared W5-event run secret into the diagnostic
+# build so HMAC handles align across devices and survive OS restoration. Match
+# the native decoder's contract exactly and fail before any generator runs.
+RUN_SECRET="${INRANGE_DIAG_RUN_SECRET:-}"
+RUN_SECRET_LEN="${#RUN_SECRET}"
+if [ "$RUN_SECRET_LEN" -lt 64 ] \
+  || [ $((RUN_SECRET_LEN % 2)) -ne 0 ] \
+  || [[ "$RUN_SECRET" == *[!0-9a-fA-F]* ]]; then
+  echo "ERROR: set INRANGE_DIAG_RUN_SECRET to an even number of >= 64 HEX chars." >&2
+  echo "       (native rejects malformed values, so the builder must fail first.)" >&2
+  echo "       It is baked for fleet alignment; it is never generated or committed." >&2
+  exit 1
+fi
+
 echo "== gate 0: generate dependencies from the clean source tree =="
 flutter pub get
 flutter build ios --config-only --debug --no-codesign
@@ -40,23 +54,14 @@ bash scripts/check_final_binary_isolation.sh
 bash scripts/check_artifact_build_context.sh "$PWD" "$SOURCE_SHA" generated-ok
 
 echo "== gates passed → building diag artifact =="
-# B3 fleet alignment: bake a shared W5-event run secret into the diag build so
-# every device installed from THIS artifact shares HMAC handles AND they survive
-# OS restoration. The secret is provided ONLY via the INRANGE_DIAG_RUN_SECRET
-# env (never generated here, never committed). The build NEVER prints the value
-# — only a short fingerprint so the manifest can confirm fleet devices share the
-# same secret without exposing it.
-if ! printf '%s' "${INRANGE_DIAG_RUN_SECRET:-}" | grep -qE '^[0-9a-fA-F]{64,}$'; then
-  echo "ERROR: set INRANGE_DIAG_RUN_SECRET to >= 64 HEX chars in the environment." >&2
-  echo "       (native rejects non-hex silently, so a non-hex value must fail here.)" >&2
-  echo "       It is baked for fleet alignment; it is never generated or committed." >&2
-  exit 1
-fi
-RUN_SECRET_FP=$(printf '%s' "$INRANGE_DIAG_RUN_SECRET" | shasum -a 256 | cut -c1-12)
+# The value is provided only through the environment and never printed. Emit a
+# short fingerprint so the manifest can confirm fleet alignment without
+# exposing the secret itself.
+RUN_SECRET_FP=$(printf '%s' "$RUN_SECRET" | shasum -a 256 | cut -c1-12)
 flutter build ios --flavor diag --release --dart-define-from-file=.env \
   --dart-define=INRANGE_W5_LINKS=true \
   --dart-define=INRANGE_DIAG=true \
-  --dart-define=INRANGE_DIAG_RUN_SECRET="$INRANGE_DIAG_RUN_SECRET"
+  --dart-define=INRANGE_DIAG_RUN_SECRET="$RUN_SECRET"
 bash scripts/check_artifact_build_context.sh "$PWD" "$SOURCE_SHA" generated-ok
 APP="build/ios/iphoneos/Runner.app"
 echo "artifact: $APP"

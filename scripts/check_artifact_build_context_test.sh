@@ -119,6 +119,7 @@ printf '%s\n' \
   'exit 42' > "$TMP/bin/flutter"
 chmod 700 "$TMP/bin/flutter"
 MARKER="$TMP/builder-env-marker"
+VALID_SECRET="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 mkdir -p "$WT/build"
 printf 'preexisting ignored input\n' > "$WT/build/preexisting.bin"
 if env PATH="$TMP/bin:$PATH" ARTIFACT_ENV_MARKER="$MARKER" \
@@ -131,7 +132,29 @@ else
 fi
 rm -rf "$WT/build"
 rm -f "$MARKER"
+BAD_NEWLINE_SECRET="$VALID_SECRET"$'\n''not-hex'
 if env PATH="$TMP/bin:$PATH" ARTIFACT_ENV_MARKER="$MARKER" \
+  INRANGE_DIAG_RUN_SECRET="$BAD_NEWLINE_SECRET" \
+  bash "$WT/scripts/build_diag_artifact.sh" >/dev/null 2>&1; then
+  bad "builder rejects a newline-tailed run secret (expected nonzero)"
+elif [ -e "$MARKER" ]; then
+  bad "builder rejects a newline-tailed run secret before Flutter"
+else
+  ok "builder rejects a newline-tailed run secret before Flutter"
+fi
+rm -f "$MARKER"
+if env PATH="$TMP/bin:$PATH" ARTIFACT_ENV_MARKER="$MARKER" \
+  INRANGE_DIAG_RUN_SECRET="${VALID_SECRET}a" \
+  bash "$WT/scripts/build_diag_artifact.sh" >/dev/null 2>&1; then
+  bad "builder rejects an odd-length run secret (expected nonzero)"
+elif [ -e "$MARKER" ]; then
+  bad "builder rejects an odd-length run secret before Flutter"
+else
+  ok "builder rejects an odd-length run secret before Flutter"
+fi
+rm -f "$MARKER"
+if env PATH="$TMP/bin:$PATH" ARTIFACT_ENV_MARKER="$MARKER" \
+  INRANGE_DIAG_RUN_SECRET="$VALID_SECRET" \
   GIT_DIR="$SRC/.git" GIT_WORK_TREE="$SRC" \
   GIT_COMMON_DIR="$SRC/.git" GIT_INDEX_FILE="$SRC/.git/index" \
   GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.excludesFile \
