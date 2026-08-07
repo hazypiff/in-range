@@ -8,6 +8,10 @@ REPO="${1:?repository path required}"
 EXPECTED_SHA="${2:?expected source SHA required}"
 fail() { echo "ARTIFACT CONTEXT FAIL: $1" >&2; exit 1; }
 
+# Repository identity must come from the supplied worktree, never from ambient
+# Git plumbing variables inherited from an operator shell or wrapper.
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE
+
 cd "$REPO" 2>/dev/null || fail "repository is inaccessible"
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
   || fail "not inside a Git worktree"
@@ -19,16 +23,17 @@ ACTUAL_SHA="$(git rev-parse HEAD 2>/dev/null)" \
 
 # A detached HEAD is necessary but not sufficient: the controlling directive
 # requires a separate linked worktree, not the ordinary checkout detached in
-# place. Linked worktree gitdirs live below the common repository's worktrees/.
+# place. Use Git's own absolute git-dir/common-dir relationship; path matching
+# on a directory named "worktrees" can be forged by an ordinary checkout.
 if git symbolic-ref -q HEAD >/dev/null 2>&1; then
   fail "HEAD is attached to a branch"
 fi
-GIT_DIR="$(git rev-parse --git-dir 2>/dev/null)" \
+GIT_DIR="$(git rev-parse --path-format=absolute --git-dir 2>/dev/null)" \
   || fail "cannot resolve the worktree gitdir"
-case "$GIT_DIR" in
-  */worktrees/*) ;;
-  *) fail "checkout is not a separate linked worktree" ;;
-esac
+COMMON_DIR="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
+  || fail "cannot resolve the common gitdir"
+[ "$GIT_DIR" != "$COMMON_DIR" ] \
+  || fail "checkout is not a separate linked worktree"
 
 STATUS_FILE="$(mktemp)"
 trap 'rm -f "$STATUS_FILE"' EXIT

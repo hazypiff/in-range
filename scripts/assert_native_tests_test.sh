@@ -49,6 +49,13 @@ Test Case '-[RunnerTests.S testBad]' failed (0.00 seconds).
 ** TEST FAILED **
 EOF
 
+# substring.log — a longer method name must not satisfy the exact anchor.
+cat > "$TMP/substring.log" <<EOF
+Test Case '-[RunnerTests.S testAnchorExtra]' passed (0.00 seconds).
+\t Executed 1 test, with 0 failures (0 unexpected) in 0.0 (0.0) seconds
+** TEST SUCCEEDED **
+EOF
+
 expect_pass "exact =2 + anchor + SHA"          "$TMP/good.log" "=2" testAnchor "$SHA"
 expect_pass "min >=2 backward compatible"      "$TMP/good.log" 2
 expect_fail "exact =3 mismatch (added/dropped)" "$TMP/good.log" "=3"
@@ -59,6 +66,8 @@ expect_fail "controlling skip present"         "$TMP/skip.log" 1
 expect_fail "forged summary (discovered!=passed)" "$TMP/forged.log" 1
 expect_fail "failing summary"                  "$TMP/fail.log" 1
 expect_fail "named anchor absent"              "$TMP/good.log" "=2" testMissingAnchor
+expect_fail "anchor substring is not exact"    "$TMP/substring.log" "=1" testAnchor
+expect_fail "invalid anchor identifier"        "$TMP/good.log" "=2" 'testAnchor.*'
 expect_fail "bad count spec"                   "$TMP/good.log" "~2"
 
 echo "----"

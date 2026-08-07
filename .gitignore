@@ -68,6 +68,7 @@ android/app/src/main/AndroidManifest.xml.bak
 graphify-out/
 __pycache__/
 run_logs/
+.artifact-evidence/
 learn/data/
 learn/.log.lock
 .wrangler/

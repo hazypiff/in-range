@@ -16,21 +16,52 @@ ok() { printf 'ok   %s\n' "$1"; }
 bad() { printf 'FAIL %s\n' "$1"; FAILS=$((FAILS + 1)); }
 expect_pass() {
   local label="$1"; shift
-  if env PATH="$TMP/bin:$PATH" "$@" bash "$GATE" "$SHA" >/dev/null 2>&1; then ok "$label"; else bad "$label (expected PASS)"; fi
+  if env PATH="$TMP/bin:$PATH" "$@" bash "$GATE" "$SHA" "$TMP/evidence" >/dev/null 2>&1; then ok "$label"; else bad "$label (expected PASS)"; fi
 }
 expect_fail() {
   local label="$1"; shift
-  if env PATH="$TMP/bin:$PATH" "$@" bash "$GATE" "$SHA" >/dev/null 2>&1; then bad "$label (expected FAIL)"; else ok "$label"; fi
+  if env PATH="$TMP/bin:$PATH" "$@" bash "$GATE" "$SHA" "$TMP/evidence" >/dev/null 2>&1; then bad "$label (expected FAIL)"; else ok "$label"; fi
 }
 
 expect_pass "55/105 exact sets + anchors accepted"
+find "$TMP/evidence" -type f -name 'runner.sanitized.log' -print -quit | grep -q . \
+  && find "$TMP/evidence" -type f -name 'diag.sanitized.log' -print -quit | grep -q . \
+  && find "$TMP/evidence" -type f -name 'manifest.txt' -print -quit | grep -q . \
+  && ok "sanitized logs + hash manifest retained" \
+  || bad "sanitized logs + hash manifest retained"
+MANIFEST="$(find "$TMP/evidence" -type f -name manifest.txt -print -quit)"
+EVIDENCE_DIR="$(dirname "$MANIFEST")"
+RUNNER_HASH="$(shasum -a 256 "$EVIDENCE_DIR/runner.sanitized.log" | awk '{print $1}')"
+DIAG_HASH="$(shasum -a 256 "$EVIDENCE_DIR/diag.sanitized.log" | awk '{print $1}')"
+grep -Fxq "runner_sanitized_sha256=$RUNNER_HASH" "$MANIFEST" \
+  && grep -Fxq "diag_sanitized_sha256=$DIAG_HASH" "$MANIFEST" \
+  && ok "retained manifest hashes recompute" \
+  || bad "retained manifest hashes recompute"
+if find "$TMP/evidence" \( -name '*.xcresult' -o -name 'runner.log' -o -name 'diag.log' \) \
+  -print -quit | grep -q .; then
+  bad "raw logs and result bundles removed"
+else
+  ok "raw logs and result bundles removed"
+fi
+expect_fail "stale 54 Runner set rejected" FAKE_RUNNER_COUNT=54
 expect_fail "stale 103 diagnostic set rejected" FAKE_DIAG_COUNT=103
-expect_fail "controlling diagnostic skip rejected" FAKE_CONTROLLING_SKIP=1
+expect_fail "controlling Runner skip rejected" FAKE_CONTROLLING_SKIP_SCHEME=Runner
+expect_fail "controlling diagnostic skip rejected" FAKE_CONTROLLING_SKIP_SCHEME=diag
+expect_fail "missing Runner anchor rejected" FAKE_MISSING_ANCHOR_SCHEME=Runner
+expect_fail "missing diagnostic anchor rejected" FAKE_MISSING_ANCHOR_SCHEME=diag
 if env PATH="$TMP/bin:$PATH" bash "$GATE" \
-  0000000000000000000000000000000000000000 >/dev/null 2>&1; then
+  0000000000000000000000000000000000000000 "$TMP/evidence" >/dev/null 2>&1; then
   bad "wrong source SHA rejected before xcodebuild (expected FAIL)"
 else
   ok "wrong source SHA rejected before xcodebuild"
+fi
+mkdir -p "$TMP/real-evidence-root"
+ln -s "$TMP/real-evidence-root" "$TMP/evidence-root-link"
+if env PATH="$TMP/bin:$PATH" bash "$GATE" "$SHA" \
+  "$TMP/evidence-root-link" >/dev/null 2>&1; then
+  bad "symlink evidence root rejected (expected FAIL)"
+else
+  ok "symlink evidence root rejected"
 fi
 
 printf '%s\n' '----'

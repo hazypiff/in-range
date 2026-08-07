@@ -17,7 +17,7 @@ flutter analyze
 flutter test
 
 echo "== gate 2: native RunnerTests (both schemes) =="
-bash scripts/run_artifact_native_gate.sh "$SOURCE_SHA"
+bash scripts/run_artifact_native_gate.sh "$SOURCE_SHA" "$PWD/.artifact-evidence"
 
 echo "== gate 3: release isolation (build-settings + final-binary) =="
 bash scripts/check_release_isolation.sh

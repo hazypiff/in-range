@@ -91,7 +91,11 @@ fi
 
 # The named test actually ran AND passed (not absent-because-skipped).
 if [ -n "$NAMED" ]; then
-  grep -Eq "Test [Cc]ase '.*${NAMED}.*' passed" "$LOG" \
+  printf '%s' "$NAMED" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*$' \
+    || fail "named test must be a Swift identifier (got '$NAMED')"
+  # Exact method boundary in both supported Xcode formats. A method such as
+  # `testAnchorExtra` must never impersonate the requested `testAnchor`.
+  grep -Eq "Test [Cc]ase '.*([ .])${NAMED}(\\]'|\\(\\)') passed" "$LOG" \
     || fail "named test '$NAMED' did not run and pass"
 fi
 

@@ -10,6 +10,7 @@ trap 'rm -rf "$TMP"' EXIT
 SRC="$TMP/source"
 WT="$TMP/linked-detached"
 WT_BRANCH="$TMP/linked-branch"
+DECEPTIVE="$TMP/worktrees/deceptive-primary"
 FAILS=0
 
 ok() { printf 'ok   %s\n' "$1"; }
@@ -54,6 +55,27 @@ rm -f "$WT/.env"
 
 git -C "$SRC" worktree add -q -b fixture-branch "$WT_BRANCH" "$SHA"
 expect_fail "linked but branch-attached worktree rejected" "$WT_BRANCH" "$SHA"
+
+# Red mutation from the Opus attack: a primary repository whose ordinary path
+# happens to contain a component named "worktrees" must not impersonate a linked
+# worktree, even when the checker is invoked from a nested directory.
+git init -q "$DECEPTIVE"
+git -C "$DECEPTIVE" config user.name fixture
+git -C "$DECEPTIVE" config user.email fixture@example.invalid
+printf 'tracked\n' > "$DECEPTIVE/tracked.txt"
+git -C "$DECEPTIVE" add tracked.txt
+git -C "$DECEPTIVE" commit -qm initial
+DECEPTIVE_SHA="$(git -C "$DECEPTIVE" rev-parse HEAD)"
+git -C "$DECEPTIVE" checkout -q --detach
+mkdir -p "$DECEPTIVE/nested"
+expect_fail "path named worktrees cannot forge linked-worktree status" \
+  "$DECEPTIVE/nested" "$DECEPTIVE_SHA"
+if env GIT_DIR="$DECEPTIVE/.git" GIT_WORK_TREE="$DECEPTIVE" \
+  bash "$CHECK" "$DECEPTIVE/nested" "$DECEPTIVE_SHA" >/dev/null 2>&1; then
+  bad "ambient Git-dir override cannot forge linked-worktree status (expected FAIL)"
+else
+  ok "ambient Git-dir override cannot forge linked-worktree status"
+fi
 
 printf '%s\n' '----'
 if [ "$FAILS" -eq 0 ]; then
