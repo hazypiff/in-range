@@ -131,6 +131,24 @@ case " ${DOTFUZZ_7000:-} " in
     echo "ERROR: Failed to retrieve the file node for Documents/w5_rssi_log-jsonl (com.apple.dt.CoreDeviceError error 7000 (0x1B58))" >&2
     exit 1 ;;
 esac
+# SUFFIX_NOSUCH (audit Finding 1, repro 5 — codex/kimi 1c34b9d): the CLASSIC
+# not-found branch lacked a trailing filename boundary, so a LONGER file
+# ('w5_rssi_log.jsonl-found') matched the requested 'w5_rssi_log.jsonl' as a
+# prefix, and 'found' is allowlisted vocabulary so the residue stayed empty.
+# FATAL: it is not the exact requested source.
+case " ${SUFFIX_NOSUCH:-} " in
+  *" $base "*)
+    echo "ERROR: no such file: Documents/w5_rssi_log.jsonl-found" >&2
+    exit 1 ;;
+esac
+# SUFFIX_7000 (audit Finding 1, repro 6): the same trailing-boundary gap on the
+# COMPOUND branch — 'w5_rssi_log.jsonl.found' matched via the old [^0-9a-z]
+# boundary ('.' continues a filename) and 'found' is allowlisted. FATAL.
+case " ${SUFFIX_7000:-} " in
+  *" $base "*)
+    echo "ERROR: Failed to retrieve the file node for Documents/w5_rssi_log.jsonl.found (com.apple.dt.CoreDeviceError error 7000 (0x1B58))" >&2
+    exit 1 ;;
+esac
 if [ -f "${FIXTURES:?}/$base" ]; then cp "${FIXTURES}/$base" "$dst"; exit 0; fi
 # A MISSING fixture models a VERIFIED not-found on the device — emitted in the
 # REAL `xcrun devicectl` shape: benign timestamped PROGRESS lines (one of which
@@ -767,6 +785,33 @@ df2_rc=$?
 [ "$df2_rc" -eq 8 ] && [ ! -e "$SB_DF/work/hardware_evidence/caseDF" ] \
   && ok "7000 naming a dot-fuzzed different file aborts (exit 8), not absence" \
   || bad "dot-wildcard filename match misclassified as absence (rc=$df2_rc)"
+
+# 34i. AUDIT FINDING 1 repro 5 (codex/kimi 1c34b9d): the CLASSIC not-found branch
+# naming a LONGER file ('w5_rssi_log.jsonl-found') MUST be FATAL — a filename
+# boundary (excluding '.-_') now rejects the prefix match, even though 'found' is
+# allowlisted vocabulary.
+SB_SN="$(make_sandbox)"; valid_fixtures "$SB_SN"
+( cd "$SB_SN/work" && HW_MATRIX_XCRUN="$SB_SN/bin/xcrun" FIXTURES="$SB_SN/fixtures" \
+  XCRUN_MARKER="$SB_SN/m" SUFFIX_NOSUCH="w5_rssi_log.jsonl" \
+  INRANGE_DIAG_RUN_SECRET="$SECRET" \
+  bash ./hw_matrix_pull.sh test-udid iphone14 caseSN ) >/dev/null 2>&1
+sn_rc=$?
+[ "$sn_rc" -eq 8 ] && [ ! -e "$SB_SN/work/hardware_evidence/caseSN" ] \
+  && ok "classic-branch '<name>-found' suffix aborts (exit 8), not absence" \
+  || bad "classic-branch filename-suffix match misclassified as absence (rc=$sn_rc)"
+
+# 34j. AUDIT FINDING 1 repro 6: the COMPOUND branch with a '.found' suffix
+# ('w5_rssi_log.jsonl.found') MUST be FATAL — the old [^0-9a-z] boundary treated
+# '.' as a terminator; the filename boundary now forbids it.
+SB_SF="$(make_sandbox)"; valid_fixtures "$SB_SF"
+( cd "$SB_SF/work" && HW_MATRIX_XCRUN="$SB_SF/bin/xcrun" FIXTURES="$SB_SF/fixtures" \
+  XCRUN_MARKER="$SB_SF/m" SUFFIX_7000="w5_rssi_log.jsonl" \
+  INRANGE_DIAG_RUN_SECRET="$SECRET" \
+  bash ./hw_matrix_pull.sh test-udid iphone14 caseSF ) >/dev/null 2>&1
+sf_rc=$?
+[ "$sf_rc" -eq 8 ] && [ ! -e "$SB_SF/work/hardware_evidence/caseSF" ] \
+  && ok "compound-branch '<name>.found' suffix aborts (exit 8), not absence" \
+  || bad "compound-branch filename-suffix match misclassified as absence (rc=$sf_rc)"
 
 # 35. VERIFIED-ABSENT optional artifact publishes normally (exit 0): missing on
 # device is fine, only the primary is mandatory.

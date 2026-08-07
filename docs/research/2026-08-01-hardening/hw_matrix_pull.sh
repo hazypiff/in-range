@@ -206,14 +206,20 @@ pull() {
   #    unexplained line remaining. Build the recognized-absence-for-this-source
   #    matcher, then require: at least one such line exists, and EVERY non-empty
   #    line of errc is such a line (anything else = unexplained ⇒ FATAL).
-  local abs_re have_abs non_abs q1
+  local abs_re have_abs non_abs q1 fb
   # Escape EVERY non-word char of the source name before it enters the regex
   # (codex ffa85e7): unescaped, the '.' in e.g. 'w5_rssi_log.jsonl' is a wildcard,
   # so a 7000 error naming a DIFFERENT file ('w5_rssi_log-jsonl') would match and
   # be accepted as this file's absence — and the residue gate cannot see it
   # because '-' and '.' tokenize identically. Escaping makes the match EXACT.
   q1="$(printf '%s' "$1" | sed 's/[^A-Za-z0-9_]/\\&/g')"
-  abs_re="(failed to retrieve the file node for (documents/)?${q1}([^0-9a-z]|$).*coredeviceerror error 7000)|((no such file|does not exist|file ?not ?found|filenotfound).*${q1})"
+  # The source name must appear as a WHOLE filename, bounded on BOTH sides by a
+  # non-filename char or line end (codex + kimi 1c34b9d). A plain [^0-9a-z]
+  # boundary is WRONG: '.', '-', '_' can CONTINUE a filename, so 'name.jsonl-found'
+  # or 'name.jsonl.bak' would match 'name.jsonl' as absence. Exclude filename
+  # continuation chars ([A-Za-z0-9._-]) from the boundary on both branches.
+  fb='[^A-Za-z0-9._-]'
+  abs_re="(failed to retrieve the file node for (documents/)?${q1}(${fb}|$).*coredeviceerror error 7000)|((no such file|does not exist|file ?not ?found|filenotfound).*${fb}${q1}(${fb}|$))"
   have_abs="$(printf '%s\n' "$errc" | grep -iE "$abs_re" || true)"
   non_abs="$(printf '%s\n' "$errc" | grep -vE '^[[:space:]]*$' | grep -viE "$abs_re" || true)"
   # Fatal-RESIDUE gate (replaces an ever-incomplete denylist — codex rejected the
