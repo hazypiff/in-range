@@ -28,7 +28,8 @@ case "$COUNT_SPEC" in
   =*) EXACT=1; MIN="${COUNT_SPEC#=}" ;;
   *)  MIN="$COUNT_SPEC" ;;
 esac
-printf '%s' "$MIN" | grep -Eq '^[0-9]+$' || fail "count must be N or =N (got '$COUNT_SPEC')"
+printf '%s' "$MIN" | grep -Eq '^(0|[1-9][0-9]*)$' \
+  || fail "count must be canonical decimal N or =N (got '$COUNT_SPEC')"
 
 [ -f "$LOG" ] || fail "log missing: $LOG"
 grep -q '\*\* TEST SUCCEEDED \*\*' "$LOG" || fail "no '** TEST SUCCEEDED **' in $LOG"
@@ -69,6 +70,10 @@ while IFS= read -r line; do
   HAVE_SUMMARY=1
   n="$(printf '%s' "$line" | grep -Eo 'Executed [0-9]+' | grep -Eo '[0-9]+')"
   m="$(printf '%s' "$line" | grep -Eo 'with [0-9]+ failures?' | grep -Eo '[0-9]+')"
+  printf '%s' "$n" | grep -Eq '^(0|[1-9][0-9]*)$' \
+    || fail "a summary uses a non-canonical discovered count in $LOG"
+  printf '%s' "$m" | grep -Eq '^(0|[1-9][0-9]*)$' \
+    || fail "a summary uses a non-canonical failure count in $LOG"
   [ "${m:-0}" -eq 0 ] || fail "a summary line reports ${m} failure(s) in $LOG"
   [ "${n:-0}" -le "$DISCOVERED" ] || DISCOVERED="${n:-0}"   # keep the max (aggregate)
   # Match singular AND plural forms ("1 test, with 1 failure") so a real failing

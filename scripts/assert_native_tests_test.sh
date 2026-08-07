@@ -56,6 +56,9 @@ Test Case '-[RunnerTests.S testAnchorExtra]' passed (0.00 seconds).
 ** TEST SUCCEEDED **
 EOF
 
+sed 's/Executed 2 tests/Executed 02 tests/' "$TMP/good.log" \
+  > "$TMP/leading-zero.log"
+
 expect_pass "exact =2 + anchor + SHA"          "$TMP/good.log" "=2" testAnchor "$SHA"
 expect_pass "min >=2 backward compatible"      "$TMP/good.log" 2
 expect_fail "exact =3 mismatch (added/dropped)" "$TMP/good.log" "=3"
@@ -69,6 +72,8 @@ expect_fail "named anchor absent"              "$TMP/good.log" "=2" testMissingA
 expect_fail "anchor substring is not exact"    "$TMP/substring.log" "=1" testAnchor
 expect_fail "invalid anchor identifier"        "$TMP/good.log" "=2" 'testAnchor.*'
 expect_fail "bad count spec"                   "$TMP/good.log" "~2"
+expect_fail "leading-zero expected count rejected" "$TMP/good.log" "=02"
+expect_fail "leading-zero summary rejected"    "$TMP/leading-zero.log" "=2"
 
 echo "----"
 if [ "$fails" -eq 0 ]; then echo "ALL ASSERT-GATE TESTS PASSED"; else echo "$fails FAILED"; exit 1; fi
