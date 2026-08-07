@@ -30,10 +30,11 @@ git -C "$SRC" config user.name fixture
 git -C "$SRC" config user.email fixture@example.invalid
 printf '.env\n' > "$SRC/.gitignore"
 printf 'tracked\n' > "$SRC/tracked.txt"
+printf 'config-hidden.txt\n' > "$SRC/excludes.txt"
 mkdir -p "$SRC/scripts"
 cp "$CHECK" "$SRC/scripts/check_artifact_build_context.sh"
 cp "$BUILDER" "$SRC/scripts/build_diag_artifact.sh"
-git -C "$SRC" add .gitignore tracked.txt scripts
+git -C "$SRC" add .gitignore tracked.txt excludes.txt scripts
 git -C "$SRC" commit -qm initial
 SHA="$(git -C "$SRC" rev-parse HEAD)"
 
@@ -53,6 +54,27 @@ printf 'untracked\n' > "$WT/untracked.txt"
 expect_fail "non-ignored untracked file rejected" "$WT" "$SHA"
 rm -f "$WT/untracked.txt"
 
+printf 'hidden by ambient config\n' > "$WT/config-hidden.txt"
+if env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.excludesFile \
+  GIT_CONFIG_VALUE_0="$WT/excludes.txt" \
+  bash "$CHECK" "$WT" "$SHA" >/dev/null 2>&1; then
+  bad "ambient core.excludesFile cannot hide an untracked file (expected FAIL)"
+else
+  ok "ambient core.excludesFile cannot hide an untracked file"
+fi
+rm -f "$WT/config-hidden.txt"
+
+printf 'info-hidden.txt\n' >> "$SRC/.git/info/exclude"
+printf 'hidden by info exclude\n' > "$WT/info-hidden.txt"
+expect_fail "mutable info/exclude cannot hide an untracked file" "$WT" "$SHA"
+rm -f "$WT/info-hidden.txt"
+
+mkdir -p "$WT/untracked-ignore"
+printf '*\n' > "$WT/untracked-ignore/.gitignore"
+printf 'hidden by untracked ignore\n' > "$WT/untracked-ignore/payload.txt"
+expect_fail "an untracked .gitignore cannot hide itself and a payload" "$WT" "$SHA"
+rm -rf "$WT/untracked-ignore"
+
 printf 'approved ignored input\n' > "$WT/.env"
 expect_pass "ignored environment input does not dirty Git provenance" "$WT" "$SHA"
 rm -f "$WT/.env"
@@ -63,7 +85,7 @@ rm -f "$WT/.env"
 mkdir -p "$TMP/bin"
 printf '%s\n' \
   '#!/usr/bin/env bash' \
-  'if [ -n "${GIT_DIR+x}" ] || [ -n "${GIT_WORK_TREE+x}" ] || [ -n "${GIT_COMMON_DIR+x}" ] || [ -n "${GIT_INDEX_FILE+x}" ]; then' \
+  'if env | grep -q "^GIT_[A-Za-z0-9_]*="; then' \
   '  printf poisoned > "$ARTIFACT_ENV_MARKER"' \
   '  exit 41' \
   'fi' \
@@ -74,6 +96,8 @@ MARKER="$TMP/builder-env-marker"
 if env PATH="$TMP/bin:$PATH" ARTIFACT_ENV_MARKER="$MARKER" \
   GIT_DIR="$SRC/.git" GIT_WORK_TREE="$SRC" \
   GIT_COMMON_DIR="$SRC/.git" GIT_INDEX_FILE="$SRC/.git/index" \
+  GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.excludesFile \
+  GIT_CONFIG_VALUE_0="$WT/excludes.txt" \
   bash "$WT/scripts/build_diag_artifact.sh" >/dev/null 2>&1; then
   bad "builder stopped at the synthetic Flutter boundary (expected nonzero)"
 elif [ "$(cat "$MARKER" 2>/dev/null || true)" = clean ]; then

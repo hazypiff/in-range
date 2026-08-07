@@ -8,9 +8,12 @@ REPO="${1:?repository path required}"
 EXPECTED_SHA="${2:?expected source SHA required}"
 fail() { echo "ARTIFACT CONTEXT FAIL: $1" >&2; exit 1; }
 
-# Repository identity must come from the supplied worktree, never from ambient
-# Git plumbing variables inherited from an operator shell or wrapper.
-unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE
+# Repository identity and ignore policy must come from the supplied worktree,
+# never from ambient Git plumbing/config variables inherited from an operator
+# shell or wrapper.
+while IFS= read -r git_env_name; do
+  unset "$git_env_name"
+done < <(compgen -A variable GIT_ || true)
 
 cd "$REPO" 2>/dev/null || fail "repository is inaccessible"
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
@@ -36,10 +39,37 @@ COMMON_DIR="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
   || fail "checkout is not a separate linked worktree"
 
 STATUS_FILE="$(mktemp)"
-trap 'rm -f "$STATUS_FILE"' EXIT
-git status --porcelain=v1 -z --untracked-files=all > "$STATUS_FILE" \
-  || fail "cannot inspect worktree cleanliness"
+RAW_OTHERS_FILE="$(mktemp)"
+UNTRACKED_FILE="$(mktemp)"
+trap 'rm -f "$STATUS_FILE" "$RAW_OTHERS_FILE" "$UNTRACKED_FILE"' EXIT
+
+# Inspect tracked/index state separately. Command-line settings disable local
+# performance helpers that could return a stale answer.
+git -c core.fsmonitor=false -c core.untrackedCache=false status \
+  --porcelain=v1 -z --untracked-files=no > "$STATUS_FILE" \
+  || fail "cannot inspect tracked worktree state"
 [ ! -s "$STATUS_FILE" ] \
-  || fail "tracked or non-ignored untracked changes are present"
+  || fail "tracked changes are present"
+
+# Only committed per-directory .gitignore files define the permitted ignored
+# build/environment surface. Do not honor ambient core.excludesFile or the
+# mutable common .git/info/exclude. First reject an untracked .gitignore even if
+# it tries to hide itself, then enumerate non-ignored untracked files using the
+# repository rules alone.
+git ls-files --others -z > "$RAW_OTHERS_FILE" \
+  || fail "cannot inspect untracked ignore controls"
+while IFS= read -r -d '' untracked_path; do
+  case "$untracked_path" in
+    .gitignore|*/.gitignore)
+      fail "an untracked ignore-control file is present"
+      ;;
+  esac
+done < "$RAW_OTHERS_FILE"
+
+git ls-files --others -z --exclude-per-directory=.gitignore \
+  > "$UNTRACKED_FILE" \
+  || fail "cannot inspect non-ignored untracked files"
+[ ! -s "$UNTRACKED_FILE" ] \
+  || fail "non-ignored untracked files are present"
 
 echo "OK: clean linked detached worktree at $ACTUAL_SHA"

@@ -3,10 +3,12 @@
 # device app for hardware runs ONLY after the full test + isolation gates pass,
 # and emits the artifact SHA-256 + build config for the evidence manifest.
 set -euo pipefail
-# Clear caller-controlled Git plumbing in the coordinator shell itself. Child
-# provenance checks also clear it, but their environment changes cannot protect
-# later Flutter/Xcode commands executed by this parent process.
-unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE
+# Clear every caller-controlled Git override in the coordinator shell itself.
+# Child provenance checks also clear these, but their environment changes cannot
+# protect later Flutter/Xcode commands executed by this parent process.
+while IFS= read -r git_env_name; do
+  unset "$git_env_name"
+done < <(compgen -A variable GIT_ || true)
 # Canonicalize the trusted worktree root first. On macOS, temporary roots such
 # as /var may themselves be system symlinks to /private/var; later evidence-path
 # checks should inspect only the resulting physical path.

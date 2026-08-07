@@ -7,10 +7,11 @@
 set -euo pipefail
 umask 077
 
-# Ambient Git plumbing can redirect even `git -C` to a foreign repository.
-# The artifact gate must bind provenance to this checkout, never to its caller's
-# environment.
-unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE
+# Ambient Git plumbing/config can redirect even `git -C` or alter later build
+# tools. Bind provenance to this checkout, never to the caller's environment.
+while IFS= read -r git_env_name; do
+  unset "$git_env_name"
+done < <(compgen -A variable GIT_ || true)
 
 ROOT="$(cd -P "$(dirname "$0")/.." && pwd -P)"
 SOURCE_SHA="${1:?frozen source SHA required}"
