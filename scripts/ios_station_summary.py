@@ -12,6 +12,7 @@ anchored to the operator's recorded start rather than the first database row.
 """
 
 import argparse
+from contextlib import closing
 import re
 import sqlite3
 
@@ -56,7 +57,7 @@ def load_rows(path, lo_ms, hi_ms, corr_prefix=None):
         sql += " AND correlation_id LIKE ?"
         params.append(f"{corr_prefix}%")
     sql += " ORDER BY at_ms"
-    with sqlite3.connect(path) as con:
+    with closing(sqlite3.connect(path)) as con:
         return con.execute(sql, params).fetchall()
 
 

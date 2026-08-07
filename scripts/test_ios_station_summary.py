@@ -2,11 +2,13 @@
 """Tests for ios_station_summary.py."""
 
 import os
+from contextlib import closing
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ios_station_summary as station  # noqa: E402
@@ -15,7 +17,7 @@ import ios_station_summary as station  # noqa: E402
 def make_db(rows):
     handle, path = tempfile.mkstemp(suffix=".db")
     os.close(handle)
-    with sqlite3.connect(path) as con:
+    with closing(sqlite3.connect(path)) as con:
         con.execute(
             "CREATE TABLE rssi_log ("
             "id INTEGER PRIMARY KEY AUTOINCREMENT, "
@@ -27,6 +29,7 @@ def make_db(rows):
             "(at_ms, correlation_id, rssi, power) VALUES (?, ?, ?, ?)",
             rows,
         )
+        con.commit()
     return path
 
 
@@ -89,6 +92,17 @@ class StationSummaryTest(unittest.TestCase):
         )
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0][3], "wanted-123")
+
+    def test_database_query_closes_its_connection(self):
+        path = make_db([self.row(12, corr="wanted-123")])
+        self.addCleanup(os.unlink, path)
+        connection = sqlite3.connect(path)
+        with mock.patch.object(
+            station.sqlite3, "connect", return_value=connection
+        ):
+            station.load_rows(path, self.start, self.start + 90_000)
+        with self.assertRaises(sqlite3.ProgrammingError):
+            connection.execute("SELECT 1")
 
     def test_custom_smoke_window(self):
         self.assertEqual(
