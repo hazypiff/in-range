@@ -24,6 +24,13 @@ done < <(compgen -A variable GIT_ || true)
 cd "$REPO" 2>/dev/null || fail "repository is inaccessible"
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
   || fail "not inside a Git worktree"
+WORKTREE_ROOT="$(pwd -P)" || fail "cannot resolve repository path"
+TOPLEVEL_RAW="$(git rev-parse --show-toplevel 2>/dev/null)" \
+  || fail "cannot resolve worktree root"
+TOPLEVEL="$(cd -P "$TOPLEVEL_RAW" 2>/dev/null && pwd -P)" \
+  || fail "cannot canonicalize worktree root"
+[ "$WORKTREE_ROOT" = "$TOPLEVEL" ] \
+  || fail "repository path is not the worktree root"
 
 ACTUAL_SHA="$(git rev-parse HEAD 2>/dev/null)" \
   || fail "cannot resolve HEAD"
@@ -48,7 +55,9 @@ STATUS_FILE="$(mktemp)"
 RAW_OTHERS_FILE="$(mktemp)"
 UNTRACKED_FILE="$(mktemp)"
 INDEX_FLAGS_FILE="$(mktemp)"
-trap 'rm -f "$STATUS_FILE" "$RAW_OTHERS_FILE" "$UNTRACKED_FILE" "$INDEX_FLAGS_FILE"' EXIT
+IRREGULAR_FILE="$(mktemp)"
+EMPTY_DIR_FILE="$(mktemp)"
+trap 'rm -f "$STATUS_FILE" "$RAW_OTHERS_FILE" "$UNTRACKED_FILE" "$INDEX_FLAGS_FILE" "$IRREGULAR_FILE" "$EMPTY_DIR_FILE"' EXIT
 
 # assume-unchanged and skip-worktree can hide modified tracked bytes from status.
 # A release artifact worktree must use an ordinary, fully materialized index.
@@ -63,11 +72,21 @@ done < "$INDEX_FLAGS_FILE"
 
 # Inspect tracked/index state separately. Command-line settings disable local
 # performance helpers that could return a stale answer.
-git -c core.fsmonitor=false -c core.untrackedCache=false status \
+git -c core.fsmonitor=false -c core.untrackedCache=false \
+  -c core.fileMode=true status \
   --porcelain=v1 -z --untracked-files=no > "$STATUS_FILE" \
   || fail "cannot inspect tracked worktree state"
 [ ! -s "$STATUS_FILE" ] \
   || fail "tracked changes are present"
+
+# Git does not enumerate FIFOs, sockets, or device nodes as untracked paths.
+# Inspect the filesystem directly so those cannot become invisible build inputs.
+if ! find . -path './.git' -prune -o \
+  ! -type d ! -type f ! -type l -print > "$IRREGULAR_FILE" 2>/dev/null; then
+  fail "cannot inspect filesystem entry types"
+fi
+[ ! -s "$IRREGULAR_FILE" ] \
+  || fail "an irregular filesystem entry is present"
 
 # Only committed per-directory .gitignore files define the permitted ignored
 # build/environment surface. Do not honor ambient core.excludesFile or the
@@ -77,6 +96,14 @@ git -c core.fsmonitor=false -c core.untrackedCache=false status \
 git ls-files --others -z > "$RAW_OTHERS_FILE" \
   || fail "cannot inspect untracked ignore controls"
 if [ "$MODE" = inputs-only ]; then
+  # Git cannot represent empty directories either. Before generation, even an
+  # empty extra directory violates the allowlist of tracked files plus .env.
+  if ! find . -path './.git' -prune -o -type d -empty -print \
+    > "$EMPTY_DIR_FILE" 2>/dev/null; then
+    fail "cannot inspect pre-build directories"
+  fi
+  [ ! -s "$EMPTY_DIR_FILE" ] \
+    || fail "an unapproved pre-build directory is present"
   while IFS= read -r -d '' untracked_path; do
     case "$untracked_path" in
       .env)

@@ -30,6 +30,8 @@ git -C "$SRC" config user.name fixture
 git -C "$SRC" config user.email fixture@example.invalid
 printf '.env\nbuild/\n' > "$SRC/.gitignore"
 printf 'tracked\n' > "$SRC/tracked.txt"
+mkdir -p "$SRC/nested"
+printf 'tracked nested\n' > "$SRC/nested/tracked.txt"
 printf 'config-hidden.txt\n' > "$SRC/excludes.txt"
 mkdir -p "$SRC/scripts"
 cp "$CHECK" "$SRC/scripts/check_artifact_build_context.sh"
@@ -45,6 +47,8 @@ expect_fail "detached primary checkout is not a separate worktree" "$SRC" "$SHA"
 git -C "$SRC" worktree add -q --detach "$WT" "$SHA"
 expect_pass "clean linked detached worktree accepted" "$WT" "$SHA"
 expect_pass "fresh worktree accepted by inputs-only mode" "$WT" "$SHA" inputs-only
+expect_fail "checker must be invoked at the worktree root" \
+  "$WT/nested" "$SHA" inputs-only
 expect_fail "unknown cleanliness mode rejected" "$WT" "$SHA" unknown
 expect_fail "wrong frozen SHA rejected" "$WT" "0000000000000000000000000000000000000000"
 
@@ -63,6 +67,12 @@ printf 'hidden sparse change\n' > "$WT/tracked.txt"
 expect_fail "skip-worktree cannot hide modified tracked bytes" "$WT" "$SHA"
 git -C "$WT" update-index --no-skip-worktree tracked.txt
 git -C "$WT" restore tracked.txt
+
+git -C "$SRC" config core.fileMode false
+chmod u+x "$WT/tracked.txt"
+expect_fail "core.fileMode=false cannot hide a tracked mode change" "$WT" "$SHA"
+chmod u-x "$WT/tracked.txt"
+git -C "$SRC" config --unset core.fileMode
 
 printf 'untracked\n' > "$WT/untracked.txt"
 expect_fail "non-ignored untracked file rejected" "$WT" "$SHA"
@@ -98,6 +108,20 @@ printf 'approved environment input\n' > "$TMP/env-input"
 ln -s "$TMP/env-input" "$WT/.env"
 expect_fail "symlinked .env is not an approved pre-build input" "$WT" "$SHA" inputs-only
 rm -f "$WT/.env"
+
+mkfifo "$WT/.env"
+expect_fail "FIFO .env is not an approved pre-build input" "$WT" "$SHA" inputs-only
+rm -f "$WT/.env"
+
+mkfifo "$WT/rogue.pipe"
+expect_fail "irregular input rejected before generation" "$WT" "$SHA" inputs-only
+expect_fail "irregular input rejected after generation" "$WT" "$SHA" generated-ok
+rm -f "$WT/rogue.pipe"
+
+mkdir "$WT/empty-input"
+expect_fail "empty untracked directory rejected before generation" \
+  "$WT" "$SHA" inputs-only
+rmdir "$WT/empty-input"
 
 mkdir -p "$WT/build"
 printf 'stale generated input\n' > "$WT/build/stale.bin"
