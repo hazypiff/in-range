@@ -1,6 +1,16 @@
 # Replacement diagnostic artifact — freeze manifest (audit step 5)
 
-> **HOLD RESOLVED (2026-08-07).** The independent-audit HOLD (build made with two
+> **SUPERSEDED / HOLD (concurrent-audit reconciliation, 2026-08-07).** The clean
+> rebuild recorded below corrected the original dirty-worktree defect, but it was
+> built from `6e9c185` while the independent panel was still repairing the
+> artifact builder itself. Commits `4111bfd` and `7f5a2ed` subsequently made the
+> clean linked-worktree check non-forgeable, pinned and retained sanitized 55/105
+> native evidence, tightened exact anchor matching, and added executable mutation
+> harnesses. Therefore the bytes below are not known defective, but they are not
+> the final exact-SHA artifact and must not be used for final preflight or matrix
+> evidence. Rebuild once from the merged candidate after its CI/reviews are green.
+>
+> **Historical clean-build result.** The independent-audit HOLD (build made with two
 > stray untracked files present ⇒ inadmissible provenance) is cleared: the artifact
 > below was rebuilt ONCE from a **clean detached git worktree** at the current tip
 > (native CI floor already updated 103→105), with **zero stray untracked files**
@@ -44,8 +54,11 @@ evidence is NOT reused.
   `5651eac5ef38490d081b3b09abbc4340004542b06c93138c5ba9b5dd2ce3e8c1`.
 - Frozen `.app` retained in protected scratch (0700). diag Runner carries 247
   W5Diag/W5EvidenceWriter symbols (positive control).
-- **Installed on all three phones** (`devicectl device install app`): slotA
-  (iPhone 14), slotB (iPhone 13), slotC (iPhone 16 Pro Max) — all OK.
+- **Historically installed on all three role-labelled phones** with
+  `devicectl device install app` — all commands returned OK. The concurrent
+  commit's `iPhone 16 Pro Max` label for slotC was inaccurate; the owner-confirmed
+  fleet is iPhone 14 / iPhone 13 / iPhone 15 Plus. Final committed evidence must
+  use only slotA / slotB / slotC.
 
 ## Signature
 - `codesign --verify --deep --strict`: **valid; satisfies its Designated Requirement.**
@@ -79,7 +92,12 @@ evidence is NOT reused.
 - kimi: VERDICT APPROVE; ISOLATION-FIX OK; DIAG-PATH-UNCHANGED OK; RELEASE-FAILCLOSED OK;
   TOP-RISK: inline Release ack shape could drift from the diag ack (maintainability note).
 
-## Next (step 6 — hardware rerun)
-The frozen admissible artifact is installed on all three phones. Rerun the complete
-preflight + Cases 1-4 collaboratively. Do NOT reuse a3ff0b4's provisional evidence.
-Advance PR #11 head non-force only after clean signatures + approval.
+## Next (step 5 replacement, then step 6)
+Do not collect final evidence from the historical `6e9c185` artifact. From the
+merged exact candidate, run the enforced `scripts/build_diag_artifact.sh` in a
+clean linked detached worktree, retain its sanitized 55/105 evidence + hashes,
+inspect/sign/freeze the replacement, and install those exact replacement bytes
+on slotA / slotB / slotC. Only then rerun the complete preflight + Cases 1-4.
+Do NOT reuse a3ff0b4's provisional evidence or any observation from the
+superseded install. Advance PR #11 head non-force only after clean signatures
+and approval.
