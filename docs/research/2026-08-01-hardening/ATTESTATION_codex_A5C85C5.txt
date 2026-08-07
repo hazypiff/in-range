@@ -1,0 +1,11 @@
+ATTESTATION — codex exec — In Range W5 audit Findings 1-3 — exact SHA a5c85c5
+Reviewer: codex exec (independent non-author). Date: 2026-08-07.
+---
+VERDICT: APPROVE
+FINDING-1: OK
+FINDING-2: OK
+FINDING-3: OK
+FAILCLOSED: OK
+NARROW-CONTRACT: OK
+ISOLATION: OK
+TOP-RISK: Global removal of 0x… tokens could hide a secondary hex-only status, but no realistic devicectl output exhibiting that bypass was established.
