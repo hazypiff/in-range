@@ -7,6 +7,11 @@
 set -euo pipefail
 umask 077
 
+# Ambient Git plumbing can redirect even `git -C` to a foreign repository.
+# The artifact gate must bind provenance to this checkout, never to its caller's
+# environment.
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SOURCE_SHA="${1:?frozen source SHA required}"
 EVIDENCE_ROOT="${2:-$ROOT/.artifact-evidence}"
@@ -20,11 +25,35 @@ trap 'rm -rf "$TMP"' EXIT
 SIM='platform=iOS Simulator,name=iPhone 17'
 SANITIZER="$ROOT/docs/research/2026-08-01-hardening/sanitize_native_log.sh"
 
-[ ! -L "$EVIDENCE_ROOT" ] || {
-  echo "ARTIFACT NATIVE GATE FAIL: evidence root is a symlink" >&2
-  exit 1
+case "$EVIDENCE_ROOT" in
+  /*) ;;
+  *) EVIDENCE_ROOT="$ROOT/$EVIDENCE_ROOT" ;;
+esac
+
+# Reject a symlink in any path component, not just a symlink at the leaf. This
+# keeps retained evidence inside the exact directory named by the manifest.
+assert_no_symlink_component() {
+  local path="$1" component current=""
+  local -a components
+  IFS='/' read -r -a components <<< "$path"
+  for component in "${components[@]}"; do
+    [ -n "$component" ] || continue
+    [ "$component" != "." ] || continue
+    [ "$component" != ".." ] || {
+      echo "ARTIFACT NATIVE GATE FAIL: evidence root contains '..'" >&2
+      return 1
+    }
+    current="$current/$component"
+    [ ! -L "$current" ] || {
+      echo "ARTIFACT NATIVE GATE FAIL: evidence path contains a symlink" >&2
+      return 1
+    }
+  done
 }
+
+assert_no_symlink_component "$EVIDENCE_ROOT"
 mkdir -p "$EVIDENCE_ROOT"
+assert_no_symlink_component "$EVIDENCE_ROOT"
 EVIDENCE_DIR="$(mktemp -d "$EVIDENCE_ROOT/native-$SOURCE_SHA.XXXXXX")"
 EVIDENCE_LABEL="$(basename "$EVIDENCE_DIR")"
 

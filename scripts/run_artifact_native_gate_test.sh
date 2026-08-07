@@ -55,6 +55,22 @@ if env PATH="$TMP/bin:$PATH" bash "$GATE" \
 else
   ok "wrong source SHA rejected before xcodebuild"
 fi
+FOREIGN_REPO="$TMP/foreign-repo"
+mkdir -p "$FOREIGN_REPO"
+git -C "$FOREIGN_REPO" init -q
+git -C "$FOREIGN_REPO" config user.email fixture@example.invalid
+git -C "$FOREIGN_REPO" config user.name fixture
+printf 'foreign\n' > "$FOREIGN_REPO/fixture.txt"
+git -C "$FOREIGN_REPO" add fixture.txt
+git -C "$FOREIGN_REPO" commit -qm fixture
+FOREIGN_SHA="$(git -C "$FOREIGN_REPO" rev-parse HEAD)"
+if env PATH="$TMP/bin:$PATH" GIT_DIR="$FOREIGN_REPO/.git" \
+  GIT_WORK_TREE="$FOREIGN_REPO" bash "$GATE" "$FOREIGN_SHA" \
+  "$TMP/evidence" >/dev/null 2>&1; then
+  bad "ambient Git plumbing cannot stamp foreign SHA (expected FAIL)"
+else
+  ok "ambient Git plumbing cannot stamp foreign SHA"
+fi
 mkdir -p "$TMP/real-evidence-root"
 ln -s "$TMP/real-evidence-root" "$TMP/evidence-root-link"
 if env PATH="$TMP/bin:$PATH" bash "$GATE" "$SHA" \
@@ -62,6 +78,14 @@ if env PATH="$TMP/bin:$PATH" bash "$GATE" "$SHA" \
   bad "symlink evidence root rejected (expected FAIL)"
 else
   ok "symlink evidence root rejected"
+fi
+mkdir -p "$TMP/real-parent"
+ln -s "$TMP/real-parent" "$TMP/evidence-parent-link"
+if env PATH="$TMP/bin:$PATH" bash "$GATE" "$SHA" \
+  "$TMP/evidence-parent-link/nested" >/dev/null 2>&1; then
+  bad "symlinked evidence parent rejected (expected FAIL)"
+else
+  ok "symlinked evidence parent rejected"
 fi
 
 printf '%s\n' '----'

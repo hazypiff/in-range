@@ -45,6 +45,7 @@ jobs:
 
       - name: Signed-artifact builder contract harnesses
         run: |
+          bash scripts/assert_native_tests_test.sh
           bash scripts/check_artifact_build_context_test.sh
           bash scripts/run_artifact_native_gate_test.sh
 
