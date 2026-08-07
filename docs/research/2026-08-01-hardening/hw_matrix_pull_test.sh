@@ -149,6 +149,16 @@ case " ${SUFFIX_7000:-} " in
     echo "ERROR: Failed to retrieve the file node for Documents/w5_rssi_log.jsonl.found (com.apple.dt.CoreDeviceError error 7000 (0x1B58))" >&2
     exit 1 ;;
 esac
+# SUBDIR_NOSUCH (audit Finding 1, repro 7 — codex b9ae21a): the requested basename
+# inside a DIFFERENT subdirectory whose name is itself allowlisted vocabulary
+# ('Documents/found/w5_rssi_log.jsonl'). The classic branch's arbitrary pre-name
+# path let it match, and 'found' left empty residue ⇒ false absence. FATAL — it is
+# not the requested Documents/<name> path.
+case " ${SUBDIR_NOSUCH:-} " in
+  *" $base "*)
+    echo "ERROR: no such file: Documents/found/w5_rssi_log.jsonl does not exist" >&2
+    exit 1 ;;
+esac
 if [ -f "${FIXTURES:?}/$base" ]; then cp "${FIXTURES}/$base" "$dst"; exit 0; fi
 # A MISSING fixture models a VERIFIED not-found on the device — emitted in the
 # REAL `xcrun devicectl` shape: benign timestamped PROGRESS lines (one of which
@@ -812,6 +822,20 @@ sf_rc=$?
 [ "$sf_rc" -eq 8 ] && [ ! -e "$SB_SF/work/hardware_evidence/caseSF" ] \
   && ok "compound-branch '<name>.found' suffix aborts (exit 8), not absence" \
   || bad "compound-branch filename-suffix match misclassified as absence (rc=$sf_rc)"
+
+# 34k. AUDIT FINDING 1 repro 7 (codex b9ae21a): the basename inside a DIFFERENT
+# subdirectory whose name is allowlisted vocabulary ('Documents/found/<name>')
+# MUST be FATAL — pinning the classic branch to the exact optional 'documents/'
+# prefix (no arbitrary pre-name path) now rejects it.
+SB_SD="$(make_sandbox)"; valid_fixtures "$SB_SD"
+( cd "$SB_SD/work" && HW_MATRIX_XCRUN="$SB_SD/bin/xcrun" FIXTURES="$SB_SD/fixtures" \
+  XCRUN_MARKER="$SB_SD/m" SUBDIR_NOSUCH="w5_rssi_log.jsonl" \
+  INRANGE_DIAG_RUN_SECRET="$SECRET" \
+  bash ./hw_matrix_pull.sh test-udid iphone14 caseSD ) >/dev/null 2>&1
+sd_rc=$?
+[ "$sd_rc" -eq 8 ] && [ ! -e "$SB_SD/work/hardware_evidence/caseSD" ] \
+  && ok "allowlisted-subdir '/found/<name>' aborts (exit 8), not absence" \
+  || bad "subdirectory path match misclassified as absence (rc=$sd_rc)"
 
 # 35. VERIFIED-ABSENT optional artifact publishes normally (exit 0): missing on
 # device is fine, only the primary is mandatory.

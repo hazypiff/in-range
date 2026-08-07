@@ -219,7 +219,13 @@ pull() {
   # or 'name.jsonl.bak' would match 'name.jsonl' as absence. Exclude filename
   # continuation chars ([A-Za-z0-9._-]) from the boundary on both branches.
   fb='[^A-Za-z0-9._-]'
-  abs_re="(failed to retrieve the file node for (documents/)?${q1}(${fb}|$).*coredeviceerror error 7000)|((no such file|does not exist|file ?not ?found|filenotfound).*${fb}${q1}(${fb}|$))"
+  # BOTH branches pin the name to the EXACT optional 'documents/' prefix + filename
+  # — NO arbitrary '.*' path content before it (codex b9ae21a): otherwise a
+  # subdirectory whose name is allowlisted vocabulary ('Documents/found/<name>')
+  # matched with empty residue and was falsely called absence. The classic branch
+  # allows only non-filename separators (': ', ' ') between the phrase and the
+  # optional 'documents/' + name.
+  abs_re="(failed to retrieve the file node for (documents/)?${q1}(${fb}|$).*coredeviceerror error 7000)|((no such file|does not exist|file ?not ?found|filenotfound)${fb}+(documents/)?${q1}(${fb}|$))"
   have_abs="$(printf '%s\n' "$errc" | grep -iE "$abs_re" || true)"
   non_abs="$(printf '%s\n' "$errc" | grep -vE '^[[:space:]]*$' | grep -viE "$abs_re" || true)"
   # Fatal-RESIDUE gate (replaces an ever-incomplete denylist — codex rejected the
