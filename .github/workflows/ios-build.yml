@@ -43,6 +43,11 @@ jobs:
       - name: Pod install
         run: cd ios && pod install
 
+      - name: Signed-artifact builder contract harnesses
+        run: |
+          bash scripts/check_artifact_build_context_test.sh
+          bash scripts/run_artifact_native_gate_test.sh
+
       - name: H-DIAG-2 release isolation (build-settings check)
         run: bash scripts/check_release_isolation.sh
 

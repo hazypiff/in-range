@@ -4,23 +4,26 @@
 # and emits the artifact SHA-256 + build config for the evidence manifest.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+SOURCE_SHA="$(git rev-parse HEAD)"
+
+# The final hardware artifact is admissible only when it comes from a separate,
+# linked, detached worktree with no tracked or non-ignored untracked changes.
+# Check both before any gate and immediately before the signed build so a test or
+# build-setting generator cannot silently mutate the candidate in between.
+bash scripts/check_artifact_build_context.sh "$PWD" "$SOURCE_SHA"
 
 echo "== gate 1: flutter analyze + test =="
 flutter analyze
 flutter test
 
 echo "== gate 2: native RunnerTests (both schemes) =="
-SIM='platform=iOS Simulator,name=iPhone 17'
-xcodebuild test -workspace ios/Runner.xcworkspace -scheme Runner \
-  -configuration Debug -destination "$SIM" -only-testing:RunnerTests \
-  CODE_SIGNING_ALLOWED=NO >/dev/null
-xcodebuild test -workspace ios/Runner.xcworkspace -scheme diag \
-  -configuration Debug-diag -destination "$SIM" -only-testing:RunnerTests \
-  CODE_SIGNING_ALLOWED=NO >/dev/null
+bash scripts/run_artifact_native_gate.sh "$SOURCE_SHA"
 
 echo "== gate 3: release isolation (build-settings + final-binary) =="
 bash scripts/check_release_isolation.sh
 bash scripts/check_final_binary_isolation.sh
+
+bash scripts/check_artifact_build_context.sh "$PWD" "$SOURCE_SHA"
 
 echo "== gates passed → building diag artifact =="
 # B3 fleet alignment: bake a shared W5-event run secret into the diag build so

@@ -37,7 +37,10 @@ flutter devices
 
 echo ""
 echo "=== Ready to launch on the first S9 ==="
-echo "flutter run -d <device-serial>"
-echo ""
-echo "Or run it now:"
-flutter run -d <device-serial>
+if [ "$#" -lt 1 ]; then
+  echo "No device serial supplied; build preparation is complete."
+  echo "Launch with: $0 <device-serial>"
+  exit 0
+fi
+echo "Launching on the explicitly selected device."
+flutter run -d "$1"
