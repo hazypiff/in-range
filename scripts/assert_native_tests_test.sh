@@ -58,6 +58,11 @@ EOF
 
 sed 's/Executed 2 tests/Executed 02 tests/' "$TMP/good.log" \
   > "$TMP/leading-zero.log"
+sed "s/^# source_sha: $SHA$/# source_sha: $SHA trailing/" \
+  "$TMP/good.log" > "$TMP/trailing-header.log"
+sed "/^# source_sha:/a\\
+# source_sha: 0000000000000000000000000000000000000000" \
+  "$TMP/good.log" > "$TMP/duplicate-header.log"
 
 expect_pass "exact =2 + anchor + SHA"          "$TMP/good.log" "=2" testAnchor "$SHA"
 expect_pass "min >=2 backward compatible"      "$TMP/good.log" 2
@@ -74,6 +79,10 @@ expect_fail "invalid anchor identifier"        "$TMP/good.log" "=2" 'testAnchor.
 expect_fail "bad count spec"                   "$TMP/good.log" "~2"
 expect_fail "leading-zero expected count rejected" "$TMP/good.log" "=02"
 expect_fail "leading-zero summary rejected"    "$TMP/leading-zero.log" "=2"
+expect_fail "source SHA header rejects trailing text" \
+  "$TMP/trailing-header.log" "=2" testAnchor "$SHA"
+expect_fail "duplicate source SHA headers rejected" \
+  "$TMP/duplicate-header.log" "=2" testAnchor "$SHA"
 
 echo "----"
 if [ "$fails" -eq 0 ]; then echo "ALL ASSERT-GATE TESTS PASSED"; else echo "$fails FAILED"; exit 1; fi

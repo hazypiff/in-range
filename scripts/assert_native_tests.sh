@@ -37,8 +37,12 @@ grep -q '\*\* TEST SUCCEEDED \*\*' "$LOG" || fail "no '** TEST SUCCEEDED **' in 
 # A.1-5: panel-intake provenance — the sanitized evidence must be stamped with the
 # expected source SHA in its header.
 if [ -n "$EXPECT_SHA" ]; then
-  hdr_sha="$(grep -m1 -E '^# source_sha:' "$LOG" | awk '{print $3}')"
-  [ -n "$hdr_sha" ] || fail "no '# source_sha:' header in $LOG (unstamped evidence)"
+  printf '%s' "$EXPECT_SHA" | grep -Eq '^[0-9a-f]{40}$' \
+    || fail "expected source SHA must be one full lowercase SHA-1"
+  header_count="$(grep -Ec '^# source_sha: [0-9a-f]{40}$' "$LOG" || true)"
+  [ "$header_count" -eq 1 ] \
+    || fail "evidence must contain exactly one canonical '# source_sha:' header"
+  hdr_sha="$(sed -n 's/^# source_sha: \([0-9a-f]\{40\}\)$/\1/p' "$LOG")"
   [ "$hdr_sha" = "$EXPECT_SHA" ] \
     || fail "source_sha header ($hdr_sha) != expected ($EXPECT_SHA) in $LOG"
 fi
