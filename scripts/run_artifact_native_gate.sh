@@ -30,14 +30,33 @@ case "$EVIDENCE_ROOT" in
   /*) ;;
   *) EVIDENCE_ROOT="$ROOT/$EVIDENCE_ROOT" ;;
 esac
+[ "$EVIDENCE_ROOT" != "/" ] || {
+  echo "ARTIFACT NATIVE GATE FAIL: evidence root is too broad" >&2
+  exit 1
+}
 
 # Reject a symlink in any path component, not just a symlink at the leaf. This
 # keeps retained evidence inside the exact directory named by the manifest.
 assert_no_symlink_component() {
-  local path="$1" component current=""
-  local -a components
-  IFS='/' read -r -a components <<< "$path"
-  for component in "${components[@]}"; do
+  local path="$1" component current="" remainder
+  case "$path" in
+    *[[:cntrl:]]*)
+      echo "ARTIFACT NATIVE GATE FAIL: evidence path contains a control character" >&2
+      return 1
+      ;;
+  esac
+  remainder="${path#/}"
+  while [ -n "$remainder" ]; do
+    case "$remainder" in
+      */*)
+        component="${remainder%%/*}"
+        remainder="${remainder#*/}"
+        ;;
+      *)
+        component="$remainder"
+        remainder=""
+        ;;
+    esac
     [ -n "$component" ] || continue
     [ "$component" != "." ] || continue
     [ "$component" != ".." ] || {

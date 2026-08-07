@@ -41,7 +41,19 @@ COMMON_DIR="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
 STATUS_FILE="$(mktemp)"
 RAW_OTHERS_FILE="$(mktemp)"
 UNTRACKED_FILE="$(mktemp)"
-trap 'rm -f "$STATUS_FILE" "$RAW_OTHERS_FILE" "$UNTRACKED_FILE"' EXIT
+INDEX_FLAGS_FILE="$(mktemp)"
+trap 'rm -f "$STATUS_FILE" "$RAW_OTHERS_FILE" "$UNTRACKED_FILE" "$INDEX_FLAGS_FILE"' EXIT
+
+# assume-unchanged and skip-worktree can hide modified tracked bytes from status.
+# A release artifact worktree must use an ordinary, fully materialized index.
+git ls-files -v -z > "$INDEX_FLAGS_FILE" \
+  || fail "cannot inspect index flags"
+while IFS= read -r -d '' indexed_entry; do
+  case "$indexed_entry" in
+    H\ *) ;;
+    *) fail "a tracked path carries a nonstandard index flag" ;;
+  esac
+done < "$INDEX_FLAGS_FILE"
 
 # Inspect tracked/index state separately. Command-line settings disable local
 # performance helpers that could return a stale answer.

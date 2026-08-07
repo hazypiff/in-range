@@ -101,6 +101,31 @@ if env PATH="$TMP/bin:$PATH" bash "$GATE" "$SHA" \
 else
   ok "symlinked evidence parent rejected"
 fi
+mkdir -p "$TMP/dotdot-outside"
+if env PATH="$TMP/bin:$PATH" bash "$GATE" "$SHA" \
+  "$TMP/evidence/../dotdot-outside/breakout" >/dev/null 2>&1; then
+  bad "dot-dot evidence path rejected (expected FAIL)"
+else
+  ok "dot-dot evidence path rejected"
+fi
+mkdir -p "$TMP/newline-root" "$TMP/newline-outside"
+NEWLINE_ESCAPE="$TMP/newline-root"$'\n'"/../newline-outside/breakout"
+if env PATH="$TMP/bin:$PATH" bash "$GATE" "$SHA" \
+  "$NEWLINE_ESCAPE" >/dev/null 2>&1; then
+  bad "newline cannot truncate the containment walk (expected FAIL)"
+else
+  ok "newline cannot truncate the containment walk"
+fi
+if find "$TMP/newline-outside" -mindepth 1 -print -quit | grep -q .; then
+  bad "newline containment rejection writes no escaped evidence"
+else
+  ok "newline containment rejection writes no escaped evidence"
+fi
+if env PATH="$TMP/bin:$PATH" bash "$GATE" "$SHA" / >/dev/null 2>&1; then
+  bad "filesystem-root evidence target rejected (expected FAIL)"
+else
+  ok "filesystem-root evidence target rejected"
+fi
 
 printf '%s\n' '----'
 if [ "$FAILS" -eq 0 ]; then

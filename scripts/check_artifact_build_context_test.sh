@@ -50,6 +50,18 @@ printf 'changed\n' >> "$WT/tracked.txt"
 expect_fail "tracked modification rejected" "$WT" "$SHA"
 git -C "$WT" restore tracked.txt
 
+git -C "$WT" update-index --assume-unchanged tracked.txt
+printf 'hidden tracked change\n' > "$WT/tracked.txt"
+expect_fail "assume-unchanged cannot hide modified tracked bytes" "$WT" "$SHA"
+git -C "$WT" update-index --no-assume-unchanged tracked.txt
+git -C "$WT" restore tracked.txt
+
+git -C "$WT" update-index --skip-worktree tracked.txt
+printf 'hidden sparse change\n' > "$WT/tracked.txt"
+expect_fail "skip-worktree cannot hide modified tracked bytes" "$WT" "$SHA"
+git -C "$WT" update-index --no-skip-worktree tracked.txt
+git -C "$WT" restore tracked.txt
+
 printf 'untracked\n' > "$WT/untracked.txt"
 expect_fail "non-ignored untracked file rejected" "$WT" "$SHA"
 rm -f "$WT/untracked.txt"
