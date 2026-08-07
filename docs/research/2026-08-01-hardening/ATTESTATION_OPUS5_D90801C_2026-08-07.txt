@@ -1,0 +1,38 @@
+INDEPENDENT NON-AUTHOR REVIEW ATTESTATION
+=========================================
+reviewer_backend      : Claude Opus 5 (session self-report: claude-opus-5)
+reviewed_source_sha   : d90801cdffaa8c092fef55f5f5561a6a059b813d
+reviewed_branch       : fix/w5-convergence-2026-08-04
+role                  : independent adversarial reviewer; asked to falsify the repaired gates
+app_source_reference  : 2f29b52; ios/lib/pubspec inputs byte-identical
+
+EXECUTED / VERIFIED
+  artifact native assertion harness     21/21
+  artifact context harness              31/31
+  artifact native orchestration harness 21/21
+  hardware puller harness               67/67
+  Flutter tests                         294 passed; analysis clean
+  Python warning-as-error suites        23 + 7 passed
+  privacy scanner / sanitizer           clean / passed
+  shell syntax                          clean
+
+The reviewer independently resolved the native test inventory:
+  Runner = 55; diag = 105; scheme anchors present in the correct flavors.
+
+ADVERSARIAL RESULT
+  More than 46 scratch attacks exercised forged provenance, dirty-state hiding,
+  irregular filesystem inputs, malformed secrets, unsafe evidence roots, and
+  forged/concatenated native logs. No false accept or Mac-breaking false reject
+  remained.
+
+NON-BLOCKING OBSERVATIONS
+  - Active same-host .env replacement after the pre-build check is outside the
+    frozen-tree threat model.
+  - Git configuration files remain present, while relevant ambient overrides
+    and hiding mechanisms are neutralized or tested.
+  - The lower-level evidence helper permits a caller-selected safe root; the
+    sanctioned builder fixes the production path.
+
+REPAIR_VERDICT: APPROVE d90801cdffaa8c092fef55f5f5561a6a059b813d
+HARDWARE_GATE: HOLD — a replacement signed diagnostic artifact and fresh
+three-phone evidence do not yet exist for this SHA.

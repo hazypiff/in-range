@@ -1,0 +1,41 @@
+INDEPENDENT NON-AUTHOR REVIEW ATTESTATION
+=========================================
+reviewer_tool         : Kimi Code CLI
+requested_selector    : kimi-code/k3
+identity_note         : the session identified the Moonshot AI Kimi backend but
+                        did not expose its deployed model identifier; this file
+                        does not falsely self-certify that hidden identifier
+reviewed_source_sha   : d90801cdffaa8c092fef55f5f5561a6a059b813d
+reviewed_branch       : fix/w5-convergence-2026-08-04
+role                  : independent adversarial reviewer; fresh exact-SHA review
+app_source_reference  : 2f29b52; ios/lib/pubspec inputs byte-identical
+
+EXECUTED / VERIFIED
+  artifact native assertion harness     21/21
+  artifact context harness              31/31
+  artifact native orchestration harness 21/21
+  hardware puller harness               67/67
+  Flutter tests                         294 passed; analysis clean
+  Python warning-as-error suites        23 + 7 passed
+  privacy scanner / sanitizer           clean / passed
+  shell syntax / git diff check         clean / clean
+
+The reviewer independently derived Runner=55 and diag=105 from the schemes,
+conditional compilation, and test sources, including both named anchors.
+
+ADVERSARIAL RESULT
+  Forty-seven independent scratch mutations were attempted. Forty-six failed
+  closed. The remaining apparent exception was the reviewer's expectation that
+  a symlink-spelled path to the genuine worktree should fail; physical
+  canonicalization correctly maps it to that same trusted worktree, so it was
+  not an exploitable accept.
+
+NON-BLOCKING FINDINGS
+  F1: future scripts-only changes do not auto-trigger ios-build.yml; manual
+      workflow dispatch is unfiltered and was performed for this exact SHA.
+  F2: pre-existing PR summary wording calls GITHUB_SHA "exact" although GitHub
+      supplies the tested merge SHA on pull_request events.
+
+REPAIR_VERDICT: APPROVE d90801cdffaa8c092fef55f5f5561a6a059b813d
+HARDWARE_GATE: HOLD — no replacement signed diagnostic artifact or fresh
+three-phone matrix exists for this SHA.

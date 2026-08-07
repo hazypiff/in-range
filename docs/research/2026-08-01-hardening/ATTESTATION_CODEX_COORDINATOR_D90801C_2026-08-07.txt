@@ -1,0 +1,34 @@
+REPAIR-COORDINATOR ATTESTATION
+==============================
+reviewer_tool         : Codex primary coordinator
+identity_note         : exact backend identifier was not exposed by this session;
+                        no gpt-5.6-sol identity is claimed
+reviewed_source_sha   : d90801cdffaa8c092fef55f5f5561a6a059b813d
+reviewed_branch       : fix/w5-convergence-2026-08-04
+role                  : repair author/coordinator and third panel perspective;
+                        not counted as an independent non-author signature
+
+REPRODUCED LOCALLY
+  Flutter analysis / tests              clean / 294 passed
+  artifact native assertion harness     21/21
+  artifact context harness              31/31
+  artifact native orchestration harness 21/21
+  hardware puller harness               67/67
+  privacy / sanitizer fixtures          clean / passed
+  Python warning-as-error suites        23 + 7 passed
+  shell syntax / git diff check         clean / clean
+
+EXACT-SHA HOSTED EVIDENCE INSPECTED
+  General CI 31199161560                success
+  iOS workflow 31199214276              success
+  Runner / diag                         55 / 105, zero failures
+  whole-bundle production isolation     diag symbols 0; run-secret value 0
+  diagnostic discrimination control     Runner diag symbols 247; value present
+
+The coordinator independently downloaded the private retained native-log
+artifact, recomputed both sanitized hashes, and reran the exact count, anchor,
+marker, and source-SHA assertions. Raw logs were not committed or disclosed.
+
+REPAIR_VERDICT: APPROVE d90801cdffaa8c092fef55f5f5561a6a059b813d
+HARDWARE_GATE: HOLD — build and review a new signed artifact from this SHA before
+any installation or physical matrix run.
