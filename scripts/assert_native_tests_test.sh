@@ -63,6 +63,12 @@ sed "s/^# source_sha: $SHA$/# source_sha: $SHA trailing/" \
 sed "/^# source_sha:/a\\
 # source_sha: 0000000000000000000000000000000000000000" \
   "$TMP/good.log" > "$TMP/duplicate-header.log"
+grep -v 'Executed 2 tests' "$TMP/good.log" > "$TMP/no-summary.log"
+sed '/^\*\* TEST SUCCEEDED \*\*$/c\
+Test Case '\''-[RunnerTests.S ** TEST SUCCEEDED **]'\'' passed (0.00 seconds).' \
+  "$TMP/substring.log" > "$TMP/embedded-success.log"
+cp "$TMP/good.log" "$TMP/mixed-result.log"
+printf '%s\n' '** TEST FAILED **' >> "$TMP/mixed-result.log"
 
 expect_pass "exact =2 + anchor + SHA"          "$TMP/good.log" "=2" testAnchor "$SHA"
 expect_pass "min >=2 backward compatible"      "$TMP/good.log" 2
@@ -83,6 +89,13 @@ expect_fail "source SHA header rejects trailing text" \
   "$TMP/trailing-header.log" "=2" testAnchor "$SHA"
 expect_fail "duplicate source SHA headers rejected" \
   "$TMP/duplicate-header.log" "=2" testAnchor "$SHA"
+expect_fail "embedded success marker rejected" "$TMP/embedded-success.log" "=1"
+expect_fail "exact count requires a reconciled summary" \
+  "$TMP/no-summary.log" "=2" testAnchor "$SHA"
+expect_pass "legacy minimum can use authoritative passed lines without summary" \
+  "$TMP/no-summary.log" 2
+expect_fail "mixed success and failure markers rejected" \
+  "$TMP/mixed-result.log" "=2" testAnchor "$SHA"
 
 echo "----"
 if [ "$fails" -eq 0 ]; then echo "ALL ASSERT-GATE TESTS PASSED"; else echo "$fails FAILED"; exit 1; fi

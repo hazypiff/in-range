@@ -32,7 +32,11 @@ printf '%s' "$MIN" | grep -Eq '^(0|[1-9][0-9]*)$' \
   || fail "count must be canonical decimal N or =N (got '$COUNT_SPEC')"
 
 [ -f "$LOG" ] || fail "log missing: $LOG"
-grep -q '\*\* TEST SUCCEEDED \*\*' "$LOG" || fail "no '** TEST SUCCEEDED **' in $LOG"
+grep -Fxq '** TEST SUCCEEDED **' "$LOG" \
+  || fail "no canonical '** TEST SUCCEEDED **' line in $LOG"
+if grep -Fxq '** TEST FAILED **' "$LOG"; then
+  fail "a canonical '** TEST FAILED **' line is present in $LOG"
+fi
 
 # A.1-5: panel-intake provenance — the sanitized evidence must be stamped with the
 # expected source SHA in its header.
@@ -89,6 +93,8 @@ if [ "$HAVE_SUMMARY" -eq 1 ]; then
     || fail "discovered ($DISCOVERED) != passed result lines ($PASSED_LINES) in $LOG"
   N="$DISCOVERED"
 else
+  [ "$EXACT" -eq 0 ] \
+    || fail "exact-count evidence has no reconciled Executed summary in $LOG"
   N="$PASSED_LINES"
 fi
 if [ "$EXACT" -eq 1 ]; then
