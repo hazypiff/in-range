@@ -19,7 +19,12 @@ SOURCE_SHA="$(git rev-parse HEAD)"
 # linked, detached worktree with no tracked or non-ignored untracked changes.
 # Check both before any gate and immediately before the signed build so a test or
 # build-setting generator cannot silently mutate the candidate in between.
-bash scripts/check_artifact_build_context.sh "$PWD" "$SOURCE_SHA"
+bash scripts/check_artifact_build_context.sh "$PWD" "$SOURCE_SHA" inputs-only
+
+echo "== gate 0: generate dependencies from the clean source tree =="
+flutter pub get
+flutter build ios --config-only --debug --no-codesign
+(cd ios && pod install)
 
 echo "== gate 1: flutter analyze + test =="
 flutter analyze
@@ -32,7 +37,7 @@ echo "== gate 3: release isolation (build-settings + final-binary) =="
 bash scripts/check_release_isolation.sh
 bash scripts/check_final_binary_isolation.sh
 
-bash scripts/check_artifact_build_context.sh "$PWD" "$SOURCE_SHA"
+bash scripts/check_artifact_build_context.sh "$PWD" "$SOURCE_SHA" generated-ok
 
 echo "== gates passed → building diag artifact =="
 # B3 fleet alignment: bake a shared W5-event run secret into the diag build so
@@ -52,6 +57,7 @@ flutter build ios --flavor diag --release --dart-define-from-file=.env \
   --dart-define=INRANGE_W5_LINKS=true \
   --dart-define=INRANGE_DIAG=true \
   --dart-define=INRANGE_DIAG_RUN_SECRET="$INRANGE_DIAG_RUN_SECRET"
+bash scripts/check_artifact_build_context.sh "$PWD" "$SOURCE_SHA" generated-ok
 APP="build/ios/iphoneos/Runner.app"
 echo "artifact: $APP"
 echo "bundle id: $(plutil -extract CFBundleIdentifier raw "$APP/Info.plist")"

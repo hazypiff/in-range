@@ -6,7 +6,13 @@ set -euo pipefail
 
 REPO="${1:?repository path required}"
 EXPECTED_SHA="${2:?expected source SHA required}"
+MODE="${3:-generated-ok}"
 fail() { echo "ARTIFACT CONTEXT FAIL: $1" >&2; exit 1; }
+
+case "$MODE" in
+  inputs-only|generated-ok) ;;
+  *) fail "unknown cleanliness mode" ;;
+esac
 
 # Repository identity and ignore policy must come from the supplied worktree,
 # never from ambient Git plumbing/config variables inherited from an operator
@@ -70,6 +76,22 @@ git -c core.fsmonitor=false -c core.untrackedCache=false status \
 # repository rules alone.
 git ls-files --others -z > "$RAW_OTHERS_FILE" \
   || fail "cannot inspect untracked ignore controls"
+if [ "$MODE" = inputs-only ]; then
+  while IFS= read -r -d '' untracked_path; do
+    case "$untracked_path" in
+      .env)
+        [ -f .env ] && [ ! -L .env ] \
+          || fail "approved environment input is not a regular local file"
+        ;;
+      *)
+        fail "an unapproved pre-build input is present"
+        ;;
+    esac
+  done < "$RAW_OTHERS_FILE"
+  echo "OK: clean linked detached worktree at $ACTUAL_SHA"
+  exit 0
+fi
+
 while IFS= read -r -d '' untracked_path; do
   case "$untracked_path" in
     .gitignore|*/.gitignore)

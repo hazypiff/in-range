@@ -17,18 +17,18 @@ FAILS=0
 ok() { printf 'ok   %s\n' "$1"; }
 bad() { printf 'FAIL %s\n' "$1"; FAILS=$((FAILS + 1)); }
 expect_pass() {
-  local label="$1" repo="$2" sha="$3"
-  if bash "$CHECK" "$repo" "$sha" >/dev/null 2>&1; then ok "$label"; else bad "$label (expected PASS)"; fi
+  local label="$1" repo="$2" sha="$3" mode="${4:-generated-ok}"
+  if bash "$CHECK" "$repo" "$sha" "$mode" >/dev/null 2>&1; then ok "$label"; else bad "$label (expected PASS)"; fi
 }
 expect_fail() {
-  local label="$1" repo="$2" sha="$3"
-  if bash "$CHECK" "$repo" "$sha" >/dev/null 2>&1; then bad "$label (expected FAIL)"; else ok "$label"; fi
+  local label="$1" repo="$2" sha="$3" mode="${4:-generated-ok}"
+  if bash "$CHECK" "$repo" "$sha" "$mode" >/dev/null 2>&1; then bad "$label (expected FAIL)"; else ok "$label"; fi
 }
 
 git init -q "$SRC"
 git -C "$SRC" config user.name fixture
 git -C "$SRC" config user.email fixture@example.invalid
-printf '.env\n' > "$SRC/.gitignore"
+printf '.env\nbuild/\n' > "$SRC/.gitignore"
 printf 'tracked\n' > "$SRC/tracked.txt"
 printf 'config-hidden.txt\n' > "$SRC/excludes.txt"
 mkdir -p "$SRC/scripts"
@@ -44,6 +44,8 @@ expect_fail "detached primary checkout is not a separate worktree" "$SRC" "$SHA"
 
 git -C "$SRC" worktree add -q --detach "$WT" "$SHA"
 expect_pass "clean linked detached worktree accepted" "$WT" "$SHA"
+expect_pass "fresh worktree accepted by inputs-only mode" "$WT" "$SHA" inputs-only
+expect_fail "unknown cleanliness mode rejected" "$WT" "$SHA" unknown
 expect_fail "wrong frozen SHA rejected" "$WT" "0000000000000000000000000000000000000000"
 
 printf 'changed\n' >> "$WT/tracked.txt"
@@ -89,7 +91,19 @@ rm -rf "$WT/untracked-ignore"
 
 printf 'approved ignored input\n' > "$WT/.env"
 expect_pass "ignored environment input does not dirty Git provenance" "$WT" "$SHA"
+expect_pass "regular .env is the sole approved pre-build input" "$WT" "$SHA" inputs-only
 rm -f "$WT/.env"
+
+printf 'approved environment input\n' > "$TMP/env-input"
+ln -s "$TMP/env-input" "$WT/.env"
+expect_fail "symlinked .env is not an approved pre-build input" "$WT" "$SHA" inputs-only
+rm -f "$WT/.env"
+
+mkdir -p "$WT/build"
+printf 'stale generated input\n' > "$WT/build/stale.bin"
+expect_pass "repo-ignored generated output is allowed after gates" "$WT" "$SHA" generated-ok
+expect_fail "repo-ignored generated output is forbidden before gates" "$WT" "$SHA" inputs-only
+rm -rf "$WT/build"
 
 # A same-SHA foreign Git environment can satisfy a child context check while
 # still poisoning later build tools in the parent shell. The builder must clear
@@ -105,6 +119,18 @@ printf '%s\n' \
   'exit 42' > "$TMP/bin/flutter"
 chmod 700 "$TMP/bin/flutter"
 MARKER="$TMP/builder-env-marker"
+mkdir -p "$WT/build"
+printf 'preexisting ignored input\n' > "$WT/build/preexisting.bin"
+if env PATH="$TMP/bin:$PATH" ARTIFACT_ENV_MARKER="$MARKER" \
+  bash "$WT/scripts/build_diag_artifact.sh" >/dev/null 2>&1; then
+  bad "builder rejects preexisting ignored build input (expected nonzero)"
+elif [ -e "$MARKER" ]; then
+  bad "builder rejects preexisting ignored build input before Flutter"
+else
+  ok "builder rejects preexisting ignored build input before Flutter"
+fi
+rm -rf "$WT/build"
+rm -f "$MARKER"
 if env PATH="$TMP/bin:$PATH" ARTIFACT_ENV_MARKER="$MARKER" \
   GIT_DIR="$SRC/.git" GIT_WORK_TREE="$SRC" \
   GIT_COMMON_DIR="$SRC/.git" GIT_INDEX_FILE="$SRC/.git/index" \
