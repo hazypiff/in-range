@@ -479,7 +479,15 @@ final class BackgroundBeacon: NSObject {
         let a = call.arguments as? [String: Any]
         let outcome = (a?["outcome"] as? String) ?? (call.arguments as? String) ?? ""
         let aliasClass = (a?["aliasClass"] as? String) ?? "unavailable"
-        result(W5Diag.recordTeardownOutcome(outcome: outcome, aliasClass: aliasClass))
+        // Gate the W5Diag call so NO W5Diag symbol reaches a Release binary
+        // (final-binary isolation gate). Release returns the honest recorded=false
+        // ack inline — and Dart's _doPass only calls this under kDiagBuild anyway.
+        #if INRANGE_DIAG
+          result(W5Diag.recordTeardownOutcome(outcome: outcome, aliasClass: aliasClass))
+        #else
+          _ = outcome
+          result(["ok": true, "recorded": false, "reason": "release", "aliasClass": aliasClass])
+        #endif
       case "resetW5Case":
         // Owner ruling: RETAIN the fleet secret, rotate the public case epoch,
         // wipe evidence, clear controls + sequence. Returns a structured ack.

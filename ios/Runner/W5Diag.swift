@@ -104,19 +104,20 @@ enum W5Diag {
     #endif
   }
 
-  /// E-B1 durable teardown-evidence acknowledgment (audit Finding 2). Public entry:
-  /// acquires the writer lock and returns the structured `{ok, recorded, reason,
-  /// aliasClass}` from the real append result. Release build: no diag evidence
-  /// exists, so it reports `recorded=false` honestly (never a false success).
-  static func recordTeardownOutcome(outcome: String, aliasClass: String) -> [String: Any] {
-    #if INRANGE_DIAG
+  #if INRANGE_DIAG
+    /// E-B1 durable teardown-evidence acknowledgment (audit Finding 2). Public
+    /// entry: acquires the writer lock and returns the structured `{ok, recorded,
+    /// reason, aliasClass}` from the real append result. This whole method is
+    /// `#if INRANGE_DIAG` so NO `W5Diag` symbol survives into a Release binary
+    /// (the final-binary isolation gate requires 0 W5Diag/W5EvidenceWriter
+    /// symbols). The Release channel handler returns the honest `recorded=false`
+    /// ack inline, without referencing W5Diag.
+    static func recordTeardownOutcome(outcome: String, aliasClass: String) -> [String: Any] {
       return eventWriter.withLock {
         recordTeardownOutcomeLocked(outcome: outcome, aliasClass: aliasClass)
       }
-    #else
-      return ["ok": true, "recorded": false, "reason": "release", "aliasClass": aliasClass]
-    #endif
-  }
+    }
+  #endif
 
   #if INRANGE_DIAG
     /// C4: a handled emit held (raw args) until the launch key is confirmed.
