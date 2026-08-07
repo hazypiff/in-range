@@ -100,6 +100,26 @@ case " ${PERMFAIL_7000:-} " in
     echo "ERROR: Failed to retrieve the file node for Documents/$base (com.apple.dt.CoreDeviceError error 7000 (0x1B58))" >&2
     exit 1 ;;
 esac
+# DMGFAIL_7000 (audit Finding 1, repro 3 — codex f1fcf5d): a SINGLE compound
+# CoreDeviceError-7000 line that ALSO embeds a standalone fatal signal ('app
+# bundle is damaged'). It matches the absence shape and is the ONLY line, so the
+# separate-line non_abs rule does not catch it and the old denylist override
+# (which lacked bare 'app'/'domain') published it as absent. It is FATAL — the
+# fatal-residue gate now aborts on the unexplained 'app bundle is damaged' words.
+case " ${DMGFAIL_7000:-} " in
+  *" $base "*)
+    echo "ERROR: Failed to retrieve the file node for Documents/$base: app bundle is damaged (com.apple.dt.CoreDeviceError error 7000 (0x1B58))" >&2
+    exit 1 ;;
+esac
+# NOSUCH_ABSENT (audit Finding 1, GREEN companion to DMGFAIL): a genuine absence
+# phrased via the ALTERNATIVE 'no such file … does not exist' branch. Every word
+# is benign file-not-found vocabulary, so the fatal-residue gate must NOT fire —
+# this still classifies as a verified absence (the gate is not over-broad).
+case " ${NOSUCH_ABSENT:-} " in
+  *" $base "*)
+    echo "ERROR: no such file: Documents/$base does not exist" >&2
+    exit 1 ;;
+esac
 if [ -f "${FIXTURES:?}/$base" ]; then cp "${FIXTURES}/$base" "$dst"; exit 0; fi
 # A MISSING fixture models a VERIFIED not-found on the device — emitted in the
 # REAL `xcrun devicectl` shape: benign timestamped PROGRESS lines (one of which
@@ -694,6 +714,34 @@ p7_rc=$?
 [ "$p7_rc" -eq 8 ] && [ ! -e "$SB_P7/work/hardware_evidence/caseP7" ] \
   && ok "permission-denied + error 7000 aborts (exit 8), not absence" \
   || bad "permission-denied+7000 misclassified as absence (rc=$p7_rc)"
+
+# 34f. AUDIT FINDING 1 repro 3 (codex f1fcf5d): a SINGLE compound 7000 line that
+# embeds a standalone fatal signal ('app bundle is damaged') MUST be FATAL. The
+# old denylist override lacked bare 'app'/'domain' and published it as absent;
+# the fatal-residue gate now aborts on the unexplained words. RED.
+SB_DMG="$(make_sandbox)"; valid_fixtures "$SB_DMG"
+( cd "$SB_DMG/work" && HW_MATRIX_XCRUN="$SB_DMG/bin/xcrun" FIXTURES="$SB_DMG/fixtures" \
+  XCRUN_MARKER="$SB_DMG/m" DMGFAIL_7000="w5_rssi_log.jsonl" \
+  INRANGE_DIAG_RUN_SECRET="$SECRET" \
+  bash ./hw_matrix_pull.sh test-udid iphone14 caseDMG ) >/dev/null 2>&1
+dmg_rc=$?
+[ "$dmg_rc" -eq 8 ] && [ ! -e "$SB_DMG/work/hardware_evidence/caseDMG" ] \
+  && ok "compound 7000 + embedded 'app damaged' aborts (exit 8), not absence" \
+  || bad "compound-7000 fatal residue misclassified as absence (rc=$dmg_rc)"
+
+# 34g. GREEN companion: a genuine absence phrased via the ALTERNATIVE 'no such
+# file … does not exist' branch (all benign vocabulary) MUST still classify as a
+# verified absence of the OPTIONAL artifact and publish (exit 0) — the residue
+# gate is not over-broad.
+SB_NS="$(make_sandbox)"; valid_fixtures "$SB_NS"
+( cd "$SB_NS/work" && HW_MATRIX_XCRUN="$SB_NS/bin/xcrun" FIXTURES="$SB_NS/fixtures" \
+  XCRUN_MARKER="$SB_NS/m" NOSUCH_ABSENT="w5_rssi_log.jsonl" \
+  INRANGE_DIAG_RUN_SECRET="$SECRET" \
+  bash ./hw_matrix_pull.sh test-udid iphone14 caseNS ) >/dev/null 2>&1
+ns_rc=$?
+[ "$ns_rc" -eq 0 ] && [ -f "$SB_NS/work/hardware_evidence/caseNS/iphone14_w5_events.jsonl" ] \
+  && ok "genuine 'no such file' absence of the optional still publishes (exit 0)" \
+  || bad "benign 'no such file' absence wrongly aborted (rc=$ns_rc)"
 
 # 35. VERIFIED-ABSENT optional artifact publishes normally (exit 0): missing on
 # device is fine, only the primary is mandatory.

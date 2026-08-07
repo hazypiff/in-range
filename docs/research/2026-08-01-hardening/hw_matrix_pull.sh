@@ -210,11 +210,25 @@ pull() {
   abs_re="(failed to retrieve the file node for (documents/)?${1}([^0-9a-z]|$).*coredeviceerror error 7000)|((no such file|does not exist|file ?not ?found|filenotfound).*${1})"
   have_abs="$(printf '%s\n' "$errc" | grep -iE "$abs_re" || true)"
   non_abs="$(printf '%s\n' "$errc" | grep -vE '^[[:space:]]*$' | grep -viE "$abs_re" || true)"
-  # Defensive fatal override: even a lone would-be absence line is FATAL if it also
-  # carries an infra/permission/trust/lock/device/udid/container/app/domain signal.
-  if [ -n "$have_abs" ] && [ -z "$non_abs" ] \
-     && ! printf ' %s ' "$errc" | grep -Eqi \
-        'container|appdatacontainer|application|not installed|domain[- ]?identifier|domain[- ]?type|no such (app|application|domain|user)|permission|denied|not permitted|operation not permitted|untrusted|pairing|passcode|[^[:alnum:]](device|udid|locked|trust)[^[:alnum:]]'; then
+  # Fatal-RESIDUE gate (replaces an ever-incomplete denylist — codex rejected the
+  # denylist at f1fcf5d because a lone compound-7000 line carrying a standalone
+  # 'app'/'domain' fatal signal escaped it). A genuine absence line for THIS
+  # source may contain ONLY the fixed file-not-found vocabulary, this source's own
+  # name tokens, and the CoreDeviceError boilerplate. ANY other alphabetic word —
+  # a standalone 'app'/'domain'/'damaged'/'installed'/'locked'/'denied' fatal
+  # signal embedded in the SAME line — is unexplained ⇒ FATAL. This fails CLOSED
+  # on fatal vocabulary we never enumerated, instead of chasing a denylist.
+  local allow resid w
+  allow='failed|to|retrieve|the|file|node|for|documents|document|no|such|does|not|exist|found|filenotfound|com|apple|dt|coredeviceerror|error'
+  for w in $(printf '%s' "$1" | tr 'A-Z' 'a-z' | tr -c 'a-z' ' '); do
+    allow="$allow|$w"   # this source's own name tokens are legitimately present
+  done
+  # Lowercase the sole absence line(s), drop 0x… hex codes, extract alpha words,
+  # keep only those NOT in the allowed vocabulary. Any survivor ⇒ fatal residue.
+  resid="$(printf '%s\n' "$have_abs" | tr 'A-Z' 'a-z' \
+    | sed -E 's/0x[0-9a-f]+//g' \
+    | grep -oE '[a-z]+' | grep -vxE "$allow" || true)"
+  if [ -n "$have_abs" ] && [ -z "$non_abs" ] && [ -z "$resid" ]; then
     echo "  (absent $1)"; return 0   # verified not-found of the SOURCE FILE (nothing else unexplained)
   fi
   echo "ERROR: pull of '$1' failed (transport/permission/container) — not a" >&2
