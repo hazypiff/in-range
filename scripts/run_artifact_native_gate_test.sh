@@ -4,8 +4,14 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 GATE="$HERE/run_artifact_native_gate.sh"
+REPO_ROOT="$(cd -P "$HERE/.." && pwd -P)"
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+# macOS commonly returns /var/... while /var is a system symlink. Convert the
+# trusted fixture root to its physical spelling; deliberate symlinks created
+# beneath it must still be rejected by the gate.
+TMP="$(cd -P "$TMP" && pwd -P)"
+CANONICAL_EVIDENCE="$REPO_ROOT/.artifact-evidence/symlink-invocation-$$"
+trap 'rm -rf "$TMP" "$CANONICAL_EVIDENCE"' EXIT
 mkdir -p "$TMP/bin"
 cp "$HERE/fixtures/fake_artifact_xcodebuild.sh" "$TMP/bin/xcodebuild"
 chmod 700 "$TMP/bin/xcodebuild"
@@ -24,6 +30,14 @@ expect_fail() {
 }
 
 expect_pass "55/105 exact sets + anchors accepted"
+ln -s "$REPO_ROOT" "$TMP/repo-link"
+if env PATH="$TMP/bin:$PATH" bash \
+  "$TMP/repo-link/scripts/run_artifact_native_gate.sh" "$SHA" \
+  ".artifact-evidence/symlink-invocation-$$" >/dev/null 2>&1; then
+  ok "trusted worktree spelling is canonicalized before evidence checks"
+else
+  bad "trusted worktree spelling is canonicalized before evidence checks (expected PASS)"
+fi
 find "$TMP/evidence" -type f -name 'runner.sanitized.log' -print -quit | grep -q . \
   && find "$TMP/evidence" -type f -name 'diag.sanitized.log' -print -quit | grep -q . \
   && find "$TMP/evidence" -type f -name 'manifest.txt' -print -quit | grep -q . \

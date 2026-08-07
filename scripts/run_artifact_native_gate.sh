@@ -12,7 +12,7 @@ umask 077
 # environment.
 unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd -P "$(dirname "$0")/.." && pwd -P)"
 SOURCE_SHA="${1:?frozen source SHA required}"
 EVIDENCE_ROOT="${2:-$ROOT/.artifact-evidence}"
 [ "$(git -C "$ROOT" rev-parse HEAD)" = "$SOURCE_SHA" ] || {

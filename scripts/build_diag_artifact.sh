@@ -3,7 +3,10 @@
 # device app for hardware runs ONLY after the full test + isolation gates pass,
 # and emits the artifact SHA-256 + build config for the evidence manifest.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+# Canonicalize the trusted worktree root first. On macOS, temporary roots such
+# as /var may themselves be system symlinks to /private/var; later evidence-path
+# checks should inspect only the resulting physical path.
+cd -P "$(dirname "$0")/.."
 SOURCE_SHA="$(git rev-parse HEAD)"
 
 # The final hardware artifact is admissible only when it comes from a separate,
