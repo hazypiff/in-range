@@ -1,0 +1,3 @@
+1786154686115 gatt-read
+1786154686235 w5-subscribed ch=keepalive
+1786154686354 w5-subscribed ch=control
